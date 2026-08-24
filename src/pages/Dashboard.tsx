@@ -227,8 +227,8 @@ function Action({
   return (
     <Link
       to={to}
-      className={`card flex min-h-[5.5rem] flex-col justify-between p-4 transition hover:-translate-y-0.5 ${
-        accent ? 'bg-ember text-white border-ember' : ''
+      className={`card card-press flex min-h-[5.5rem] flex-col justify-between p-4 ${
+        accent ? 'border-ember bg-ember text-white shadow-lg shadow-ember/25' : ''
       }`}
     >
       <Icon size={20} className={accent ? 'text-white' : 'text-ember'} />

@@ -95,6 +95,11 @@ function mapOrder(r: Record<string, unknown>, items: unknown[] = []) {
     createdBy: r.CreatedByUserId ? String(r.CreatedByUserId) : 'api',
     notes: r.Notes || undefined,
     source: r.Source,
+    driverId: r.DriverId ? String(r.DriverId) : undefined,
+    driverLat: r.DriverLat != null ? Number(r.DriverLat) : undefined,
+    driverLng: r.DriverLng != null ? Number(r.DriverLng) : undefined,
+    addressLat: r.AddressLat != null ? Number(r.AddressLat) : undefined,
+    addressLng: r.AddressLng != null ? Number(r.AddressLng) : undefined,
   }
 }
 

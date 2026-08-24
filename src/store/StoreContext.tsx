@@ -34,6 +34,14 @@ import {
   getApiToken,
   usingApi,
 } from '../lib/apiClient'
+import {
+  connectRealtime,
+  disconnectRealtime,
+  onRealtimeEvent,
+  onRealtimeStatus,
+  orderLabel,
+} from '../lib/realtime'
+import { playSound } from '../lib/sounds'
 import type {
   AppState,
   Branch,
@@ -82,6 +90,8 @@ function requireApi() {
 function isGuid(id?: string) {
   return Boolean(id && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id))
 }
+
+export type LiveNotice = { id: string; text: string; tone: 'info' | 'ok' | 'warn' }
 
 interface NewOrderInput {
   type: Order['type']
@@ -148,6 +158,11 @@ interface StoreApi {
   }) => Promise<Reservation>
   updateReservationStatus: (id: string, status: ReservationStatus) => void
   resetDemo: () => void
+  /** Socket.IO conectado al API */
+  live: boolean
+  notices: LiveNotice[]
+  dismissNotice: (id: string) => void
+  pushNotice: (text: string, tone?: LiveNotice['tone']) => void
 }
 
 const StoreContext = createContext<StoreApi | null>(null)
@@ -156,9 +171,32 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<AppState>(emptyApiState)
   const [apiLoading, setApiLoading] = useState(false)
   const [apiError, setApiError] = useState<string | null>(null)
+  const [live, setLive] = useState(false)
+  const [notices, setNotices] = useState<LiveNotice[]>([])
   const stateRef = useRef(state)
   stateRef.current = state
+  const reloadTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
+  const pushNotice = useCallback((text: string, tone: LiveNotice['tone'] = 'info') => {
+    const id = uid('n')
+    setNotices((prev) => [{ id, text, tone }, ...prev].slice(0, 5))
+    window.setTimeout(() => {
+      setNotices((prev) => prev.filter((n) => n.id !== id))
+    }, 6000)
+  }, [])
+
+  const dismissNotice = useCallback((id: string) => {
+    setNotices((prev) => prev.filter((n) => n.id !== id))
+  }, [])
+
+  const scheduleReload = useCallback(() => {
+    if (reloadTimer.current) clearTimeout(reloadTimer.current)
+    reloadTimer.current = setTimeout(() => {
+      void reloadFromApiRef.current?.()
+    }, 250)
+  }, [])
+
+  const reloadFromApiRef = useRef<(() => Promise<void>) | null>(null)
   const reloadFromApi = useCallback(async () => {
     requireApi()
     if (!getApiToken()) return
@@ -185,18 +223,69 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     }
   }, [])
 
+  reloadFromApiRef.current = reloadFromApi
+
   useEffect(() => {
     requireApi()
-    if (getApiToken()) {
+
+    const startLive = () => {
+      if (!getApiToken()) return () => {}
       void reloadFromApi()
-      const t = setInterval(() => void reloadFromApi(), 8000)
-      return () => clearInterval(t)
+      connectRealtime(['ops', 'cocina', 'caja', 'mesas', 'delivery'])
+      const offStatus = onRealtimeStatus(setLive)
+      const offEvent = onRealtimeEvent((event, payload) => {
+        scheduleReload()
+        const { n, name, status } = orderLabel(payload)
+        const num = n != null ? `#${String(n).padStart(4, '0')}` : 'Pedido'
+
+        if (event === 'kitchen:new' || event === 'order:created') {
+          playSound('nuevo')
+          pushNotice(`${num} nuevo${name ? ` · ${name}` : ''}`, 'warn')
+        } else if (event === 'order:status') {
+          if (status === 'listo') {
+            playSound('listo')
+            pushNotice(`${num} listo para entregar`, 'ok')
+          } else if (status === 'entregado') {
+            pushNotice(`${num} entregado`, 'ok')
+          } else if (status === 'cancelado') {
+            pushNotice(`${num} cancelado`, 'warn')
+          } else if (status) {
+            pushNotice(`${num} → ${status}`, 'info')
+          }
+        } else if (event === 'order:paid') {
+          pushNotice(`${num} cobrado`, 'ok')
+        } else if (event === 'order:driver') {
+          pushNotice(`${num} asignado a conductor`, 'info')
+        }
+      })
+      const t = setInterval(() => void reloadFromApi(), 25000)
+      return () => {
+        clearInterval(t)
+        offStatus()
+        offEvent()
+        disconnectRealtime()
+        setLive(false)
+      }
     }
-    void apiFetch<{ products: Product[] }>('/api/catalog/products', { auth: false })
-      .then((data) => setState((prev) => ({ ...prev, products: data.products })))
-      .catch((e) => setApiError((e as Error).message))
-    return undefined
-  }, [reloadFromApi])
+
+    let stop = getApiToken() ? startLive() : () => {}
+
+    if (!getApiToken()) {
+      void apiFetch<{ products: Product[] }>('/api/catalog/products', { auth: false })
+        .then((data) => setState((prev) => ({ ...prev, products: data.products })))
+        .catch((e) => setApiError((e as Error).message))
+    }
+
+    const onAuth = () => {
+      stop()
+      stop = getApiToken() ? startLive() : () => {}
+    }
+    window.addEventListener('polleria-auth', onAuth)
+    return () => {
+      window.removeEventListener('polleria-auth', onAuth)
+      stop()
+    }
+  }, [reloadFromApi, scheduleReload, pushNotice])
 
   const patchLocal = useCallback((updater: (prev: AppState) => AppState) => {
     setState((prev) => updater(prev))
@@ -667,6 +756,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       createReservation,
       updateReservationStatus,
       resetDemo,
+      live,
+      notices,
+      dismissNotice,
+      pushNotice,
     }),
     [
       state,
@@ -695,6 +788,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       createReservation,
       updateReservationStatus,
       resetDemo,
+      live,
+      notices,
+      dismissNotice,
+      pushNotice,
     ],
   )
 

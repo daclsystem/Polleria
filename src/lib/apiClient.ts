@@ -19,6 +19,9 @@ export function getApiToken() {
 export function setApiToken(token: string | null) {
   if (token) localStorage.setItem(TOKEN_KEY, token)
   else localStorage.removeItem(TOKEN_KEY)
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('polleria-auth', { detail: { token: Boolean(token) } }))
+  }
 }
 
 export function usingApi() {
@@ -242,6 +245,79 @@ export async function apiUpdateDriver(
 
 export async function apiDeleteDriver(id: string) {
   return apiFetch(`/api/drivers/${id}`, { method: 'DELETE' })
+}
+
+export type DriverDeliveryOrder = {
+  id: string
+  number: number
+  type?: string
+  status: string
+  customerName: string
+  customerPhone?: string
+  address?: string
+  addressLat?: number
+  addressLng?: number
+  total: number
+  paid: boolean
+  deliveryFee?: number
+  driverId?: string
+  sequence?: number
+  notes?: string
+  codPaymentMethod?: string
+  createdAt: string
+}
+
+export async function apiDriverMyOrders() {
+  return apiFetch<{
+    mine: DriverDeliveryOrder[]
+    available: DriverDeliveryOrder[]
+    orders: DriverDeliveryOrder[]
+    origin: { name: string; address: string; lat?: number; lng?: number }
+  }>('/api/drivers/me/orders')
+}
+
+export async function apiDriverClaim(orderId: string) {
+  return apiFetch<{ ok: boolean; order: DriverDeliveryOrder }>('/api/drivers/me/claim', {
+    method: 'POST',
+    body: JSON.stringify({ orderId }),
+  })
+}
+
+export async function apiDriverRelease(orderId: string) {
+  return apiFetch<{ ok: boolean }>('/api/drivers/me/release', {
+    method: 'POST',
+    body: JSON.stringify({ orderId }),
+  })
+}
+
+export async function apiDriverDelivered(orderId: string) {
+  return apiFetch<{ ok: boolean }>('/api/drivers/me/delivered', {
+    method: 'POST',
+    body: JSON.stringify({ orderId }),
+  })
+}
+
+export async function apiDriverRoute() {
+  return apiFetch<{
+    origin: { name: string; address: string; lat?: number; lng?: number }
+    stops: DriverDeliveryOrder[]
+    googleMapsUrl: string | null
+    count: number
+  }>('/api/drivers/me/route')
+}
+
+export async function apiDriverLocation(lat: number, lng: number, orderId?: string) {
+  return apiFetch<{ ok: boolean }>('/api/drivers/me/location', {
+    method: 'POST',
+    body: JSON.stringify({ lat, lng, orderId }),
+  })
+}
+
+export async function apiAssignDriver(orderId: string, driverId: string | null) {
+  return apiFetch<{ ok: boolean; order: DriverDeliveryOrder }>('/api/drivers/assign', {
+    method: 'POST',
+    body: JSON.stringify({ orderId, driverId }),
+  })
 }
 
 export async function apiRegisterCustomer(data: {

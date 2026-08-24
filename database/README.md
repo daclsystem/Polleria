@@ -18,4 +18,17 @@
 | `OrderPayments` | Pagos múltiples (tarjeta, efectivo, yape, plin) |
 | `OrderItems` / `OrderItemOptions` | Comanda |
 
-El API en `/api` se conecta a esta BD y emite eventos realtime (Socket.IO).
+## Seed de cuentas demo
+
+Tras crear la BD, los usuarios de prueba quedan así (también documentados en el README raíz):
+
+| Rol | Email | Password | PIN | Phone |
+|-----|-------|----------|-----|-------|
+| admin | admin@lopez.pe | admin123 | 1234 | 51937493214 |
+| cajero (pago) | cajero@lopez.pe | cajero123 | 2222 | 51911111111 |
+| cocina | cocina@lopez.pe | cocina123 | 3333 | 51922222222 |
+| mozo | mozo@lopez.pe | mozo123 | 4444 | 51933333333 |
+| cliente | María López | (OTP / pedido) | — | 51937493214 |
+| conductor | Carlos Repartidor | (OTP app) | — | 51962797752 |
+
+Scripts útiles: `09_Seed_Cliente_Conductor.sql`.

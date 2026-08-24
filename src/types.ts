@@ -105,8 +105,12 @@ export interface Order {
   createdBy: string
   notes?: string
   source: 'pos' | 'web'
+  driverId?: string
+  driverName?: string
   driverLat?: number
   driverLng?: number
+  addressLat?: number
+  addressLng?: number
 }
 
 export type PrinterDriver = 'browser' | 'usb' | 'network'

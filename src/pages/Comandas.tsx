@@ -1,10 +1,11 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Printer } from 'lucide-react'
 import { useStore } from '../store/StoreContext'
 import { formatDateTime, padOrder, soles } from '../lib/format'
 import { printTicket } from '../lib/print'
-import type { Order, OrderStatus, PaymentMethod } from '../types'
-import { Empty, Modal, PageTitle, StatusBadge, TypeBadge } from '../components/ui'
+import { apiAssignDriver, apiListDrivers } from '../lib/apiClient'
+import type { Driver, Order, OrderStatus, PaymentMethod } from '../types'
+import { Empty, Modal, PageTitle, StatusBadge, TypeBadge, inputClass } from '../components/ui'
 
 const FILTERS: { id: 'todas' | OrderStatus; label: string }[] = [
   { id: 'todas', label: 'Todas' },
@@ -16,10 +17,18 @@ const FILTERS: { id: 'todas' | OrderStatus; label: string }[] = [
 ]
 
 export function Comandas() {
-  const { state, updateOrderStatus, payOrder, cancelOrder } = useStore()
+  const { state, updateOrderStatus, payOrder, cancelOrder, reloadFromApi } = useStore()
   const [filter, setFilter] = useState<(typeof FILTERS)[number]['id']>('todas')
   const [selected, setSelected] = useState<Order | null>(null)
   const [pay, setPay] = useState<PaymentMethod>('efectivo')
+  const [drivers, setDrivers] = useState<Driver[]>([])
+  const [assigning, setAssigning] = useState(false)
+
+  useEffect(() => {
+    void apiListDrivers()
+      .then((r) => setDrivers((r.drivers || []).filter((d) => d.active)))
+      .catch(() => setDrivers([]))
+  }, [])
 
   const list = useMemo(() => {
     return state.orders
@@ -56,24 +65,24 @@ export function Comandas() {
               <button
                 key={o.id}
                 onClick={() => setSelected(o)}
-                className="card w-full p-4 text-left"
+                className="card card-press w-full p-4 text-left"
               >
                 <div className="flex items-start justify-between gap-3">
                   <div>
-                    <p className="font-display text-xl">{padOrder(o.number)}</p>
-                    <p className="text-sm text-ink/60">{o.customerName}</p>
+                    <p className="font-display text-xl tracking-tight">{padOrder(o.number)}</p>
+                    <p className="text-sm font-medium text-ink/55">{o.customerName}</p>
                   </div>
-                  <p className="font-semibold">{soles(o.total)}</p>
+                  <p className="font-extrabold text-ember">{soles(o.total)}</p>
                 </div>
                 <div className="mt-3 flex flex-wrap items-center gap-2">
                   <StatusBadge status={o.status} />
                   <TypeBadge type={o.type} />
-                  <span className="text-xs text-ink/40">{formatDateTime(o.createdAt)}</span>
+                  <span className="text-xs text-ink/35">{formatDateTime(o.createdAt)}</span>
                 </div>
               </button>
             ))}
           </div>
-          <div className="mt-6 hidden overflow-x-auto rounded-2xl bg-white shadow-sm md:block">
+          <div className="mt-6 hidden overflow-hidden rounded-[1.35rem] bg-white shadow-sm ring-1 ring-ink/[0.04] md:block">
             <table className="w-full text-left text-sm">
               <thead className="text-xs tracking-wide text-ink/40 uppercase">
                 <tr>
@@ -149,6 +158,45 @@ export function Comandas() {
               <p className="font-display text-xl text-ink">Total {soles(current.total)}</p>
             </div>
             {current.notes ? <p className="text-sm">Nota: {current.notes}</p> : null}
+
+            {(current.type === 'delivery' || current.type === 'web') &&
+            current.address &&
+            current.status !== 'cancelado' &&
+            current.status !== 'entregado' ? (
+              <div className="rounded-xl bg-teal-50 p-3">
+                <p className="mb-2 text-xs font-semibold tracking-wide text-teal-800 uppercase">
+                  Conductor (delivery tipo PedidosYa)
+                </p>
+                <select
+                  className={inputClass}
+                  disabled={assigning}
+                  value={current.driverId || ''}
+                  onChange={async (e) => {
+                    const driverId = e.target.value || null
+                    setAssigning(true)
+                    try {
+                      await apiAssignDriver(current.id, driverId)
+                      setSelected({ ...current, driverId: driverId || undefined })
+                      await reloadFromApi()
+                    } catch (err) {
+                      alert((err as Error).message)
+                    } finally {
+                      setAssigning(false)
+                    }
+                  }}
+                >
+                  <option value="">Sin asignar — el conductor puede tomarlo</option>
+                  {drivers.map((d) => (
+                    <option key={d.id} value={d.id}>
+                      {d.name} · {d.phone}
+                    </option>
+                  ))}
+                </select>
+                <p className="mt-1.5 text-[11px] text-teal-800/70">
+                  App conductor: /conductor — toma pedidos listos y abre la ruta en Maps.
+                </p>
+              </div>
+            ) : null}
 
             <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
               <button

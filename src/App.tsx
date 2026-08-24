@@ -13,6 +13,8 @@ import { Reservas } from './pages/Reservas'
 import { MenuPage } from './pages/Menu'
 import { Inventario } from './pages/Inventario'
 import { Usuarios } from './pages/Usuarios'
+import { Clientes } from './pages/Clientes'
+import { Conductores } from './pages/Conductores'
 import { Reportes } from './pages/Reportes'
 import { PedidosWeb } from './pages/PedidosWeb'
 import { Sucursales } from './pages/Sucursales'
@@ -25,6 +27,7 @@ import { WebLanding } from './pages/WebLanding'
 import { WebAccount } from './pages/WebAccount'
 import { WebReservar } from './pages/WebReservar'
 import { OrderTracking } from './pages/OrderTracking'
+import { ConductorApp } from './pages/ConductorApp'
 import { BASENAME } from './lib/paths'
 
 export default function App() {
@@ -34,6 +37,7 @@ export default function App() {
         <BrowserRouter basename={BASENAME}>
           <Routes>
             <Route path="/login" element={<Login />} />
+            <Route path="/conductor" element={<ConductorApp />} />
             <Route path="/web" element={<WebLanding />} />
             <Route path="/web/cuenta" element={<WebAccount />} />
             <Route path="/web/reservar" element={<WebReservar />} />
@@ -115,6 +119,22 @@ export default function App() {
                 element={
                   <ProtectedRoute module="usuarios">
                     <Usuarios />
+                  </ProtectedRoute>
+                }
+              />
+              <Route
+                path="/clientes"
+                element={
+                  <ProtectedRoute module="clientes">
+                    <Clientes />
+                  </ProtectedRoute>
+                }
+              />
+              <Route
+                path="/conductores"
+                element={
+                  <ProtectedRoute module="conductores">
+                    <Conductores />
                   </ProtectedRoute>
                 }
               />

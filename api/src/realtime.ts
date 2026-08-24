@@ -6,6 +6,7 @@ export type RealtimeEvent =
   | 'order:updated'
   | 'order:status'
   | 'order:paid'
+  | 'order:driver'
   | 'kitchen:new'
   | 'table:updated'
   | 'reservation:updated'

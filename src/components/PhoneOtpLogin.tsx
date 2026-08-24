@@ -84,6 +84,13 @@ export function PhoneOtpLogin({
         ok: boolean
         token?: string
         user?: { id: string; name: string; email: string; role: string }
+        driver?: {
+          id: string
+          name: string
+          phone: string
+          vehicleInfo?: string
+          active: boolean
+        }
         customer?: {
           id: string
           name: string

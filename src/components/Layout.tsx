@@ -21,6 +21,8 @@ import {
   Building2,
   FileText,
   MessageCircle,
+  Contact,
+  Bike,
 } from 'lucide-react'
 import { useState } from 'react'
 import { useAuth } from '../auth/AuthContext'
@@ -28,6 +30,8 @@ import { useStore } from '../store/StoreContext'
 import { ROLE_LABEL, type ModuleId, type Role } from '../types'
 import { withBase } from '../lib/paths'
 import { APP_VERSION } from '../lib/version'
+import { LiveToasts } from './LiveToasts'
+import { unlockSounds } from '../lib/sounds'
 
 const NAV: { to: string; label: string; hint: string; icon: LucideIcon; module: ModuleId }[] = [
   { to: '/', label: 'Inicio', hint: 'Resumen del día', icon: LayoutDashboard, module: 'dashboard' },
@@ -40,6 +44,8 @@ const NAV: { to: string; label: string; hint: string; icon: LucideIcon; module: 
   { to: '/menu', label: 'Carta', hint: 'Precios y platos', icon: ShoppingBag, module: 'menu' },
   { to: '/inventario', label: 'Inventario', hint: 'Insumos y stock', icon: Package, module: 'inventario' },
   { to: '/usuarios', label: 'Equipo', hint: 'Usuarios y roles', icon: Users, module: 'usuarios' },
+  { to: '/clientes', label: 'Clientes', hint: 'Agenda de clientes', icon: Contact, module: 'clientes' },
+  { to: '/conductores', label: 'Conductores', hint: 'Repartidores delivery', icon: Bike, module: 'conductores' },
   { to: '/reportes', label: 'Reportes', hint: 'Ventas e impresión', icon: BarChart3, module: 'reportes' },
   { to: '/sucursales', label: 'Sucursales', hint: 'Locales del negocio', icon: Building2, module: 'sucursales' },
   { to: '/facturacion', label: 'Facturación', hint: 'Boletas y facturas SUNAT', icon: FileText, module: 'facturacion' },
@@ -50,7 +56,7 @@ const NAV: { to: string; label: string; hint: string; icon: LucideIcon; module: 
 
 const GROUPS: { title: string; modules: ModuleId[] }[] = [
   { title: 'Trabajar ahora', modules: ['dashboard', 'pos', 'comandas', 'cocina', 'mesas', 'reservas', 'pedidos-web'] },
-  { title: 'Administrar', modules: ['menu', 'inventario', 'usuarios', 'reportes', 'sucursales', 'facturacion', 'whatsapp', 'web-config', 'config'] },
+  { title: 'Administrar', modules: ['menu', 'inventario', 'usuarios', 'clientes', 'conductores', 'reportes', 'sucursales', 'facturacion', 'whatsapp', 'web-config', 'config'] },
 ]
 
 const BOTTOM: Record<Role, ModuleId[]> = {
@@ -62,7 +68,7 @@ const BOTTOM: Record<Role, ModuleId[]> = {
 
 export function Layout() {
   const { user, can, logout } = useAuth()
-  const { apiMode, apiLoading, apiError } = useStore()
+  const { apiMode, apiLoading, apiError, live } = useStore()
   const navigate = useNavigate()
   const [open, setOpen] = useState(false)
 
@@ -72,7 +78,11 @@ export function Layout() {
   const bottomCount = Math.min(bottom.length, 3) + 1
 
   return (
-    <div className="flex min-h-dvh bg-cream">
+    <div
+      className="flex min-h-dvh bg-cream"
+      onPointerDownCapture={() => unlockSounds()}
+    >
+      <LiveToasts />
       <aside
         className={`fixed inset-y-0 left-0 z-40 w-[min(18.5rem,88vw)] flame-bg text-cream transition-transform duration-200 lg:static lg:w-[17.5rem] lg:translate-x-0 ${
           open ? 'translate-x-0' : '-translate-x-full'
@@ -152,16 +162,16 @@ export function Layout() {
         />
       ) : null}
       <div className="flex min-w-0 flex-1 flex-col pb-[4.75rem] lg:pb-0">
-        <header className="sticky top-0 z-20 flex items-center gap-3 border-b border-ink/6 bg-cream/90 px-3 py-2.5 backdrop-blur sm:px-5 lg:px-8">
+        <header className="surface-header sticky top-0 z-20 flex items-center gap-3 px-3 py-2.5 sm:px-5 lg:px-8">
           <button
-            className="tap rounded-xl p-2 hover:bg-ink/5 lg:hidden"
+            className="tap rounded-xl p-2 hover:bg-ink/[0.04] lg:hidden"
             onClick={() => setOpen(true)}
             aria-label="Menú"
           >
             <Menu size={20} />
           </button>
           <div className="min-w-0">
-            <p className="truncate font-display text-lg leading-none lg:hidden">Chifa-Pollería Lopez</p>
+            <p className="truncate font-display text-lg leading-none tracking-tight lg:hidden">Chifa-Pollería Lopez</p>
             <p className="hidden text-sm text-ink/40 capitalize sm:block">
               {new Date().toLocaleDateString('es-PE', {
                 weekday: 'long',
@@ -173,16 +183,24 @@ export function Layout() {
           <div className="ml-auto flex items-center gap-2">
             {apiMode ? (
               <span
-                className={`hidden rounded-full px-2.5 py-1 text-[10px] font-bold tracking-wide uppercase sm:inline ${
+                className={`hidden items-center gap-1.5 rounded-full px-2.5 py-1 text-[10px] font-bold tracking-wide uppercase sm:inline-flex ${
                   apiError
                     ? 'bg-red-100 text-red-700'
-                    : apiLoading
-                      ? 'bg-amber-100 text-amber-800'
-                      : 'bg-emerald-100 text-emerald-800'
+                    : live
+                      ? 'bg-emerald-100 text-emerald-800'
+                      : apiLoading
+                        ? 'bg-amber-100 text-amber-800'
+                        : 'bg-ink/[0.06] text-ink/45'
                 }`}
-                title={apiError || 'Datos desde API/SQL'}
+                title={apiError || (live ? 'Socket en vivo + API/SQL' : 'API/SQL (sin socket)')}
               >
-                {apiError ? 'API error' : apiLoading ? 'Sync…' : 'API · SQL'}
+                {live ? (
+                  <span className="relative flex h-1.5 w-1.5">
+                    <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-500 opacity-60" />
+                    <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-emerald-600" />
+                  </span>
+                ) : null}
+                {apiError ? 'API error' : live ? 'En vivo' : apiLoading ? 'Sync…' : 'API · SQL'}
               </span>
             ) : (
               <span className="hidden rounded-full bg-ink/10 px-2.5 py-1 text-[10px] font-bold tracking-wide text-ink/50 uppercase sm:inline">
@@ -193,7 +211,7 @@ export function Layout() {
               href={withBase('pedir')}
               target="_blank"
               rel="noreferrer"
-              className="inline-flex min-h-10 items-center gap-1.5 rounded-full bg-ink px-3.5 py-1.5 text-xs font-semibold text-cream"
+              className="inline-flex min-h-10 items-center gap-1.5 rounded-full bg-ink px-3.5 py-1.5 text-xs font-bold text-cream shadow-sm"
             >
               <ExternalLink size={13} />
               <span className="hidden sm:inline">Carta del cliente</span>
@@ -212,33 +230,57 @@ export function Layout() {
       </div>
 
       <nav
-        className={`safe-bottom fixed inset-x-0 bottom-0 z-30 grid border-t border-ink/8 bg-white/95 px-1 pt-1 backdrop-blur lg:hidden ${
+        className={`bottom-nav safe-bottom fixed inset-x-0 bottom-0 z-30 grid px-1.5 pt-1.5 lg:hidden ${
           bottomCount === 2 ? 'grid-cols-2' : bottomCount === 3 ? 'grid-cols-3' : 'grid-cols-4'
         }`}
       >
         {bottom.slice(0, 3).map((item) => {
           const Icon = item.icon
+          const short =
+            item.module === 'dashboard'
+              ? 'Inicio'
+              : item.module === 'pos'
+                ? 'Tomar'
+                : item.module === 'comandas'
+                  ? 'Ver'
+                  : item.module === 'cocina'
+                    ? 'Cocina'
+                    : item.module === 'mesas'
+                      ? 'Mesas'
+                      : item.label.split(' ')[0]
           return (
             <NavLink
               key={item.to}
               to={item.to}
               end={item.to === '/'}
               className={({ isActive }) =>
-                `flex flex-col items-center gap-0.5 rounded-xl py-1.5 text-[10px] font-bold ${
-                  isActive ? 'text-ember' : 'text-ink/40'
+                `flex flex-col items-center gap-0.5 rounded-2xl py-2 text-[10px] font-bold tracking-wide ${
+                  isActive ? 'text-ember' : 'text-ink/35'
                 }`
               }
             >
-              <Icon size={20} />
-              {item.label.split(' ')[0]}
+              {({ isActive }) => (
+                <>
+                  <span
+                    className={`flex h-8 w-8 items-center justify-center rounded-xl ${
+                      isActive ? 'bg-ember/10' : ''
+                    }`}
+                  >
+                    <Icon size={20} strokeWidth={isActive ? 2.4 : 2} />
+                  </span>
+                  {short}
+                </>
+              )}
             </NavLink>
           )
         })}
         <button
           onClick={() => setOpen(true)}
-          className="flex flex-col items-center gap-0.5 rounded-xl py-1.5 text-[10px] font-bold text-ink/40"
+          className="flex flex-col items-center gap-0.5 rounded-2xl py-2 text-[10px] font-bold tracking-wide text-ink/35"
         >
-          <Menu size={20} />
+          <span className="flex h-8 w-8 items-center justify-center rounded-xl">
+            <Menu size={20} />
+          </span>
           Más
         </button>
       </nav>
