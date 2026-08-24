@@ -1,0 +1,403 @@
+<html xmlns:o="urn:schemas-microsoft-com:office:office"
+xmlns:w="urn:schemas-microsoft-com:office:word"
+xmlns="http://www.w3.org/TR/REC-html40">
+<head>
+<meta charset="UTF-8">
+<meta name="ProgId" content="Word.Document">
+<meta name="Generator" content="Microsoft Word 15">
+<!--[if gte mso 9]><xml>
+<o:DocumentProperties>
+<o:Title>Cotización Hardware - Chifa-Pollería Lopez</o:Title>
+</o:DocumentProperties>
+<w:WordDocument>
+<w:View>Print</w:View>
+<w:Zoom>100</w:Zoom>
+</w:WordDocument>
+</xml><![endif]-->
+<style>
+@page { size: A4; margin: 2cm 2.5cm; }
+body { font-family: Calibri, Arial, sans-serif; font-size: 11pt; color: #1a1a1a; line-height: 1.4; }
+h1 { font-size: 18pt; color: #c0392b; text-align: center; margin-bottom: 4pt; }
+h2 { font-size: 14pt; color: #2c3e50; border-bottom: 2px solid #c0392b; padding-bottom: 4pt; margin-top: 24pt; }
+h3 { font-size: 12pt; color: #c0392b; margin-top: 14pt; margin-bottom: 6pt; }
+.subtitle { text-align: center; font-size: 12pt; color: #555; margin-bottom: 20pt; }
+.date { text-align: right; font-size: 9pt; color: #888; }
+table { width: 100%; border-collapse: collapse; margin: 10pt 0; font-size: 10pt; }
+th { background-color: #2c3e50; color: white; padding: 8pt 6pt; text-align: left; font-weight: bold; }
+td { padding: 6pt; border-bottom: 1px solid #ddd; vertical-align: top; }
+tr:nth-child(even) td { background-color: #f9f9f9; }
+.price { text-align: right; font-weight: bold; }
+.total-row td { background-color: #fdeaea !important; font-weight: bold; font-size: 11pt; border-top: 2px solid #c0392b; }
+.grand-total td { background-color: #c0392b !important; color: white; font-size: 12pt; font-weight: bold; }
+.note { font-size: 9pt; color: #666; font-style: italic; margin: 4pt 0; }
+.section-total { text-align: right; font-weight: bold; color: #c0392b; margin: 6pt 0 16pt; font-size: 11pt; }
+ul { margin: 6pt 0; padding-left: 20pt; }
+li { margin: 3pt 0; font-size: 10pt; }
+.footer { margin-top: 30pt; border-top: 1px solid #ccc; padding-top: 10pt; font-size: 9pt; color: #888; text-align: center; }
+.highlight { background-color: #fff3cd; padding: 8pt; border-left: 4px solid #ffc107; margin: 10pt 0; font-size: 10pt; }
+</style>
+</head>
+<body>
+
+<p class="date">Cañete, agosto 2026</p>
+
+<h1>COTIZACIÓN DE EQUIPOS</h1>
+<p class="subtitle">Sistema POS — Chifa-Pollería Lopez<br>
+<em>Hardware para Caja, Cocina, Comanda y Mozo</em></p>
+
+<!-- ════════════════════════════════════════════════════════════ -->
+<h2>1. ESTACIÓN DE CAJA (Punto de Venta)</h2>
+
+<table>
+<tr>
+  <th style="width:5%">Cant.</th>
+  <th style="width:40%">Equipo / Descripción</th>
+  <th style="width:25%">Modelo referencial</th>
+  <th style="width:15%" class="price">P. Unit. (S/)</th>
+  <th style="width:15%" class="price">Subtotal (S/)</th>
+</tr>
+<tr>
+  <td>1</td>
+  <td>Monitor táctil POS 15.6" capacitivo con soporte</td>
+  <td>3nStar TCM010 / Birch 15"</td>
+  <td class="price">1,200.00</td>
+  <td class="price">1,200.00</td>
+</tr>
+<tr>
+  <td>1</td>
+  <td>Impresora térmica 80mm USB (tickets / boletas)</td>
+  <td>Epson TM-T20III USB</td>
+  <td class="price">750.00</td>
+  <td class="price">750.00</td>
+</tr>
+<tr>
+  <td>1</td>
+  <td>Cajón de dinero metálico RJ11 (4 billetes / 8 monedas)</td>
+  <td>3nStar CD350 / genérico</td>
+  <td class="price">180.00</td>
+  <td class="price">180.00</td>
+</tr>
+<tr>
+  <td>1</td>
+  <td>Mini PC (Intel N95, 8GB RAM, 256GB SSD, Win 11)</td>
+  <td>Beelink Mini S12 Pro</td>
+  <td class="price">650.00</td>
+  <td class="price">650.00</td>
+</tr>
+<tr>
+  <td>1</td>
+  <td>Teclado + mouse inalámbrico compacto</td>
+  <td>Logitech MK235 / genérico</td>
+  <td class="price">80.00</td>
+  <td class="price">80.00</td>
+</tr>
+<tr>
+  <td>5</td>
+  <td>Rollo papel térmico 80mm x 80m</td>
+  <td>Papel térmico nacional</td>
+  <td class="price">5.00</td>
+  <td class="price">25.00</td>
+</tr>
+<tr>
+  <td>1</td>
+  <td>UPS 600VA / 360W (protección eléctrica)</td>
+  <td>APC BVX600L-LM / Forza</td>
+  <td class="price">220.00</td>
+  <td class="price">220.00</td>
+</tr>
+<tr class="total-row">
+  <td colspan="4">SUBTOTAL ESTACIÓN CAJA</td>
+  <td class="price">S/ 3,105.00</td>
+</tr>
+</table>
+
+<p class="note">* El cajón se abre automáticamente al imprimir ticket (conectado vía RJ11 a la impresora).</p>
+
+<!-- ════════════════════════════════════════════════════════════ -->
+<h2>2. ESTACIÓN DE COCINA (KDS + Ticketera)</h2>
+
+<table>
+<tr>
+  <th style="width:5%">Cant.</th>
+  <th style="width:40%">Equipo / Descripción</th>
+  <th style="width:25%">Modelo referencial</th>
+  <th style="width:15%" class="price">P. Unit. (S/)</th>
+  <th style="width:15%" class="price">Subtotal (S/)</th>
+</tr>
+<tr>
+  <td>1</td>
+  <td>Televisor Smart 32" (pantalla de pedidos)</td>
+  <td>Samsung / LG 32" HD Smart TV</td>
+  <td class="price">650.00</td>
+  <td class="price">650.00</td>
+</tr>
+<tr>
+  <td>1</td>
+  <td>Mini PC para TV (reproduce la pantalla de cocina)</td>
+  <td>Beelink Mini S12 / Fire TV Stick 4K</td>
+  <td class="price">350.00</td>
+  <td class="price">350.00</td>
+</tr>
+<tr>
+  <td>1</td>
+  <td>Impresora térmica 80mm Ethernet (comandas)</td>
+  <td>Epson TM-T20III Ethernet</td>
+  <td class="price">890.00</td>
+  <td class="price">890.00</td>
+</tr>
+<tr>
+  <td>1</td>
+  <td>Soporte de pared para TV (brazo articulado)</td>
+  <td>Soporte genérico 23-55"</td>
+  <td class="price">45.00</td>
+  <td class="price">45.00</td>
+</tr>
+<tr>
+  <td>1</td>
+  <td>Caja protectora acrílica (protege de grasa y vapor)</td>
+  <td>Caja a medida / genérica</td>
+  <td class="price">60.00</td>
+  <td class="price">60.00</td>
+</tr>
+<tr>
+  <td>1</td>
+  <td>Timbre / buzzer de alerta (suena al llegar pedido)</td>
+  <td>Buzzer USB / campana eléctrica</td>
+  <td class="price">35.00</td>
+  <td class="price">35.00</td>
+</tr>
+<tr>
+  <td>10</td>
+  <td>Rollo papel térmico 80mm x 80m</td>
+  <td>Papel térmico nacional</td>
+  <td class="price">5.00</td>
+  <td class="price">50.00</td>
+</tr>
+<tr class="total-row">
+  <td colspan="4">SUBTOTAL ESTACIÓN COCINA</td>
+  <td class="price">S/ 2,080.00</td>
+</tr>
+</table>
+
+<p class="note">* La impresora de cocina imprime automáticamente cada comanda nueva que envía el mozo o cajero.</p>
+<p class="note">* Se recomienda Ethernet (cable) en cocina por estabilidad, el WiFi puede fallar por el calor.</p>
+
+<!-- ════════════════════════════════════════════════════════════ -->
+<h2>3. TABLETS PARA COMANDA / MOZO (×2 unidades)</h2>
+
+<table>
+<tr>
+  <th style="width:5%">Cant.</th>
+  <th style="width:40%">Equipo / Descripción</th>
+  <th style="width:25%">Modelo referencial</th>
+  <th style="width:15%" class="price">P. Unit. (S/)</th>
+  <th style="width:15%" class="price">Subtotal (S/)</th>
+</tr>
+<tr>
+  <td>2</td>
+  <td>Tablet Android 8" (toma de pedidos en mesa)</td>
+  <td>Samsung Tab A7 Lite / Lenovo Tab M8</td>
+  <td class="price">450.00</td>
+  <td class="price">900.00</td>
+</tr>
+<tr>
+  <td>2</td>
+  <td>Funda rugerizada con correa de mano</td>
+  <td>Funda silicona antigolpes</td>
+  <td class="price">35.00</td>
+  <td class="price">70.00</td>
+</tr>
+<tr>
+  <td>2</td>
+  <td>Mica protectora de pantalla (vidrio templado)</td>
+  <td>Genérica 8"</td>
+  <td class="price">15.00</td>
+  <td class="price">30.00</td>
+</tr>
+<tr>
+  <td>1</td>
+  <td>Base de carga doble (zona de descanso)</td>
+  <td>Soporte con carga USB</td>
+  <td class="price">60.00</td>
+  <td class="price">60.00</td>
+</tr>
+<tr class="total-row">
+  <td colspan="4">SUBTOTAL TABLETS COMANDA (×2)</td>
+  <td class="price">S/ 1,060.00</td>
+</tr>
+</table>
+
+<p class="note">* Los mozos acceden al sistema desde el navegador Chrome de la tablet (no requiere app instalada).</p>
+<p class="note">* Alternativa económica: usar el celular personal del mozo (costo S/ 0).</p>
+
+<!-- ════════════════════════════════════════════════════════════ -->
+<h2>4. INFRAESTRUCTURA DE RED</h2>
+
+<table>
+<tr>
+  <th style="width:5%">Cant.</th>
+  <th style="width:40%">Equipo / Descripción</th>
+  <th style="width:25%">Modelo referencial</th>
+  <th style="width:15%" class="price">P. Unit. (S/)</th>
+  <th style="width:15%" class="price">Subtotal (S/)</th>
+</tr>
+<tr>
+  <td>1</td>
+  <td>Router WiFi dual band (2.4 + 5 GHz)</td>
+  <td>TP-Link Archer C6 / AX23</td>
+  <td class="price">180.00</td>
+  <td class="price">180.00</td>
+</tr>
+<tr>
+  <td>1</td>
+  <td>Switch Gigabit 8 puertos (caja + cocina + impresoras)</td>
+  <td>TP-Link TL-SG108</td>
+  <td class="price">85.00</td>
+  <td class="price">85.00</td>
+</tr>
+<tr>
+  <td>1</td>
+  <td>Cable UTP Cat 6 (rollo 20m + conectores + canaleta)</td>
+  <td>Cable Nexxt / Panduit Cat6</td>
+  <td class="price">80.00</td>
+  <td class="price">80.00</td>
+</tr>
+<tr>
+  <td>1</td>
+  <td>UPS para router y switch (mantiene red en corte de luz)</td>
+  <td>Mini UPS 12V / Forza Nano</td>
+  <td class="price">95.00</td>
+  <td class="price">95.00</td>
+</tr>
+<tr class="total-row">
+  <td colspan="4">SUBTOTAL RED</td>
+  <td class="price">S/ 440.00</td>
+</tr>
+</table>
+
+<p class="note">* Si el local es grande agregar un Access Point (S/ 120 adicional).</p>
+<p class="note">* Internet mínimo recomendado: 20 Mbps fibra óptica (plan mensual aparte).</p>
+
+<!-- ════════════════════════════════════════════════════════════ -->
+<h2>5. RESUMEN DE INVERSIÓN</h2>
+
+<table>
+<tr>
+  <th style="width:60%">Estación</th>
+  <th style="width:20%" class="price">Monto (S/)</th>
+</tr>
+<tr>
+  <td>1. Caja (monitor + impresora + cajón + mini PC + UPS)</td>
+  <td class="price">3,105.00</td>
+</tr>
+<tr>
+  <td>2. Cocina (TV + impresora Ethernet + mini PC + accesorios)</td>
+  <td class="price">2,080.00</td>
+</tr>
+<tr>
+  <td>3. Tablets para mozo ×2 (comanda en mesa)</td>
+  <td class="price">1,060.00</td>
+</tr>
+<tr>
+  <td>4. Red (router + switch + cableado + UPS red)</td>
+  <td class="price">440.00</td>
+</tr>
+<tr class="grand-total">
+  <td><strong>INVERSIÓN TOTAL</strong></td>
+  <td class="price"><strong>S/ 6,685.00</strong></td>
+</tr>
+</table>
+
+<div class="highlight">
+<strong>Nota:</strong> Los precios son referenciales al mercado peruano (Lima/Cañete, agosto 2026). 
+Pueden variar según proveedor. Se recomienda cotizar en:
+<ul>
+<li><strong>Mercado Libre Perú</strong> — tablets, mini PCs, accesorios</li>
+<li><strong>Deltron / Ingram</strong> — impresoras Epson (distribuidores autorizados)</li>
+<li><strong>Wilson / Paruro</strong> — cables, switches, UPS, genéricos</li>
+<li><strong>Plaza Vea / Ripley</strong> — TVs Smart</li>
+</ul>
+</div>
+
+<!-- ════════════════════════════════════════════════════════════ -->
+<h2>6. CONSUMIBLES MENSUALES ESTIMADOS</h2>
+
+<table>
+<tr>
+  <th style="width:50%">Concepto</th>
+  <th style="width:25%">Cantidad mensual</th>
+  <th style="width:25%" class="price">Costo (S/)</th>
+</tr>
+<tr>
+  <td>Rollos papel térmico 80mm (caja)</td>
+  <td>8 rollos</td>
+  <td class="price">40.00</td>
+</tr>
+<tr>
+  <td>Rollos papel térmico 80mm (cocina)</td>
+  <td>15 rollos</td>
+  <td class="price">75.00</td>
+</tr>
+<tr>
+  <td>Internet fibra 20 Mbps</td>
+  <td>1 plan</td>
+  <td class="price">70.00</td>
+</tr>
+<tr class="total-row">
+  <td colspan="2">GASTO MENSUAL OPERATIVO</td>
+  <td class="price">S/ 185.00</td>
+</tr>
+</table>
+
+<!-- ════════════════════════════════════════════════════════════ -->
+<h2>7. DIAGRAMA DE CONEXIÓN</h2>
+
+<pre style="font-family: Consolas, monospace; font-size: 9pt; background: #f5f5f5; padding: 12pt; border: 1px solid #ddd;">
+                        ┌─────────────┐
+                        │   INTERNET  │
+                        └──────┬──────┘
+                               │
+                        ┌──────┴──────┐
+                        │   ROUTER    │ ← WiFi para tablets/mozos
+                        │  (TP-Link)  │
+                        └──────┬──────┘
+                               │ Ethernet
+                        ┌──────┴──────┐
+                        │   SWITCH    │
+                        │  8 puertos  │
+                        └─┬────┬────┬─┘
+                          │    │    │
+              ┌───────────┘    │    └───────────┐
+              │                │                │
+     ┌────────┴────────┐  ┌───┴────────┐  ┌───┴──────────┐
+     │  CAJA (Mini PC) │  │  COCINA    │  │  IMPRESORA   │
+     │  + Monitor 15"  │  │  (Mini PC  │  │  COCINA      │
+     │  + Impresora USB│  │  + TV 32") │  │  (Ethernet)  │
+     │  + Cajón dinero │  └────────────┘  └──────────────┘
+     └─────────────────┘
+
+     ┌─────────┐  ┌─────────┐
+     │ TABLET 1│  │ TABLET 2│  ← Conectan por WiFi
+     │ (Mozo)  │  │ (Mozo)  │
+     └─────────┘  └─────────┘
+</pre>
+
+<!-- ════════════════════════════════════════════════════════════ -->
+<h2>8. NOTAS IMPORTANTES</h2>
+
+<ul>
+<li><strong>Software:</strong> El sistema POS es 100% web — no requiere licencia de software adicional. Funciona en cualquier navegador moderno (Chrome recomendado).</li>
+<li><strong>Instalación eléctrica:</strong> Se recomienda un circuito eléctrico independiente para equipos con toma a tierra. Considerar S/ 200-400 si no existe.</li>
+<li><strong>Garantía:</strong> Impresoras Epson tienen 1 año de garantía con distribuidores autorizados en Perú.</li>
+<li><strong>Escalabilidad:</strong> Se puede agregar más tablets, una impresora de barra, o una segunda pantalla de cocina sin cambiar el sistema.</li>
+<li><strong>Capacitación:</strong> El sistema es intuitivo. Capacitación básica de 1 hora por rol.</li>
+</ul>
+
+<div class="footer">
+<strong>Chifa-Pollería Lopez</strong> — Cañete, Lima, Perú<br>
+Cotización preparada: Agosto 2026 | Validez: 30 días<br>
+Contacto: 962 797 752
+</div>
+
+</body>
+</html>

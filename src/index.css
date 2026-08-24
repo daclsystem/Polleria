@@ -1,0 +1,98 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Plus Jakarta Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Syne", ui-sans-serif, system-ui, sans-serif;
+  --color-ink: #111110;
+  --color-ink-soft: #1c1b19;
+  --color-cream: #f3f1ec;
+  --color-cream-dark: #e7e3da;
+  --color-ember: #ff3b1f;
+  --color-ember-hot: #e2220c;
+  --color-gold: #f0b429;
+  --color-brick: #c81e1e;
+  --color-sage: #12805c;
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--color-cream);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  text-size-adjust: 100%;
+}
+
+#root {
+  min-height: 100dvh;
+}
+
+.font-display {
+  font-family: var(--font-display);
+}
+
+.flame-bg {
+  background:
+    radial-gradient(900px 420px at 0% 0%, rgba(255, 59, 31, 0.28), transparent 55%),
+    radial-gradient(700px 360px at 100% 10%, rgba(240, 180, 41, 0.16), transparent 50%),
+    #111110;
+}
+
+.card {
+  border-radius: 1.25rem;
+  background: #fff;
+  border: 1px solid rgba(17, 17, 16, 0.06);
+  box-shadow: 0 8px 30px -20px rgba(17, 17, 16, 0.35);
+}
+
+.safe-bottom {
+  padding-bottom: max(0.75rem, env(safe-area-inset-bottom));
+}
+
+.tap {
+  min-height: 44px;
+  min-width: 44px;
+  touch-action: manipulation;
+}
+
+.btn-primary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 48px;
+  border-radius: 1rem;
+  background: var(--color-ember);
+  color: #fff;
+  font-weight: 700;
+  transition: transform 0.12s ease, background 0.12s ease;
+}
+
+.btn-primary:hover {
+  background: var(--color-ember-hot);
+}
+
+.btn-primary:active {
+  transform: scale(0.98);
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #cfc8bb;
+  border-radius: 99px;
+}
+
+@media print {
+  .no-print {
+    display: none !important;
+  }
+}

@@ -1,0 +1,15 @@
+#!/usr/bin/expect -f
+set timeout 120
+set pass "PolleriaLopez2026Api"
+set host "116.203.70.104"
+set local [lindex $argv 0]
+set remote [lindex $argv 1]
+
+spawn scp -o StrictHostKeyChecking=accept-new -o PreferredAuthentications=password -o PubkeyAuthentication=no -r $local root@$host:$remote
+expect {
+  -re "(?i)password:" { send -- "$pass\r"; exp_continue }
+  eof {}
+  timeout { exit 1 }
+}
+catch wait r
+exit [lindex $r 3]
