@@ -2,15 +2,14 @@ import { createContext, useContext, useMemo, useState, type ReactNode } from 're
 import { useStore } from '../store/StoreContext'
 import type { ModuleId, Role, User } from '../types'
 import { ROLE_MODULES } from '../types'
-import { apiLogin, getApiToken, setApiToken } from '../lib/apiClient'
+import { getApiToken, setApiToken } from '../lib/apiClient'
 
-/** Sesión staff (solo token/sesión, datos de negocio vienen del API) */
 const STAFF_SESSION_KEY = 'polleria-staff-session'
 
 interface AuthApi {
   user: User | null
   apiReady: boolean
-  login: (email: string, password: string) => Promise<string | null>
+  loginWithSession: (user: { id: string; name: string; email: string; role: Role }) => Promise<void>
   logout: () => void
   can: (module: ModuleId) => boolean
   resetStaffPassword: (email: string, newPassword: string) => boolean
@@ -31,26 +30,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const user = apiUser
 
-  const login = async (email: string, password: string) => {
-    try {
-      const data = await apiLogin(email, password)
-      const u: User = {
-        id: data.user.id,
-        name: data.user.name,
-        email: data.user.email,
-        password: '',
-        role: data.user.role as Role,
-        active: true,
-        pin: '0000',
-      }
-      localStorage.setItem(STAFF_SESSION_KEY, u.id)
-      localStorage.setItem('polleria-api-user', JSON.stringify(u))
-      setApiUser(u)
-      await reloadFromApi()
-      return null
-    } catch (e) {
-      return (e as Error).message || 'No se pudo iniciar sesión en el API'
+  const loginWithSession = async (uIn: { id: string; name: string; email: string; role: Role }) => {
+    const u: User = {
+      id: uIn.id,
+      name: uIn.name,
+      email: uIn.email,
+      password: '',
+      role: uIn.role,
+      active: true,
+      pin: '0000',
     }
+    localStorage.setItem(STAFF_SESSION_KEY, u.id)
+    localStorage.setItem('polleria-api-user', JSON.stringify(u))
+    setApiUser(u)
+    await reloadFromApi()
   }
 
   const logout = () => {
@@ -62,7 +55,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const can = (module: ModuleId) => {
     if (!user) return false
-    return ROLE_MODULES[user.role].includes(module)
+    return ROLE_MODULES[user.role]?.includes(module) ?? false
   }
 
   const resetStaffPassword = (email: string, newPassword: string) => {
@@ -76,7 +69,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     () => ({
       user,
       apiReady: Boolean(getApiToken()),
-      login,
+      loginWithSession,
       logout,
       can,
       resetStaffPassword,

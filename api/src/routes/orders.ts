@@ -3,11 +3,44 @@ import { v4 as uuid } from 'uuid'
 import { getPool, sql } from '../db.js'
 import { authRequired } from '../auth.js'
 import { emitEvent } from '../realtime.js'
+import { notifyOrderCreatedServer, notifyOrderStatusServer } from '../lib/whatsappNotify.js'
 
 export const ordersRouter = Router()
 
 function paramId(value: string | string[]): string {
   return Array.isArray(value) ? value[0] : value
+}
+
+function mapTrackOrder(order: Record<string, unknown>, items: unknown[]) {
+  return {
+    id: String(order.Id),
+    number: Number(order.Number),
+    type: order.Type,
+    status: order.Status,
+    customerName: order.CustomerName,
+    customerPhone: order.CustomerPhone
+      ? `***${String(order.CustomerPhone).replace(/\D/g, '').slice(-4)}`
+      : undefined,
+    address: order.Address || undefined,
+    items: (items as Array<Record<string, unknown>>).map((it) => ({
+      name: it.Name,
+      qty: Number(it.Qty),
+      price: Number(it.Price),
+    })),
+    discount: Number(order.Discount || 0),
+    subtotal: Number(order.Subtotal),
+    igv: Number(order.Igv),
+    total: Number(order.Total),
+    paid: Boolean(order.Paid),
+    deliveryFee: Number(order.DeliveryFee || 0),
+    driverLat: order.DriverLat != null ? Number(order.DriverLat) : undefined,
+    driverLng: order.DriverLng != null ? Number(order.DriverLng) : undefined,
+    createdAt: new Date(order.CreatedAt as string).toISOString(),
+    updatedAt: new Date(order.UpdatedAt as string).toISOString(),
+    notes: order.Notes || undefined,
+    source: order.Source,
+    codPaymentMethod: order.CodPaymentMethod || undefined,
+  }
 }
 
 async function loadOrder(orderId: string) {
@@ -34,6 +67,71 @@ async function loadOrder(orderId: string) {
     payments: payments.recordset,
   }
 }
+
+/** Tracking público tipo PedidosYa — sin auth */
+ordersRouter.get('/track/:id', async (req, res) => {
+  try {
+    const id = paramId(req.params.id)
+    const tel = String(req.query.tel || '').replace(/\D/g, '')
+    const order = await loadOrder(id)
+    if (!order) return res.status(404).json({ error: 'Pedido no encontrado' })
+
+    if (tel) {
+      const phone = String(order.CustomerPhone || '').replace(/\D/g, '')
+      if (!phone.endsWith(tel.slice(-9)) && !phone.endsWith(tel.slice(-4))) {
+        return res.status(403).json({ error: 'Teléfono no coincide con el pedido' })
+      }
+    }
+
+    res.json({
+      order: mapTrackOrder(order, order.items as unknown[]),
+      steps: [
+        { key: 'nuevo', label: 'Pedido recibido' },
+        { key: 'en_cocina', label: 'Preparando' },
+        { key: 'listo', label: order.Type === 'delivery' || order.Type === 'web' ? 'En camino / listo' : 'Listo para recojo' },
+        { key: 'entregado', label: 'Entregado' },
+      ],
+    })
+  } catch (e) {
+    res.status(500).json({ error: (e as Error).message })
+  }
+})
+
+/** Tracking por número + celular */
+ordersRouter.get('/track', async (req, res) => {
+  try {
+    const number = Number(req.query.number)
+    const tel = String(req.query.tel || '').replace(/\D/g, '')
+    if (!number || !tel) return res.status(400).json({ error: 'number y tel requeridos' })
+
+    const pool = await getPool()
+    const r = await pool
+      .request()
+      .input('number', sql.Int, number)
+      .query(`SELECT TOP 1 * FROM dbo.Orders WHERE Number = @number`)
+    const row = r.recordset[0]
+    if (!row) return res.status(404).json({ error: 'Pedido no encontrado' })
+
+    const phone = String(row.CustomerPhone || '').replace(/\D/g, '')
+    if (!phone.endsWith(tel.slice(-9)) && !phone.endsWith(tel.slice(-4))) {
+      return res.status(403).json({ error: 'Teléfono no coincide' })
+    }
+
+    const order = await loadOrder(String(row.Id))
+    if (!order) return res.status(404).json({ error: 'Pedido no encontrado' })
+    res.json({
+      order: mapTrackOrder(order, order.items as unknown[]),
+      steps: [
+        { key: 'nuevo', label: 'Pedido recibido' },
+        { key: 'en_cocina', label: 'Preparando' },
+        { key: 'listo', label: 'Listo / en camino' },
+        { key: 'entregado', label: 'Entregado' },
+      ],
+    })
+  } catch (e) {
+    res.status(500).json({ error: (e as Error).message })
+  }
+})
 
 ordersRouter.get('/', authRequired, async (req, res) => {
   const status = req.query.status as string | undefined
@@ -215,8 +313,30 @@ ordersRouter.post('/', async (req, res) => {
     emitEvent('order:created', order, ['ops', 'cocina', 'caja'])
     emitEvent('kitchen:new', order, ['cocina'])
 
-    // WhatsApp: flag para worker / endpoint de notificación
-    res.status(201).json({ order, whatsappPending: true })
+    // WhatsApp automático: detalle + tracking (no bloquea la respuesta)
+    void notifyOrderCreatedServer({
+      ...(order as Record<string, unknown>),
+      Id: orderId,
+      Number: (order as { Number: number }).Number,
+      Type: (order as { Type: string }).Type,
+      Status: (order as { Status: string }).Status,
+      CustomerName: (order as { CustomerName: string }).CustomerName,
+      CustomerPhone: (order as { CustomerPhone?: string }).CustomerPhone,
+      Address: (order as { Address?: string }).Address,
+      Total: (order as { Total: number }).Total,
+      CodPaymentMethod: (order as { CodPaymentMethod?: string }).CodPaymentMethod,
+      items: ((order as { items?: Array<{ Name: string; Qty: number; Price: number }> }).items || []).map((i) => ({
+        Name: i.Name,
+        Qty: i.Qty,
+        Price: i.Price,
+      })),
+    }).catch((e) => console.warn('[whatsapp] create', (e as Error).message))
+
+    res.status(201).json({
+      order,
+      trackingUrl: `${(process.env.FRONT_PUBLIC_URL || 'https://indevsoft.com/polleria').replace(/\/$/, '')}/web/seguimiento/${orderId}`,
+      whatsappPending: true,
+    })
   } catch (e) {
     await tx.rollback()
     res.status(500).json({ error: (e as Error).message })
@@ -257,6 +377,28 @@ ordersRouter.patch('/:id/status', authRequired, async (req, res) => {
 
   const order = await loadOrder(orderId)
   emitEvent('order:status', order, ['ops', 'cocina', 'caja', 'mesas'])
+
+  if (order && (order as { CustomerPhone?: string }).CustomerPhone) {
+    void notifyOrderStatusServer(
+      {
+        Id: orderId,
+        Number: (order as { Number: number }).Number,
+        Type: (order as { Type: string }).Type,
+        Status: status,
+        CustomerName: (order as { CustomerName: string }).CustomerName,
+        CustomerPhone: (order as { CustomerPhone?: string }).CustomerPhone,
+        Address: (order as { Address?: string }).Address,
+        Total: (order as { Total: number }).Total,
+        items: ((order as { items?: Array<{ Name: string; Qty: number; Price: number }> }).items || []).map((i) => ({
+          Name: i.Name,
+          Qty: i.Qty,
+          Price: i.Price,
+        })),
+      },
+      status,
+    ).catch((e) => console.warn('[whatsapp] status', (e as Error).message))
+  }
+
   res.json({ order })
 })
 

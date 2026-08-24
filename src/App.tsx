@@ -24,6 +24,7 @@ import { CustomerApp } from './pages/Customer'
 import { WebLanding } from './pages/WebLanding'
 import { WebAccount } from './pages/WebAccount'
 import { WebReservar } from './pages/WebReservar'
+import { OrderTracking } from './pages/OrderTracking'
 import { BASENAME } from './lib/paths'
 
 export default function App() {
@@ -36,8 +37,8 @@ export default function App() {
             <Route path="/web" element={<WebLanding />} />
             <Route path="/web/cuenta" element={<WebAccount />} />
             <Route path="/web/reservar" element={<WebReservar />} />
-            <Route path="/pedir" element={<CustomerApp />} />
-            <Route path="/pedir/:orderId" element={<CustomerApp />} />
+            <Route path="/web/seguimiento/:orderId" element={<OrderTracking />} />
+            <Route path="/pedir" element={<CustomerApp />} />            <Route path="/pedir/:orderId" element={<CustomerApp />} />
             <Route
               element={
                 <ProtectedRoute>

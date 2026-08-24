@@ -43,27 +43,32 @@ function CustomerMenu() {
     })
   }
 
-  const send = (e: React.FormEvent) => {
+  const send = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!name.trim() || items.length === 0) return
     const orderItems =
       mode === 'delivery' && fee > 0
         ? [...items, { productId: 'delivery', name: 'Delivery', qty: 1, price: fee }]
         : items
-    const order = createOrder({
-      type: mode === 'delivery' ? 'delivery' : 'llevar',
-      items: orderItems,
-      customerName: name.trim(),
-      customerPhone: phone,
-      address: mode === 'delivery' ? address : undefined,
-      discount: 0,
-      paymentMethod: pay,
-      paid: pay === 'yape',
-      notes: note || undefined,
-      createdBy: 'Web',
-      source: 'web',
-    })
-    navigate(`/pedir/${order.id}`)
+    try {
+      const order = await createOrder({
+        type: mode === 'delivery' ? 'delivery' : 'llevar',
+        items: orderItems,
+        customerName: name.trim(),
+        customerPhone: phone,
+        address: mode === 'delivery' ? address : undefined,
+        discount: 0,
+        paymentMethod: pay,
+        paid: pay === 'yape',
+        notes: note || undefined,
+        createdBy: 'Web',
+        source: 'web',
+      })
+      const tel = phone.replace(/\D/g, '').slice(-9)
+      navigate(`/web/seguimiento/${order.id}${tel ? `?tel=${tel}` : ''}`)
+    } catch (err) {
+      alert((err as Error).message || 'No se pudo crear el pedido')
+    }
   }
 
   return (

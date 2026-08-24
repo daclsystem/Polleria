@@ -12,6 +12,8 @@ import { ordersRouter } from './routes/orders.js'
 import { mediaRouter } from './routes/media.js'
 import { crudRouter } from './routes/crud.js'
 import { configRouter } from './routes/config.js'
+import { otpAuthRouter } from './routes/otpAuth.js'
+import { driversRouter } from './routes/drivers.js'
 
 dotenv.config()
 
@@ -37,6 +39,8 @@ app.get('/health', async (_req, res) => {
 
 app.use('/api/auth', authRouter)
 app.use('/api/auth/recover', recoverRouter)
+app.use('/api/auth/otp', otpAuthRouter)
+app.use('/api/drivers', driversRouter)
 app.use('/api/catalog', catalogRouter)
 app.use('/api/delivery', deliveryRouter)
 app.use('/api/orders', ordersRouter)

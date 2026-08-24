@@ -72,7 +72,7 @@ export function Pos() {
     })
   }
 
-  const submit = (paid: boolean, payMethod: PaymentMethod) => {
+  const submit = async (paid: boolean, payMethod: PaymentMethod) => {
     if (!canSend) return
 
     if (isAppendMode && appendOrder) {
@@ -85,24 +85,28 @@ export function Pos() {
     const name =
       customerName.trim() ||
       (type === 'salon' ? `Mesa ${state.tables.find((t) => t.id === tableId)?.number}` : 'Cliente')
-    const order = createOrder({
-      type,
-      items,
-      customerName: name,
-      customerPhone: phone || undefined,
-      address: type === 'delivery' ? address : undefined,
-      tableId: type === 'salon' ? tableId : undefined,
-      discount,
-      paymentMethod: paid ? payMethod : 'pendiente',
-      paid,
-      notes: notes || undefined,
-      createdBy: user?.name ?? 'POS',
-      source: 'pos',
-    })
-    if (paid) payOrder(order.id, payMethod)
-    printTicket(order, state.settings, 'cocina')
-    if (paid) setTimeout(() => printTicket(order, state.settings, 'caja'), 400)
-    navigate('/comandas')
+    try {
+      const order = await createOrder({
+        type,
+        items,
+        customerName: name,
+        customerPhone: phone || undefined,
+        address: type === 'delivery' ? address : undefined,
+        tableId: type === 'salon' ? tableId : undefined,
+        discount,
+        paymentMethod: paid ? payMethod : 'pendiente',
+        paid,
+        notes: notes || undefined,
+        createdBy: user?.name ?? 'POS',
+        source: 'pos',
+      })
+      if (paid) payOrder(order.id, payMethod)
+      printTicket(order, state.settings, 'cocina')
+      if (paid) setTimeout(() => printTicket(order, state.settings, 'caja'), 400)
+      navigate('/comandas')
+    } catch (e) {
+      alert((e as Error).message || 'No se pudo crear el pedido')
+    }
   }
 
   const cartBody = (

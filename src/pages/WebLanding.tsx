@@ -160,7 +160,7 @@ export function WebLanding() {
     menuRef.current?.scrollIntoView({ behavior: 'smooth' })
   }
 
-  const send = (e: React.FormEvent) => {
+  const send = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!name.trim() || items.length === 0) return
     const orderItems =
@@ -169,30 +169,36 @@ export function WebLanding() {
         : items
     let customerId: string | undefined
     try {
-      const raw = localStorage.getItem('chifa-lopez-customer')
+      const raw = localStorage.getItem('polleria-customer-session') || localStorage.getItem('chifa-lopez-customer')
       if (raw) {
         const cust = JSON.parse(raw)
         customerId = cust?.id
       }
     } catch {}
-    const order = createOrder({
-      type: mode === 'delivery' ? 'delivery' : 'llevar',
-      items: orderItems,
-      customerName: name.trim(),
-      customerPhone: phone,
-      customerId,
-      address: mode === 'delivery' ? address : undefined,
-      discount: 0,
-      paymentMethod: pay,
-      paid: pay === 'yape',
-      notes: note || undefined,
-      createdBy: 'Web',
-      source: 'web',
-    })
-    setOrderSuccess(order.id)
-    setItems([])
-    setCheckoutOpen(false)
-    setCartOpen(false)
+    try {
+      const order = await createOrder({
+        type: mode === 'delivery' ? 'delivery' : 'llevar',
+        items: orderItems,
+        customerName: name.trim(),
+        customerPhone: phone,
+        customerId,
+        address: mode === 'delivery' ? address : undefined,
+        discount: 0,
+        paymentMethod: pay,
+        paid: pay === 'yape',
+        notes: note || undefined,
+        createdBy: 'Web',
+        source: 'web',
+        deliveryFee: mode === 'delivery' ? deliveryFee : 0,
+      })
+      setItems([])
+      setCheckoutOpen(false)
+      setCartOpen(false)
+      const tel = phone.replace(/\D/g, '').slice(-9)
+      navigate(`/web/seguimiento/${order.id}${tel ? `?tel=${tel}` : ''}`)
+    } catch (err) {
+      alert((err as Error).message || 'No se pudo crear el pedido')
+    }
   }
 
   if (orderSuccess) {

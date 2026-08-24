@@ -79,10 +79,14 @@ export async function apiBootstrap() {
 }
 
 export async function apiCreateOrder(body: unknown) {
-  return apiFetch<{ order: unknown }>('/api/orders', {
-    method: 'POST',
-    body: JSON.stringify(body),
-  })
+  return apiFetch<{ order: { Id?: string; id?: string; Number?: number; number?: number }; trackingUrl?: string }>(
+    '/api/orders',
+    {
+      method: 'POST',
+      auth: false,
+      body: JSON.stringify(body),
+    },
+  )
 }
 
 export async function apiUpdateOrderStatus(id: string, status: string) {

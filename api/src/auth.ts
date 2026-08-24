@@ -9,7 +9,8 @@ export interface AuthUser {
   id: string
   name: string
   email: string
-  role: 'admin' | 'cajero' | 'cocina' | 'mozo'
+  role: 'admin' | 'cajero' | 'cocina' | 'mozo' | 'driver' | 'customer'
+  accountType?: 'staff' | 'customer' | 'driver'
 }
 
 declare global {

@@ -9,7 +9,6 @@ import {
   type ReactNode,
 } from 'react'
 import { totalsFromItems, uid } from '../lib/format'
-import { notifyOrderCreated, notifyOrderStatus } from '../lib/whatsapp'
 import {
   apiAddOrderItems,
   apiAdjustStock,
@@ -113,7 +112,7 @@ interface StoreApi {
   apiLoading: boolean
   apiError: string | null
   reloadFromApi: () => Promise<void>
-  createOrder: (input: NewOrderInput) => Order
+  createOrder: (input: NewOrderInput) => Promise<Order>
   updateOrderStatus: (id: string, status: OrderStatus) => void
   addItemsToOrder: (id: string, newItems: OrderItem[], createdBy: string) => void
   payOrder: (id: string, method: PaymentMethod) => void
@@ -204,15 +203,63 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const createOrder = useCallback(
-    (input: NewOrderInput) => {
+    async (input: NewOrderInput) => {
       requireApi()
-      let created!: Order
-      patchLocal((prev) => {
-        const money = totalsFromItems(input.items, input.discount ?? 0, prev.settings.igvRate)
-        const table = prev.tables.find((t) => t.id === input.tableId)
-        created = {
-          id: uid('ord'),
-          number: prev.nextOrderNumber,
+      const money = totalsFromItems(input.items, input.discount ?? 0, stateRef.current.settings.igvRate)
+      const table = stateRef.current.tables.find((t) => t.id === input.tableId)
+      const guid = (id?: string) => (isGuid(id) ? id : undefined)
+      const codMethod =
+        input.codPaymentMethod ||
+        (input.source === 'web' || input.type === 'delivery'
+          ? input.paymentMethod === 'yape' || input.paymentMethod === 'efectivo'
+            ? input.paymentMethod
+            : 'yape'
+          : undefined)
+
+      try {
+        const res = await apiCreateOrder({
+          type: input.type,
+          source: input.source,
+          customerName: input.customerName,
+          customerPhone: input.customerPhone,
+          customerId: guid(input.customerId),
+          address: input.address,
+          addressLat: input.addressLat,
+          addressLng: input.addressLng,
+          deliveryDistanceKm: input.deliveryDistanceKm,
+          deliveryTimeMin: input.deliveryTimeMin,
+          deliveryFee: input.deliveryFee,
+          tableId: guid(input.tableId),
+          tableNumber: table?.number,
+          notes: input.notes,
+          discount: input.discount ?? 0,
+          subtotal: money.subtotal,
+          igv: money.igv,
+          total: money.total,
+          createdByUserId: guid(input.createdBy),
+          codPaymentMethod: codMethod,
+          codCashAmount: input.codCashAmount,
+          items: input.items.map((i) => ({
+            productId: guid(i.productId),
+            name: i.name,
+            qty: i.qty,
+            price: i.price,
+            notes: i.notes,
+            options: i.selectedOptions?.map((o) => ({
+              groupId: guid(o.groupId),
+              optionId: guid(o.optionId),
+              name: o.name,
+              price: o.price,
+            })),
+          })),
+        })
+
+        const raw = res.order as Record<string, unknown>
+        const realId = String(raw.Id || raw.id || uid('ord'))
+        const realNumber = Number(raw.Number || raw.number || stateRef.current.nextOrderNumber)
+        const created: Order = {
+          id: realId,
+          number: realNumber,
           type: input.type,
           status: 'nuevo',
           tableId: input.tableId,
@@ -232,69 +279,22 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           notes: input.notes,
           source: input.source,
         }
-        const tables = prev.tables.map((t) =>
-          t.id === input.tableId ? { ...t, status: 'ocupada' as const, orderId: created.id } : t,
-        )
-        return {
+
+        patchLocal((prev) => ({
           ...prev,
-          orders: [created, ...prev.orders],
-          tables,
-          nextOrderNumber: prev.nextOrderNumber + 1,
-        }
-      })
+          orders: [created, ...prev.orders.filter((o) => o.id !== created.id)],
+          tables: prev.tables.map((t) =>
+            t.id === input.tableId ? { ...t, status: 'ocupada' as const, orderId: created.id } : t,
+          ),
+          nextOrderNumber: Math.max(prev.nextOrderNumber, realNumber + 1),
+        }))
 
-      const guid = (id?: string) => (isGuid(id) ? id : undefined)
-      const codMethod =
-        input.codPaymentMethod ||
-        (input.source === 'web' || input.type === 'delivery'
-          ? input.paymentMethod === 'yape' || input.paymentMethod === 'efectivo'
-            ? input.paymentMethod
-            : 'yape'
-          : undefined)
-
-      void apiCreateOrder({
-        type: input.type,
-        source: input.source,
-        customerName: input.customerName,
-        customerPhone: input.customerPhone,
-        customerId: guid(input.customerId),
-        address: input.address,
-        addressLat: input.addressLat,
-        addressLng: input.addressLng,
-        deliveryDistanceKm: input.deliveryDistanceKm,
-        deliveryTimeMin: input.deliveryTimeMin,
-        deliveryFee: input.deliveryFee,
-        tableId: guid(input.tableId),
-        tableNumber: created.tableNumber,
-        notes: input.notes,
-        discount: input.discount ?? 0,
-        subtotal: created.subtotal,
-        igv: created.igv,
-        total: created.total,
-        createdByUserId: guid(input.createdBy),
-        codPaymentMethod: codMethod,
-        codCashAmount: input.codCashAmount,
-        items: input.items.map((i) => ({
-          productId: guid(i.productId),
-          name: i.name,
-          qty: i.qty,
-          price: i.price,
-          notes: i.notes,
-          options: i.selectedOptions?.map((o) => ({
-            groupId: guid(o.groupId),
-            optionId: guid(o.optionId),
-            name: o.name,
-            price: o.price,
-          })),
-        })),
-      })
-        .then(() => {
-          void notifyOrderCreated(created)
-          if (getApiToken()) void reloadFromApi()
-        })
-        .catch((e) => setApiError((e as Error).message))
-
-      return created
+        if (getApiToken()) void reloadFromApi()
+        return created
+      } catch (e) {
+        setApiError((e as Error).message)
+        throw e
+      }
     },
     [patchLocal, reloadFromApi],
   )
@@ -302,13 +302,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const updateOrderStatus = useCallback(
     (id: string, status: OrderStatus) => {
       requireApi()
-      let updated: Order | undefined
       patchLocal((prev) => {
         const orders = prev.orders.map((o) =>
           o.id === id ? { ...o, status, updatedAt: new Date().toISOString() } : o,
         )
         const order = orders.find((o) => o.id === id)
-        updated = order
         let tables = prev.tables
         if (order?.tableId && (status === 'entregado' || status === 'cancelado')) {
           tables = tables.map((t) =>
@@ -322,7 +320,6 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       })
       void apiUpdateOrderStatus(id, status)
         .then(() => {
-          if (updated) void notifyOrderStatus(updated, status)
           void reloadFromApi()
         })
         .catch((e) => setApiError((e as Error).message))
