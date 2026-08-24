@@ -5,6 +5,7 @@ import { useAuth } from '../auth/AuthContext'
 import { useStore } from '../store/StoreContext'
 import { padOrder, soles } from '../lib/format'
 import { printTicket } from '../lib/print'
+import { apiUpsertCustomer } from '../lib/apiClient'
 import type { OrderItem, OrderType, PaymentMethod } from '../types'
 import { Field, Modal, PageTitle, inputClass } from '../components/ui'
 
@@ -34,11 +35,11 @@ export function Pos() {
   const [type, setType] = useState<OrderType>(isAppendMode ? (appendOrder?.type ?? 'salon') : 'salon')
   const [tableId, setTableId] = useState(presetTable)
   const [customerName, setCustomerName] = useState(
-    isAppendMode
-      ? (appendOrder?.customerName ?? '')
-      : presetTable ? `Mesa ${state.tables.find((t) => t.id === presetTable)?.number ?? ''}` : '',
+    isAppendMode ? (appendOrder?.customerName ?? '') : '',
   )
-  const [phone, setPhone] = useState('')
+  const [phone, setPhone] = useState(
+    isAppendMode ? (appendOrder?.customerPhone ?? '937493214') : '937493214',
+  )
   const [address, setAddress] = useState('')
   const [notes, setNotes] = useState('')
   const [discount, setDiscount] = useState(0)
@@ -61,6 +62,12 @@ export function Pos() {
   const cashNum = Number(cash) || 0
   const change = Math.max(0, cashNum - total)
   const canSend = items.length > 0 && (isAppendMode || type !== 'salon' || Boolean(tableId))
+
+  const phoneDigits = phone.replace(/\D/g, '')
+  const nameOk = customerName.trim().length >= 2
+  const phoneOk = phoneDigits.length >= 9
+  const customerOk = isAppendMode || (nameOk && phoneOk)
+  const canSubmit = canSend && customerOk
 
   const add = (productId: string) => {
     const p = state.products.find((x) => x.id === productId)

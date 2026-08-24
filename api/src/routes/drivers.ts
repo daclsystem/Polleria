@@ -14,12 +14,16 @@ function isGuid(id?: string) {
 }
 
 function mapDriver(r: Record<string, unknown>) {
+  const name = String(r.Name || 'Conductor')
   return {
     id: String(r.Id),
     name: r.Name,
     phone: r.Phone,
     active: Boolean(r.Active),
     vehicleInfo: r.VehicleInfo || undefined,
+    photoUrl:
+      r.PhotoUrl ||
+      `https://ui-avatars.com/api/?name=${encodeURIComponent(name)}&background=0f766e&color=ffffff&size=128&bold=true`,
     lat: r.Lat != null ? Number(r.Lat) : undefined,
     lng: r.Lng != null ? Number(r.Lng) : undefined,
   }
@@ -33,11 +37,21 @@ driversRouter.get('/', authRequired, requireRoles('admin', 'cajero'), async (_re
 })
 
 driversRouter.post('/', authRequired, requireRoles('admin'), async (req, res) => {
-  const body = req.body as { id?: string; name: string; phone: string; active?: boolean; vehicleInfo?: string }
+  const body = req.body as {
+    id?: string
+    name: string
+    phone: string
+    active?: boolean
+    vehicleInfo?: string
+    photoUrl?: string
+  }
   if (!body.name || !body.phone) return res.status(400).json({ error: 'name y phone requeridos' })
   const id = isGuid(body.id) ? body.id! : uuid()
   let phone = body.phone.replace(/\D/g, '')
   if (phone.length === 9 && phone.startsWith('9')) phone = `51${phone}`
+  const photo =
+    body.photoUrl ||
+    `https://ui-avatars.com/api/?name=${encodeURIComponent(body.name)}&background=0f766e&color=ffffff&size=128&bold=true`
 
   const pool = await getPool()
   await pool
@@ -47,17 +61,27 @@ driversRouter.post('/', authRequired, requireRoles('admin'), async (req, res) =>
     .input('phone', sql.NVarChar, phone)
     .input('active', sql.Bit, body.active !== false)
     .input('vehicle', sql.NVarChar, body.vehicleInfo || null)
+    .input('photo', sql.NVarChar, photo)
     .query(`
-      INSERT INTO dbo.Drivers (Id, Name, Phone, Active, VehicleInfo)
-      VALUES (@id, @name, @phone, @active, @vehicle)
+      INSERT INTO dbo.Drivers (Id, Name, Phone, Active, VehicleInfo, PhotoUrl)
+      VALUES (@id, @name, @phone, @active, @vehicle, @photo)
     `)
-  res.status(201).json({ id })
+  res.status(201).json({ id, photoUrl: photo })
 })
 
 driversRouter.put('/:id', authRequired, requireRoles('admin'), async (req, res) => {
-  const body = req.body as { name: string; phone: string; active?: boolean; vehicleInfo?: string }
+  const body = req.body as {
+    name: string
+    phone: string
+    active?: boolean
+    vehicleInfo?: string
+    photoUrl?: string
+  }
   let phone = String(body.phone || '').replace(/\D/g, '')
   if (phone.length === 9 && phone.startsWith('9')) phone = `51${phone}`
+  const photo =
+    body.photoUrl ||
+    `https://ui-avatars.com/api/?name=${encodeURIComponent(body.name || 'Conductor')}&background=0f766e&color=ffffff&size=128&bold=true`
   const pool = await getPool()
   await pool
     .request()
@@ -66,9 +90,10 @@ driversRouter.put('/:id', authRequired, requireRoles('admin'), async (req, res) 
     .input('phone', sql.NVarChar, phone)
     .input('active', sql.Bit, body.active !== false)
     .input('vehicle', sql.NVarChar, body.vehicleInfo || null)
+    .input('photo', sql.NVarChar, photo)
     .query(`
       UPDATE dbo.Drivers
-      SET Name=@name, Phone=@phone, Active=@active, VehicleInfo=@vehicle, UpdatedAt=SYSUTCDATETIME()
+      SET Name=@name, Phone=@phone, Active=@active, VehicleInfo=@vehicle, PhotoUrl=@photo, UpdatedAt=SYSUTCDATETIME()
       WHERE Id=@id
     `)
   res.json({ ok: true })

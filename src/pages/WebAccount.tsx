@@ -66,7 +66,7 @@ export function WebAccount() {
   const [tab, setTab] = useState<'orders' | 'tracking'>('orders')
   const [trackingOrderId, setTrackingOrderId] = useState<string | null>(null)
   const [authMode, setAuthMode] = useState<'login' | 'register' | 'recover'>('login')
-  const [form, setForm] = useState({ name: '', phone: '', password: '', email: '', address: '' })
+  const [form, setForm] = useState({ name: '', phone: '937493214', password: '', email: '', address: '' })
   const [error, setError] = useState('')
 
   useEffect(() => {

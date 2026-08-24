@@ -42,7 +42,7 @@ export function PhoneOtpLogin({
   onSwitchPurpose?: () => void
 }) {
   const [step, setStep] = useState<Step>('phone')
-  const [phone, setPhone] = useState('')
+  const [phone, setPhone] = useState('937493214')
   const [name, setName] = useState('')
   const [code, setCode] = useState('')
   const [busy, setBusy] = useState(false)
@@ -136,7 +136,7 @@ export function PhoneOtpLogin({
               className="mt-1.5 w-full rounded-xl border border-gray-200 bg-white px-4 py-3.5 text-sm focus:border-[#1a3d1a] focus:ring-2 focus:ring-green-500/20 focus:outline-none"
               value={phone}
               onChange={(e) => setPhone(e.target.value)}
-              placeholder="999 111 222"
+              placeholder="937493214"
               inputMode="tel"
               autoComplete="tel"
               required

@@ -112,7 +112,7 @@ catalogRouter.get('/bootstrap', authRequired, async (_req, res) => {
         pool.request().query(`SELECT * FROM dbo.Inventory ORDER BY Name`),
         pool.request().query(`SELECT TOP 1 * FROM dbo.Settings WHERE Id = 1`),
         pool.request().query(`SELECT TOP 100 * FROM dbo.Orders ORDER BY CreatedAt DESC`),
-        pool.request().query(`SELECT Id, Name, Phone, Email, Address, CreatedAt FROM dbo.Customers ORDER BY CreatedAt DESC`),
+        pool.request().query(`SELECT Id, Name, Phone, Email, Address, PhotoUrl, CreatedAt FROM dbo.Customers ORDER BY CreatedAt DESC`),
         pool.request().query(`SELECT TOP 50 * FROM dbo.Reservations ORDER BY [Date] DESC, [Time] DESC`),
         pool.request().query(`SELECT * FROM dbo.Branches ORDER BY Name`),
         pool.request().query(`SELECT * FROM dbo.DeliveryRanges ORDER BY SortOrder`),
@@ -182,6 +182,9 @@ catalogRouter.get('/bootstrap', authRequired, async (_req, res) => {
         email: c.Email || undefined,
         password: '',
         address: c.Address || undefined,
+        photoUrl:
+          c.PhotoUrl ||
+          `https://ui-avatars.com/api/?name=${encodeURIComponent(String(c.Name || 'Cliente'))}&background=1a3d1a&color=ffd700&size=128&bold=true`,
         createdAt: new Date(c.CreatedAt as string).toISOString(),
       })),
       reservations: reservations.recordset.map((r: Record<string, unknown>) => ({

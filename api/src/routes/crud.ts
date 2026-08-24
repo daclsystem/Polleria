@@ -364,7 +364,130 @@ crudRouter.patch('/reservations/:id/status', authRequired, async (req, res) => {
   res.json({ ok: true })
 })
 
-/* ─── Customers (web) ─── */
+/* ─── Customers (POS + web) ─── */
+function defaultPhoto(name: string) {
+  const n = encodeURIComponent((name || 'Cliente').trim().slice(0, 40) || 'Cliente')
+  return `https://ui-avatars.com/api/?name=${n}&background=1a3d1a&color=ffd700&size=128&bold=true`
+}
+
+function normalizePhone(phone: string) {
+  let digits = phone.replace(/\D/g, '')
+  if (digits.length === 9 && digits.startsWith('9')) digits = `51${digits}`
+  return digits
+}
+
+crudRouter.get('/customers', authRequired, async (_req, res) => {
+  try {
+    const pool = await getPool()
+    const r = await pool.request().query(`
+      SELECT Id, Name, Phone, Email, Address, PhotoUrl, CreatedAt
+      FROM dbo.Customers
+      ORDER BY CreatedAt DESC
+    `)
+    res.json({
+      customers: r.recordset.map((c: Record<string, unknown>) => ({
+        id: String(c.Id),
+        name: c.Name,
+        phone: c.Phone,
+        email: c.Email || undefined,
+        address: c.Address || undefined,
+        photoUrl: c.PhotoUrl || defaultPhoto(String(c.Name)),
+        password: '',
+        createdAt: new Date(c.CreatedAt as string).toISOString(),
+      })),
+    })
+  } catch (e) {
+    res.status(500).json({ error: (e as Error).message })
+  }
+})
+
+/** Upsert por teléfono (POS / web) — crea o actualiza nombre + foto */
+crudRouter.post('/customers/upsert', authRequired, async (req, res) => {
+  try {
+    const name = String(req.body?.name || '').trim()
+    const phoneRaw = String(req.body?.phone || '')
+    const phone = normalizePhone(phoneRaw)
+    const address = req.body?.address ? String(req.body.address) : undefined
+    const email = req.body?.email ? String(req.body.email) : undefined
+    let photoUrl = req.body?.photoUrl ? String(req.body.photoUrl) : ''
+
+    if (!name || name.length < 2) return res.status(400).json({ error: 'Nombre del cliente obligatorio' })
+    if (!phone || phone.length < 11) return res.status(400).json({ error: 'Teléfono del cliente obligatorio' })
+    if (!photoUrl) photoUrl = defaultPhoto(name)
+
+    const pool = await getPool()
+    const existing = await pool
+      .request()
+      .input('phone', sql.NVarChar, phone)
+      .query(`
+        SELECT TOP 1 * FROM dbo.Customers
+        WHERE REPLACE(REPLACE(REPLACE(Phone,' ',''),'-',''),'+','') LIKE '%' + RIGHT(@phone, 9)
+      `)
+
+    if (existing.recordset[0]) {
+      const id = String(existing.recordset[0].Id)
+      await pool
+        .request()
+        .input('id', sql.UniqueIdentifier, id)
+        .input('name', sql.NVarChar, name)
+        .input('phone', sql.NVarChar, phone)
+        .input('address', sql.NVarChar, address || existing.recordset[0].Address || null)
+        .input('email', sql.NVarChar, email || existing.recordset[0].Email || null)
+        .input('photo', sql.NVarChar, photoUrl)
+        .query(`
+          UPDATE dbo.Customers
+          SET Name=@name, Phone=@phone, Address=@address, Email=@email, PhotoUrl=@photo
+          WHERE Id=@id
+        `)
+      return res.json({
+        customer: {
+          id,
+          name,
+          phone,
+          email: email || undefined,
+          address: address || undefined,
+          photoUrl,
+          password: '',
+          createdAt: new Date(existing.recordset[0].CreatedAt).toISOString(),
+        },
+        created: false,
+      })
+    }
+
+    const id = uuid()
+    const hash = await bcrypt.hash(uuid(), 8)
+    await pool
+      .request()
+      .input('id', sql.UniqueIdentifier, id)
+      .input('name', sql.NVarChar, name)
+      .input('phone', sql.NVarChar, phone)
+      .input('email', sql.NVarChar, email || null)
+      .input('address', sql.NVarChar, address || null)
+      .input('hash', sql.NVarChar, hash)
+      .input('photo', sql.NVarChar, photoUrl)
+      .query(`
+        INSERT INTO dbo.Customers (Id, Name, Phone, Email, Address, PasswordHash, PhotoUrl)
+        VALUES (@id, @name, @phone, @email, @address, @hash, @photo)
+      `)
+
+    res.status(201).json({
+      customer: {
+        id,
+        name,
+        phone,
+        email: email || undefined,
+        address: address || undefined,
+        photoUrl,
+        password: '',
+        createdAt: new Date().toISOString(),
+      },
+      created: true,
+    })
+  } catch (e) {
+    res.status(500).json({ error: (e as Error).message })
+  }
+})
+
 crudRouter.post('/customers/register', async (req, res) => {
   const data = req.body as { name: string; phone: string; email?: string; password: string; address?: string }
   if (!data.name || !data.phone || !data.password) {
@@ -379,6 +502,7 @@ crudRouter.post('/customers/register', async (req, res) => {
 
   const id = uuid()
   const hash = await bcrypt.hash(data.password, 10)
+  const photoUrl = defaultPhoto(data.name)
   await pool
     .request()
     .input('id', sql.UniqueIdentifier, id)
@@ -387,9 +511,10 @@ crudRouter.post('/customers/register', async (req, res) => {
     .input('email', sql.NVarChar, data.email || null)
     .input('hash', sql.NVarChar, hash)
     .input('address', sql.NVarChar, data.address || null)
+    .input('photo', sql.NVarChar, photoUrl)
     .query(`
-      INSERT INTO dbo.Customers (Id, Name, Phone, Email, PasswordHash, Address)
-      VALUES (@id, @name, @phone, @email, @hash, @address)
+      INSERT INTO dbo.Customers (Id, Name, Phone, Email, PasswordHash, Address, PhotoUrl)
+      VALUES (@id, @name, @phone, @email, @hash, @address, @photo)
     `)
   res.status(201).json({
     customer: {
@@ -399,6 +524,7 @@ crudRouter.post('/customers/register', async (req, res) => {
       email: data.email,
       password: '',
       address: data.address,
+      photoUrl,
       createdAt: new Date().toISOString(),
     },
   })

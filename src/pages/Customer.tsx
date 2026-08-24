@@ -21,7 +21,7 @@ function CustomerMenu() {
   const [open, setOpen] = useState(false)
   const [mode, setMode] = useState<'llevar' | 'delivery'>('llevar')
   const [name, setName] = useState('')
-  const [phone, setPhone] = useState('')
+  const [phone, setPhone] = useState('937493214')
   const [address, setAddress] = useState('')
   const [note, setNote] = useState('')
   const [pay, setPay] = useState<'yape' | 'efectivo'>('yape')

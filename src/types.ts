@@ -161,7 +161,19 @@ export interface Customer {
   email?: string
   password: string
   address?: string
+  photoUrl?: string
   createdAt: string
+}
+
+export interface Driver {
+  id: string
+  name: string
+  phone: string
+  active: boolean
+  vehicleInfo?: string
+  photoUrl?: string
+  lat?: number
+  lng?: number
 }
 
 export type ReservationStatus = 'pendiente' | 'confirmada' | 'cancelada' | 'completada'
@@ -210,6 +222,8 @@ export const MODULES = [
   'menu',
   'inventario',
   'usuarios',
+  'clientes',
+  'conductores',
   'reportes',
   'pedidos-web',
   'sucursales',
@@ -223,9 +237,20 @@ export type ModuleId = (typeof MODULES)[number]
 
 export const ROLE_MODULES: Record<Role, ModuleId[]> = {
   admin: [...MODULES],
-  cajero: ['dashboard', 'pos', 'comandas', 'mesas', 'reservas', 'pedidos-web', 'reportes', 'facturacion', 'whatsapp'],
+  cajero: [
+    'dashboard',
+    'pos',
+    'comandas',
+    'mesas',
+    'reservas',
+    'pedidos-web',
+    'clientes',
+    'reportes',
+    'facturacion',
+    'whatsapp',
+  ],
   cocina: ['cocina', 'comandas'],
-  mozo: ['pos', 'comandas', 'mesas', 'reservas'],
+  mozo: ['pos', 'comandas', 'mesas', 'reservas', 'clientes'],
 }
 
 export const ROLE_LABEL: Record<Role, string> = {

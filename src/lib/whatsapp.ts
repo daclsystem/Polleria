@@ -24,7 +24,7 @@ export const DEFAULT_WSPGO: WspgoConfig = {
   baseUrl: 'https://iwspgo.indevsoft.com',
   apiKey: '753ce43470bc2ad5b72bce84a7080d7ec92f77a6690bff51e5e03a5cd14eb6e0',
   session: 'PolleriaLopez',
-  notifyPhone: '51962797752',
+  notifyPhone: '51937493214',
   autoNotifyCustomer: true,
   autoNotifyLocal: true,
   templates: {

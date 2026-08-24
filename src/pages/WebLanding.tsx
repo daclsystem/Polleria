@@ -55,7 +55,7 @@ export function WebLanding() {
   const [checkoutOpen, setCheckoutOpen] = useState(false)
   const [mode, setMode] = useState<'llevar' | 'delivery'>('delivery')
   const [name, setName] = useState('')
-  const [phone, setPhoneVal] = useState('')
+  const [phone, setPhoneVal] = useState('937493214')
   const [address, setAddress] = useState('')
   const [note, setNote] = useState('')
   const [pay, setPay] = useState<'yape' | 'efectivo'>('yape')
@@ -510,7 +510,7 @@ export function WebLanding() {
           <p className="mt-3 text-lg text-gray-500">Escríbenos o llámanos. ¡Estamos para servirte!</p>
           <div className="mt-10 flex flex-wrap items-center justify-center gap-4">
             <a
-              href="https://wa.me/51962797752"
+              href="https://wa.me/51937493214"
               target="_blank"
               rel="noopener noreferrer"
               className="inline-flex items-center gap-3 rounded-2xl bg-green-600 px-8 py-4 text-lg font-bold text-white shadow-lg shadow-green-600/30 transition hover:scale-105 hover:bg-green-700"
@@ -521,7 +521,7 @@ export function WebLanding() {
               WhatsApp
             </a>
             <a
-              href={`tel:+51962797752`}
+              href={`tel:+51937493214`}
               className="inline-flex items-center gap-3 rounded-2xl bg-[#1a3d1a] px-8 py-4 text-lg font-bold text-white shadow-lg shadow-green-900/30 transition hover:scale-105 hover:bg-green-900"
             >
               <Phone size={22} /> Llamar
@@ -734,7 +734,7 @@ export function WebLanding() {
               </div>
               <div>
                 <label className="text-sm font-bold text-gray-700">Celular *</label>
-                <input className="mt-1.5 w-full rounded-xl border border-gray-200 px-4 py-3.5 text-sm focus:border-green-500 focus:ring-2 focus:ring-green-500/20 focus:outline-none" value={phone} onChange={(e) => setPhoneVal(e.target.value)} required inputMode="tel" placeholder="999 999 999" />
+                <input className="mt-1.5 w-full rounded-xl border border-gray-200 px-4 py-3.5 text-sm focus:border-green-500 focus:ring-2 focus:ring-green-500/20 focus:outline-none" value={phone} onChange={(e) => setPhoneVal(e.target.value)} required inputMode="tel" placeholder="937493214" />
               </div>
               {mode === 'delivery' && (
                 <div>

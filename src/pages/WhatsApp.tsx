@@ -323,7 +323,7 @@ export function WhatsApp() {
               className={inputClass}
               value={config.notifyPhone}
               onChange={(e) => setConfig({ ...config, notifyPhone: e.target.value })}
-              placeholder="51962797752"
+              placeholder="51937493214"
             />
           </Field>
 

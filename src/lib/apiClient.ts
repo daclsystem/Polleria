@@ -2,6 +2,7 @@ import { API_URL, apiUrl } from './api'
 import type {
   Branch,
   Customer,
+  Driver,
   InventoryItem,
   Product,
   Reservation,
@@ -193,6 +194,54 @@ export async function apiUpdateReservationStatus(id: string, status: string) {
     method: 'PATCH',
     body: JSON.stringify({ status }),
   })
+}
+
+export async function apiListCustomers() {
+  return apiFetch<{ customers: Customer[] }>('/api/customers')
+}
+
+export async function apiUpsertCustomer(data: {
+  name: string
+  phone: string
+  email?: string
+  address?: string
+  photoUrl?: string
+}) {
+  return apiFetch<{ customer: Customer; created: boolean }>('/api/customers/upsert', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  })
+}
+
+export async function apiListDrivers() {
+  return apiFetch<{ drivers: Driver[] }>('/api/drivers')
+}
+
+export async function apiCreateDriver(data: {
+  name: string
+  phone: string
+  active?: boolean
+  vehicleInfo?: string
+  photoUrl?: string
+}) {
+  return apiFetch<{ id: string; photoUrl?: string }>('/api/drivers', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  })
+}
+
+export async function apiUpdateDriver(
+  id: string,
+  data: { name: string; phone: string; active?: boolean; vehicleInfo?: string; photoUrl?: string },
+) {
+  return apiFetch(`/api/drivers/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify(data),
+  })
+}
+
+export async function apiDeleteDriver(id: string) {
+  return apiFetch(`/api/drivers/${id}`, { method: 'DELETE' })
 }
 
 export async function apiRegisterCustomer(data: {
