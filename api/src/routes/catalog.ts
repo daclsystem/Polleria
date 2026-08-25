@@ -151,11 +151,13 @@ catalogRouter.get('/bootstrap', authRequired, async (_req, res) => {
         const oid = String(it.OrderId)
         const list = itemsByOrder.get(oid) || []
         list.push({
+          id: String(it.Id),
           productId: it.ProductId ? String(it.ProductId) : 'x',
           name: it.Name,
           qty: Number(it.Qty),
           price: Number(it.Price),
           notes: it.Notes || undefined,
+          kitchenStatus: it.KitchenStatus ? String(it.KitchenStatus) : undefined,
         })
         itemsByOrder.set(oid, list)
       }

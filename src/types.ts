@@ -78,12 +78,15 @@ export interface SelectedOption {
 }
 
 export interface OrderItem {
+  id?: string
   productId: string
   name: string
   qty: number
   price: number
   notes?: string
   selectedOptions?: SelectedOption[]
+  /** Ronda cocina: pendiente (recibido) | en_cocina | listo | undefined (barra) */
+  kitchenStatus?: 'pendiente' | 'en_cocina' | 'listo' | null
 }
 
 export interface Order {

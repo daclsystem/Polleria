@@ -2,6 +2,8 @@ import type { OrderItem, Product } from '../types'
 
 const NO_KITCHEN_CAT = /bebida|gaseosas?|refresco|jugo|agua|cerveza|vino|trago|licor/i
 
+export type KitchenWave = 'pendiente' | 'en_cocina' | 'listo'
+
 /**
  * Configuración del producto: ¿va a comanda de cocina / preparación?
  * Prioridad: flag sendToKitchen del producto (carta). Fallback: categoría.
@@ -25,6 +27,19 @@ export function itemGoesToKitchen(item: OrderItem, products: Product[]) {
 
 export function filterKitchenItems(items: OrderItem[], products: Product[]) {
   return items.filter((item) => itemGoesToKitchen(item, products))
+}
+
+/** Estado de cocina del ítem (legacy: sin kitchenStatus → pendiente si va a cocina) */
+export function itemKitchenWave(item: OrderItem, products: Product[]): KitchenWave | null {
+  if (!itemGoesToKitchen(item, products)) return null
+  if (item.kitchenStatus === 'en_cocina' || item.kitchenStatus === 'listo' || item.kitchenStatus === 'pendiente') {
+    return item.kitchenStatus
+  }
+  return 'pendiente'
+}
+
+export function filterKitchenWave(items: OrderItem[], products: Product[], wave: KitchenWave) {
+  return items.filter((i) => itemKitchenWave(i, products) === wave)
 }
 
 /** Default al crear producto según categoría */

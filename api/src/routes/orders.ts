@@ -38,6 +38,42 @@ async function productsNeedKitchen(productIds: Array<string | undefined | null>)
   }
 }
 
+/** KitchenStatus por producto (NULL = no cocina) */
+async function kitchenStatusForProduct(productId?: string | null): Promise<string | null> {
+  if (!productId) return null
+  try {
+    const pool = await getPool()
+    const r = await pool
+      .request()
+      .input('id', sql.UniqueIdentifier, productId)
+      .query(`
+        SELECT ISNULL(
+          SendToKitchen,
+          CASE WHEN Category LIKE N'%Bebida%' OR Category LIKE N'%Gaseosa%' THEN 0 ELSE 1 END
+        ) AS SendToKitchen
+        FROM dbo.Products WHERE Id=@id
+      `)
+    const ok = Boolean(r.recordset[0]?.SendToKitchen)
+    return ok ? 'pendiente' : null
+  } catch {
+    return 'pendiente'
+  }
+}
+
+async function deriveOrderStatusFromItems(orderId: string, tx?: InstanceType<typeof sql.Transaction>) {
+  const req = tx ? new sql.Request(tx) : (await getPool()).request()
+  const r = await req.input('orderId', sql.UniqueIdentifier, orderId).query(`
+    SELECT KitchenStatus FROM dbo.OrderItems
+    WHERE OrderId=@orderId AND KitchenStatus IS NOT NULL
+  `)
+  const statuses = r.recordset.map((x: { KitchenStatus: string }) => String(x.KitchenStatus))
+  if (!statuses.length) return null
+  if (statuses.some((s) => s === 'en_cocina')) return 'en_cocina'
+  if (statuses.some((s) => s === 'pendiente')) return 'nuevo'
+  if (statuses.every((s) => s === 'listo')) return 'listo'
+  return null
+}
+
 function mapTrackOrder(order: Record<string, unknown>, items: unknown[]) {
   return {
     id: String(order.Id),
@@ -306,6 +342,7 @@ ordersRouter.post('/', async (req, res) => {
     let sort = 0
     for (const item of body.items) {
       const itemId = uuid()
+      const kStatus = await kitchenStatusForProduct(item.productId)
       await new sql.Request(tx)
         .input('id', sql.UniqueIdentifier, itemId)
         .input('orderId', sql.UniqueIdentifier, orderId)
@@ -315,9 +352,10 @@ ordersRouter.post('/', async (req, res) => {
         .input('price', sql.Decimal(10, 2), item.price)
         .input('notes', sql.NVarChar, item.notes || null)
         .input('sort', sql.Int, sort++)
+        .input('kitchenStatus', sql.NVarChar, kStatus)
         .query(`
-          INSERT INTO dbo.OrderItems (Id, OrderId, ProductId, Name, Qty, Price, Notes, SortOrder)
-          VALUES (@id, @orderId, @productId, @name, @qty, @price, @notes, @sort)
+          INSERT INTO dbo.OrderItems (Id, OrderId, ProductId, Name, Qty, Price, Notes, SortOrder, KitchenStatus)
+          VALUES (@id, @orderId, @productId, @name, @qty, @price, @notes, @sort, @kitchenStatus)
         `)
 
       for (const opt of item.options || []) {
@@ -388,7 +426,10 @@ ordersRouter.post('/', async (req, res) => {
 })
 
 ordersRouter.patch('/:id/status', authRequired, async (req, res) => {
-  const { status } = req.body as { status?: string }
+  const { status, kitchenFrom } = req.body as {
+    status?: string
+    kitchenFrom?: 'pendiente' | 'en_cocina'
+  }
   const allowed = ['nuevo', 'en_cocina', 'listo', 'entregado', 'cancelado']
   if (!status || !allowed.includes(status)) {
     return res.status(400).json({ error: 'status inválido' })
@@ -399,28 +440,71 @@ ordersRouter.patch('/:id/status', authRequired, async (req, res) => {
   const existing = await loadOrder(orderId)
   if (!existing) return res.status(404).json({ error: 'Pedido no encontrado' })
 
-  await pool
-    .request()
-    .input('id', sql.UniqueIdentifier, orderId)
-    .input('status', sql.NVarChar, status)
-    .query(`UPDATE dbo.Orders SET Status = @status, UpdatedAt = SYSUTCDATETIME() WHERE Id = @id`)
-
-  if (existing.TableId) {
-    if (status === 'listo') {
-      await pool
-        .request()
-        .input('tableId', sql.UniqueIdentifier, existing.TableId)
-        .query(`UPDATE dbo.Tables SET Status = N'cuenta' WHERE Id = @tableId`)
+  const tx = new sql.Transaction(pool)
+  await tx.begin()
+  try {
+    if (status === 'en_cocina') {
+      const from = kitchenFrom || 'pendiente'
+      await new sql.Request(tx)
+        .input('orderId', sql.UniqueIdentifier, orderId)
+        .input('from', sql.NVarChar, from)
+        .query(`
+          UPDATE dbo.OrderItems
+          SET KitchenStatus = N'en_cocina'
+          WHERE OrderId=@orderId AND KitchenStatus=@from
+        `)
+    } else if (status === 'listo') {
+      const from = kitchenFrom || 'en_cocina'
+      await new sql.Request(tx)
+        .input('orderId', sql.UniqueIdentifier, orderId)
+        .input('from', sql.NVarChar, from)
+        .query(`
+          UPDATE dbo.OrderItems
+          SET KitchenStatus = N'listo'
+          WHERE OrderId=@orderId AND KitchenStatus=@from
+        `)
     } else if (status === 'entregado' || status === 'cancelado') {
-      await pool
-        .request()
-        .input('tableId', sql.UniqueIdentifier, existing.TableId)
-        .query(`UPDATE dbo.Tables SET Status = N'libre', CurrentOrderId = NULL WHERE Id = @tableId`)
+      await new sql.Request(tx)
+        .input('orderId', sql.UniqueIdentifier, orderId)
+        .query(`
+          UPDATE dbo.OrderItems
+          SET KitchenStatus = CASE WHEN KitchenStatus IS NOT NULL THEN N'listo' ELSE KitchenStatus END
+          WHERE OrderId=@orderId
+        `)
     }
+
+    const derived = (await deriveOrderStatusFromItems(orderId, tx)) || status
+    let finalStatus = status
+    if (status === 'listo' || status === 'en_cocina') {
+      finalStatus = derived
+    }
+
+    await new sql.Request(tx)
+      .input('id', sql.UniqueIdentifier, orderId)
+      .input('status', sql.NVarChar, finalStatus)
+      .query(`UPDATE dbo.Orders SET Status = @status, UpdatedAt = SYSUTCDATETIME() WHERE Id = @id`)
+
+    if (existing.TableId) {
+      if (finalStatus === 'listo') {
+        await new sql.Request(tx)
+          .input('tableId', sql.UniqueIdentifier, existing.TableId)
+          .query(`UPDATE dbo.Tables SET Status = N'cuenta' WHERE Id = @tableId`)
+      } else if (finalStatus === 'entregado' || finalStatus === 'cancelado') {
+        await new sql.Request(tx)
+          .input('tableId', sql.UniqueIdentifier, existing.TableId)
+          .query(`UPDATE dbo.Tables SET Status = N'libre', CurrentOrderId = NULL WHERE Id = @tableId`)
+      }
+    }
+
+    await tx.commit()
+  } catch (e) {
+    await tx.rollback()
+    return res.status(500).json({ error: (e as Error).message })
   }
 
   const order = await loadOrder(orderId)
-  emitEvent('order:status', order, roomsForOrderStatus(status))
+  const final = String((order as { Status?: string })?.Status || status)
+  emitEvent('order:status', order, roomsForOrderStatus(final))
 
   if (order && (order as { CustomerPhone?: string }).CustomerPhone) {
     void notifyOrderStatusServer(
@@ -428,7 +512,7 @@ ordersRouter.patch('/:id/status', authRequired, async (req, res) => {
         Id: orderId,
         Number: (order as { Number: number }).Number,
         Type: (order as { Type: string }).Type,
-        Status: status,
+        Status: final,
         CustomerName: (order as { CustomerName: string }).CustomerName,
         CustomerPhone: (order as { CustomerPhone?: string }).CustomerPhone,
         Address: (order as { Address?: string }).Address,
@@ -440,7 +524,7 @@ ordersRouter.patch('/:id/status', authRequired, async (req, res) => {
           Price: i.Price,
         })),
       },
-      status,
+      final,
     ).catch((e) => console.warn('[whatsapp] status', (e as Error).message))
   }
 
@@ -480,6 +564,7 @@ ordersRouter.post('/:id/items', authRequired, async (req, res) => {
 
     for (const item of items) {
       const itemId = uuid()
+      const kStatus = (await kitchenStatusForProduct(item.productId)) ? 'pendiente' : null
       await new sql.Request(tx)
         .input('id', sql.UniqueIdentifier, itemId)
         .input('orderId', sql.UniqueIdentifier, orderId)
@@ -489,9 +574,10 @@ ordersRouter.post('/:id/items', authRequired, async (req, res) => {
         .input('price', sql.Decimal(10, 2), item.price)
         .input('notes', sql.NVarChar, item.notes || null)
         .input('sort', sql.Int, sort++)
+        .input('kitchenStatus', sql.NVarChar, kStatus)
         .query(`
-          INSERT INTO dbo.OrderItems (Id, OrderId, ProductId, Name, Qty, Price, Notes, SortOrder)
-          VALUES (@id, @orderId, @productId, @name, @qty, @price, @notes, @sort)
+          INSERT INTO dbo.OrderItems (Id, OrderId, ProductId, Name, Qty, Price, Notes, SortOrder, KitchenStatus)
+          VALUES (@id, @orderId, @productId, @name, @qty, @price, @notes, @sort, @kitchenStatus)
         `)
 
       for (const opt of item.options || []) {
@@ -516,39 +602,46 @@ ordersRouter.post('/:id/items', authRequired, async (req, res) => {
         .input('subtotal', sql.Decimal(10, 2), totals.subtotal)
         .input('igv', sql.Decimal(10, 2), totals.igv)
         .input('total', sql.Decimal(10, 2), totals.total)
-        .input('bumpKitchen', sql.Bit, needsKitchenBump ? 1 : 0)
         .query(`
           UPDATE dbo.Orders
           SET Discount=@discount, Subtotal=@subtotal, Igv=@igv, Total=@total,
-              -- Ítems nuevos de prep → vuelven a "Recibidos" (nuevo), no a "En fuego"
-              Status = CASE
-                WHEN @bumpKitchen = 1 THEN N'nuevo'
-                ELSE Status
-              END,
               UpdatedAt=SYSUTCDATETIME()
           WHERE Id=@id
         `)
     } else {
       await new sql.Request(tx)
         .input('id', sql.UniqueIdentifier, orderId)
-        .input('bumpKitchen', sql.Bit, needsKitchenBump ? 1 : 0)
-        .query(`
-          UPDATE dbo.Orders
-          SET Status = CASE
-                WHEN @bumpKitchen = 1 THEN N'nuevo'
-                ELSE Status
-              END,
-              UpdatedAt=SYSUTCDATETIME()
-          WHERE Id=@id
-        `)
+        .query(`UPDATE dbo.Orders SET UpdatedAt=SYSUTCDATETIME() WHERE Id=@id`)
+    }
+
+    // Adicionales de prep: NO reinician toda la comanda.
+    // Si ya estaba en fuego/listo, se mantiene; solo hay ítems "pendiente" nuevos.
+    // Si estaba listo y llegan platos nuevos → vuelve a "nuevo" solo a nivel cabecera
+    // cuando NO quede nada en fuego (derive).
+    if (needsKitchenBump) {
+      const derived = await deriveOrderStatusFromItems(orderId, tx)
+      const prev = String(existing.Status || '')
+      let nextStatus = prev
+      if (prev === 'listo' || prev === 'entregado') {
+        nextStatus = derived || 'nuevo'
+      } else if (prev === 'nuevo' || prev === 'en_cocina') {
+        // Mantener en_cocina si ya cocinaban; si era nuevo se queda nuevo
+        nextStatus = prev === 'en_cocina' ? 'en_cocina' : derived || prev
+      }
+      if (nextStatus && nextStatus !== prev) {
+        await new sql.Request(tx)
+          .input('id', sql.UniqueIdentifier, orderId)
+          .input('status', sql.NVarChar, nextStatus)
+          .query(`UPDATE dbo.Orders SET Status=@status, UpdatedAt=SYSUTCDATETIME() WHERE Id=@id`)
+      }
     }
 
     await tx.commit()
     const order = await loadOrder(orderId)
     emitEvent('order:updated', order, ['ops', 'caja', 'mesas', 'cocina'])
     if (needsKitchenBump) {
-      // Un solo aviso a cocina (kitchen:new). El status queda en "nuevo" (Recibidos).
       emitEvent('kitchen:new', order, ['cocina'])
+      emitEvent('order:status', order, roomsForOrderStatus(String((order as { Status?: string })?.Status || 'nuevo')))
     }
     res.json({ order })
   } catch (e) {

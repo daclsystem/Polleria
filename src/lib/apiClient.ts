@@ -133,10 +133,14 @@ export async function apiCreateOrder(body: unknown) {
   )
 }
 
-export async function apiUpdateOrderStatus(id: string, status: string) {
+export async function apiUpdateOrderStatus(
+  id: string,
+  status: string,
+  kitchenFrom?: 'pendiente' | 'en_cocina',
+) {
   return apiFetch<{ order: unknown }>(`/api/orders/${id}/status`, {
     method: 'PATCH',
-    body: JSON.stringify({ status }),
+    body: JSON.stringify({ status, kitchenFrom }),
   })
 }
 

@@ -131,7 +131,7 @@ interface StoreApi {
   apiError: string | null
   reloadFromApi: () => Promise<void>
   createOrder: (input: NewOrderInput) => Promise<Order>
-  updateOrderStatus: (id: string, status: OrderStatus) => void
+  updateOrderStatus: (id: string, status: OrderStatus, kitchenFrom?: 'pendiente' | 'en_cocina') => void
   addItemsToOrder: (id: string, newItems: OrderItem[], createdBy: string) => void
   payOrder: (id: string, method: PaymentMethod) => void
   cancelOrder: (id: string) => void
@@ -427,12 +427,25 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   )
 
   const updateOrderStatus = useCallback(
-    (id: string, status: OrderStatus) => {
+    (id: string, status: OrderStatus, kitchenFrom?: 'pendiente' | 'en_cocina') => {
       requireApi()
       patchLocal((prev) => {
-        const orders = prev.orders.map((o) =>
-          o.id === id ? { ...o, status, updatedAt: new Date().toISOString() } : o,
-        )
+        const orders = prev.orders.map((o) => {
+          if (o.id !== id) return o
+          const from = kitchenFrom || (status === 'en_cocina' ? 'pendiente' : status === 'listo' ? 'en_cocina' : null)
+          const items = o.items.map((it) => {
+            if (!from) return it
+            const wave = it.kitchenStatus || (filterKitchenItems([it], prev.products).length ? 'pendiente' : null)
+            if (status === 'en_cocina' && from === 'pendiente' && wave === 'pendiente') {
+              return { ...it, kitchenStatus: 'en_cocina' as const }
+            }
+            if (status === 'listo' && from === 'en_cocina' && wave === 'en_cocina') {
+              return { ...it, kitchenStatus: 'listo' as const }
+            }
+            return it
+          })
+          return { ...o, status, items, updatedAt: new Date().toISOString() }
+        })
         const order = orders.find((o) => o.id === id)
         let tables = prev.tables
         if (order?.tableId && (status === 'entregado' || status === 'cancelado')) {
@@ -445,7 +458,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         }
         return { ...prev, orders, tables }
       })
-      void apiUpdateOrderStatus(id, status)
+      void apiUpdateOrderStatus(id, status, kitchenFrom)
         .then(() => {
           void reloadFromApi()
         })
@@ -465,14 +478,19 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         if (!order) return prev
         const mergedItems = [...order.items]
         for (const item of newItems) {
-          const existing = mergedItems.find(
-            (i) => i.productId === item.productId && i.notes === item.notes && !item.selectedOptions?.length,
-          )
-          if (existing) existing.qty += item.qty
-          else mergedItems.push(item)
+          const goesKitchen = filterKitchenItems([item], prev.products).length > 0
+          mergedItems.push({
+            ...item,
+            kitchenStatus: goesKitchen ? 'pendiente' : null,
+          })
         }
         money = totalsFromItems(mergedItems, order.discount, prev.settings.igvRate)
         discount = order.discount
+        // No reiniciar comanda entera: si ya estaba en fuego, se queda; adicionales van como pendiente
+        let nextStatus = order.status
+        if (kitchenNew.length > 0 && (order.status === 'listo' || order.status === 'entregado')) {
+          nextStatus = 'nuevo'
+        }
         return {
           ...prev,
           orders: prev.orders.map((o) =>
@@ -481,8 +499,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
                   ...o,
                   items: mergedItems,
                   ...money,
-                  // Adicional de cocina → Recibidos
-                  status: kitchenNew.length > 0 ? ('nuevo' as const) : o.status,
+                  status: nextStatus,
                   updatedAt: new Date().toISOString(),
                   createdBy: `${o.createdBy} / ${createdBy}`,
                 }
