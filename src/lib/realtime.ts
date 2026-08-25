@@ -56,9 +56,10 @@ export function shouldNotifyRole(
     return event === 'kitchen:new' || (event === 'order:status' && status === 'cancelado')
   }
   if (role === 'mozo') {
-    // Mozo: pedido listo / cancelado / cobrado (mesa). No cocina.
+    // Solo estados de sus mesas (el filtro por createdByUserId va en StoreContext)
     return (
-      (event === 'order:status' && (status === 'listo' || status === 'cancelado' || status === 'entregado')) ||
+      (event === 'order:status' &&
+        ['en_cocina', 'listo', 'cancelado', 'entregado', 'nuevo'].includes(String(status))) ||
       event === 'order:paid'
     )
   }
@@ -184,11 +185,20 @@ export function orderLabel(payload: unknown) {
     customerName?: string
     Status?: string
     status?: string
+    CreatedByUserId?: string
+    createdByUserId?: string
+    CreatedBy?: string
+    createdBy?: string
+    Id?: string
+    id?: string
   }
   const n = o.Number ?? o.number
   const name = o.CustomerName ?? o.customerName ?? ''
   const status = o.Status ?? o.status
-  return { n, name, status }
+  const createdByUserId = o.CreatedByUserId ?? o.createdByUserId
+  const createdBy = o.CreatedBy ?? o.createdBy
+  const id = o.Id ?? o.id
+  return { n, name, status, createdByUserId, createdBy, id }
 }
 
 /** Lee rol staff guardado en sesión local */
@@ -201,4 +211,33 @@ export function readStaffRole(): Role | null {
   } catch {
     return null
   }
+}
+
+export function readStaffUser(): { id?: string; name?: string; role?: Role } | null {
+  try {
+    const raw = localStorage.getItem('polleria-api-user')
+    if (!raw) return null
+    return JSON.parse(raw) as { id?: string; name?: string; role?: Role }
+  } catch {
+    return null
+  }
+}
+
+/** Pedido tomado por este mozo (por GUID o nombre legacy). */
+export function orderBelongsToStaff(
+  order: {
+    createdByUserId?: string | null
+    CreatedByUserId?: string | null
+    createdBy?: string | null
+    CreatedBy?: string | null
+  },
+  staff: { id?: string; name?: string } | null | undefined,
+): boolean {
+  if (!staff?.id && !staff?.name) return false
+  const uid = String(order.createdByUserId || order.CreatedByUserId || '').toLowerCase()
+  const by = String(order.createdBy || order.CreatedBy || '')
+  if (staff.id && uid && uid === staff.id.toLowerCase()) return true
+  if (staff.id && by && by.toLowerCase() === staff.id.toLowerCase()) return true
+  if (staff.name && by && by === staff.name) return true
+  return false
 }

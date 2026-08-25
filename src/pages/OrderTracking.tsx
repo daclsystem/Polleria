@@ -145,7 +145,7 @@ export function OrderTracking() {
   useEffect(() => {
     if (!orderId) return
     connectRealtime([`track:${orderId}`, 'delivery'])
-    return onRealtimeEvent((event, payload) => {
+    const off = onRealtimeEvent((event, payload) => {
       if (event !== 'driver:location') return
       const p = payload as { lat?: number; lng?: number; orderIds?: string[] }
       if (!p || typeof p.lat !== 'number' || typeof p.lng !== 'number') return
@@ -153,6 +153,9 @@ export function OrderTracking() {
       setLiveDriver({ lat: p.lat, lng: p.lng })
       setOrder((prev) => (prev ? { ...prev, driverLat: p.lat, driverLng: p.lng } : prev))
     })
+    return () => {
+      off()
+    }
   }, [orderId])
 
   const enableNotify = async () => {

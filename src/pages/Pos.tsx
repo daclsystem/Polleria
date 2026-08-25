@@ -7,6 +7,7 @@ import { padOrder, soles } from '../lib/format'
 import { printTicket } from '../lib/print'
 import { apiUpsertCustomer } from '../lib/apiClient'
 import { filterKitchenItems } from '../lib/kitchen'
+import { orderBelongsToStaff } from '../lib/realtime'
 import type { OrderItem, OrderType, PaymentMethod } from '../types'
 import { Field, Modal, PageTitle, inputClass } from '../components/ui'
 
@@ -25,7 +26,9 @@ export function Pos() {
   const appendOrderId = params.get('agregar') ?? ''
 
   const appendOrder = appendOrderId ? state.orders.find((o) => o.id === appendOrderId) : null
-  const isAppendMode = !!appendOrder
+  const appendForbidden =
+    Boolean(appendOrder) && user?.role === 'mozo' && !orderBelongsToStaff(appendOrder!, user)
+  const isAppendMode = !!appendOrder && !appendForbidden
 
   const categories = useMemo(
     () => ['Todos', ...new Set(state.products.map((p) => p.category))],
@@ -50,6 +53,20 @@ export function Pos() {
   const [cartOpen, setCartOpen] = useState(false)
   const [method, setMethod] = useState<PaymentMethod>('efectivo')
   const [cash, setCash] = useState('')
+
+  if (appendForbidden) {
+    return (
+      <div className="mx-auto max-w-lg py-16 text-center">
+        <PageTitle title="Mesa de otro mozo" hint="Solo puedes agregar a tus propias comandas." />
+        <button
+          className="mt-6 rounded-full bg-ink px-5 py-2.5 text-sm font-semibold text-cream"
+          onClick={() => navigate('/mesas')}
+        >
+          Volver a mesas
+        </button>
+      </div>
+    )
+  }
 
   const selectedTable = state.tables.find((t) => t.id === tableId)
 

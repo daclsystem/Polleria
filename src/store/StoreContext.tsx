@@ -39,8 +39,10 @@ import {
   disconnectRealtime,
   onRealtimeEvent,
   onRealtimeStatus,
+  orderBelongsToStaff,
   orderLabel,
   readStaffRole,
+  readStaffUser,
   roomsForStaffRole,
   shouldNotifyRole,
   type RealtimeEvent,
@@ -250,9 +252,22 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       const offStatus = onRealtimeStatus(setLive)
       const offEvent = onRealtimeEvent((event: RealtimeEvent, payload) => {
         scheduleReload()
-        const { n, name, status } = orderLabel(payload)
+        const { n, name, status, createdByUserId, createdBy } = orderLabel(payload)
         const currentRole = readStaffRole()
         if (!shouldNotifyRole(currentRole, event, status)) return
+
+        // Mozo: solo alertas de SUS pedidos
+        if (currentRole === 'mozo') {
+          const me = readStaffUser()
+          if (
+            !orderBelongsToStaff(
+              { createdByUserId, CreatedByUserId: createdByUserId, createdBy, CreatedBy: createdBy },
+              me,
+            )
+          ) {
+            return
+          }
+        }
 
         const num = n != null ? `#${String(n).padStart(4, '0')}` : 'Pedido'
 
@@ -260,7 +275,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           playSound('nuevo')
           pushNotice(`${num} nuevo${name ? ` · ${name}` : ''}`, 'warn')
         } else if (event === 'order:status') {
-          if (status === 'listo') {
+          if (status === 'en_cocina') {
+            playSound('nuevo')
+            pushNotice(`${num} en preparación (cocina)`, 'info')
+          } else if (status === 'listo') {
             playSound('listo')
             pushNotice(`${num} listo para entregar`, 'ok')
           } else if (status === 'entregado') {
@@ -268,9 +286,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           } else if (status === 'cancelado') {
             pushNotice(`${num} cancelado`, 'warn')
           } else if (status === 'nuevo') {
-            pushNotice(`${num} recibido`, 'info')
+            pushNotice(`${num} recibido / adicionales`, 'info')
           }
-          // en_cocina y otros: sin toast (ya filtrado, o silencio)
         } else if (event === 'order:paid') {
           pushNotice(`${num} cobrado`, 'ok')
         } else if (event === 'order:driver') {

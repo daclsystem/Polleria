@@ -54,7 +54,8 @@ export function emitEvent(event: RealtimeEvent, payload: unknown, rooms: string[
 export function roomsForOrderStatus(status: string): string[] {
   switch (status) {
     case 'en_cocina':
-      return ['cocina', 'ops']
+      // Cocina + mozos (sala mesas) para avisar “ya está en preparación”
+      return ['cocina', 'ops', 'mesas']
     case 'listo':
       return ['mesas', 'caja', 'ops', 'delivery']
     case 'entregado':
@@ -62,7 +63,7 @@ export function roomsForOrderStatus(status: string): string[] {
     case 'cancelado':
       return ['ops', 'caja', 'cocina', 'mesas', 'delivery']
     case 'nuevo':
-      return ['ops', 'caja', 'cocina']
+      return ['ops', 'caja', 'cocina', 'mesas']
     default:
       return ['ops', 'caja']
   }

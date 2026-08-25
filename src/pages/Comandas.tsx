@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Printer } from 'lucide-react'
 import { useStore } from '../store/StoreContext'
+import { useAuth } from '../auth/AuthContext'
 import { formatDateTime, padOrder, soles } from '../lib/format'
 import { printTicket } from '../lib/print'
 import { filterKitchenItems } from '../lib/kitchen'
+import { orderBelongsToStaff } from '../lib/realtime'
 import { apiAssignDriver, apiListDrivers } from '../lib/apiClient'
 import type { Driver, Order, OrderStatus, PaymentMethod } from '../types'
 import { Empty, Modal, PageTitle, StatusBadge, TypeBadge, inputClass } from '../components/ui'
@@ -19,6 +21,7 @@ const FILTERS: { id: 'todas' | OrderStatus; label: string }[] = [
 
 export function Comandas() {
   const { state, updateOrderStatus, payOrder, cancelOrder, reloadFromApi } = useStore()
+  const { user } = useAuth()
   const [filter, setFilter] = useState<(typeof FILTERS)[number]['id']>('todas')
   const [selected, setSelected] = useState<Order | null>(null)
   const [pay, setPay] = useState<PaymentMethod>('efectivo')
@@ -31,17 +34,37 @@ export function Comandas() {
       .catch(() => setDrivers([]))
   }, [])
 
+  const isMozo = user?.role === 'mozo'
+
   const list = useMemo(() => {
     return state.orders
-      .filter((o) => (filter === 'todas' ? true : o.status === filter))
+      .filter((o) => {
+        if (isMozo && user) {
+          if (!orderBelongsToStaff(o, user)) return false
+        }
+        return filter === 'todas' ? true : o.status === filter
+      })
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
-  }, [state.orders, filter])
+  }, [state.orders, filter, isMozo, user])
 
   const current = selected ? (state.orders.find((o) => o.id === selected.id) ?? selected) : null
 
+  // Si el mozo tenía abierto un pedido ajeno, cerrar modal
+  useEffect(() => {
+    if (!isMozo || !user || !selected) return
+    if (!orderBelongsToStaff(selected, user)) setSelected(null)
+  }, [isMozo, user, selected])
+
   return (
     <div>
-      <PageTitle title="Ver pedidos" hint="Toca uno para cobrar, cambiar estado o imprimir ticket." />
+      <PageTitle
+        title="Ver pedidos"
+        hint={
+          isMozo
+            ? 'Solo tus comandas. Toca una para cobrar, cambiar estado o imprimir.'
+            : 'Toca uno para cobrar, cambiar estado o imprimir ticket.'
+        }
+      />
       <div className="mt-4 flex gap-2 overflow-x-auto pb-1">
         {FILTERS.map((f) => (
           <button

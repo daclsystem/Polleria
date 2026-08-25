@@ -1,8 +1,10 @@
 import { Plus, Printer } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { useStore } from '../store/StoreContext'
+import { useAuth } from '../auth/AuthContext'
 import { padOrder, soles } from '../lib/format'
 import { printTicket } from '../lib/print'
+import { orderBelongsToStaff } from '../lib/realtime'
 import type { TableStatus } from '../types'
 import { PageTitle } from '../components/ui'
 
@@ -14,13 +16,22 @@ const STYLE: Record<TableStatus, string> = {
 
 export function Mesas() {
   const { state, updateOrderStatus } = useStore()
+  const { user } = useAuth()
   const navigate = useNavigate()
   const zones = [...new Set(state.tables.map((t) => t.zone))]
+  const isMozo = user?.role === 'mozo'
 
   return (
     <div>
       <div className="mb-6 flex flex-wrap items-end justify-between gap-4">
-        <PageTitle title="Salón y mesas" hint="Toca una mesa libre para abrir comanda. Toca ocupada para agregar más." />
+        <PageTitle
+          title="Salón y mesas"
+          hint={
+            isMozo
+              ? 'Solo gestionas tus mesas. Las de otro mozo se ven ocupadas sin detalle.'
+              : 'Toca una mesa libre para abrir comanda. Toca ocupada para agregar más.'
+          }
+        />
         <div className="flex flex-wrap gap-2 text-xs font-semibold">
           <span className="rounded-full bg-white px-3 py-1">Libre</span>
           <span className="rounded-full bg-ember px-3 py-1 text-white">Ocupada</span>
@@ -35,14 +46,21 @@ export function Mesas() {
               .filter((t) => t.zone === zone)
               .map((t) => {
                 const order = state.orders.find((o) => o.id === t.orderId)
+                const mine = !order || !isMozo || !user ? true : orderBelongsToStaff(order, user)
+                const locked = Boolean(order && isMozo && !mine)
+
                 return (
                   <div
                     key={t.id}
-                    className={`rounded-3xl border p-4 text-left shadow-sm sm:p-5 ${STYLE[t.status]}`}
+                    className={`rounded-3xl border p-4 text-left shadow-sm sm:p-5 ${
+                      locked ? 'bg-ink/15 border-ink/20 text-ink/50' : STYLE[t.status]
+                    }`}
                   >
                     <button
                       className="w-full text-left"
+                      disabled={locked}
                       onClick={() => {
+                        if (locked) return
                         if (t.status === 'libre') navigate(`/pos?mesa=${t.id}`)
                         if (t.status === 'ocupada' && order) navigate(`/pos?mesa=${t.id}&agregar=${order.id}`)
                       }}
@@ -50,7 +68,9 @@ export function Mesas() {
                       <p className="font-display text-3xl sm:text-4xl">{t.number}</p>
                       <p className="mt-1 text-xs opacity-70">{t.seats} asientos</p>
                     </button>
-                    {order ? (
+                    {locked ? (
+                      <p className="mt-3 text-xs font-semibold">Ocupada por otro mozo</p>
+                    ) : order ? (
                       <div className="mt-3 text-sm">
                         <p className="font-semibold">{padOrder(order.number)}</p>
                         <p className="opacity-80">{soles(order.total)} · {order.items.length} platos</p>
@@ -78,7 +98,7 @@ export function Mesas() {
                         </div>
                       </div>
                     ) : (
-                      <p className="mt-3 text-sm opacity-60">Disponible</p>
+                      <p className="mt-3 text-xs opacity-60">Libre</p>
                     )}
                   </div>
                 )
