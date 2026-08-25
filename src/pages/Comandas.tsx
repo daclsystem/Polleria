@@ -3,6 +3,7 @@ import { Printer } from 'lucide-react'
 import { useStore } from '../store/StoreContext'
 import { formatDateTime, padOrder, soles } from '../lib/format'
 import { printTicket } from '../lib/print'
+import { filterKitchenItems } from '../lib/kitchen'
 import { apiAssignDriver, apiListDrivers } from '../lib/apiClient'
 import type { Driver, Order, OrderStatus, PaymentMethod } from '../types'
 import { Empty, Modal, PageTitle, StatusBadge, TypeBadge, inputClass } from '../components/ui'
@@ -207,7 +208,25 @@ export function Comandas() {
               </button>
               <button
                 className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-white px-3 py-2 text-sm font-semibold"
-                onClick={() => printTicket(current, state.settings, 'cocina')}
+                onClick={() => {
+                  const kitchen = filterKitchenItems(current.items, state.products)
+                  if (kitchen.length === 0) {
+                    alert('Este pedido no tiene ítems de preparación (solo barra).')
+                    return
+                  }
+                  printTicket(
+                    {
+                      ...current,
+                      items: kitchen,
+                      notes:
+                        current.source === 'web'
+                          ? `WEB / APP · ${current.notes || ''}`.trim()
+                          : current.notes,
+                    },
+                    state.settings,
+                    'cocina',
+                  )
+                }}
               >
                 <Printer size={16} /> Comanda cocina
               </button>

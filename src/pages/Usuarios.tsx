@@ -4,6 +4,7 @@ import { useStore } from '../store/StoreContext'
 import { uid } from '../lib/format'
 import { ROLE_LABEL, type Role, type User } from '../types'
 import { Field, Modal, PageTitle, RoleBadge, inputClass } from '../components/ui'
+import { defaultAvatarUrl, shortAccountId } from '../lib/avatar'
 
 const ROLES: Role[] = ['admin', 'cajero', 'cocina', 'mozo']
 
@@ -27,6 +28,7 @@ export function Usuarios() {
               role: 'mozo',
               active: true,
               pin: '5555',
+              photoUrl: defaultAvatarUrl('Mozo', 'staff'),
             })
           }
         >
@@ -36,9 +38,17 @@ export function Usuarios() {
       <div className="mt-6 grid gap-3">
         {state.users.map((u) => (
           <article key={u.id} className="flex flex-wrap items-center justify-between gap-3 rounded-2xl bg-white p-4 shadow-sm">
-            <div>
-              <p className="font-semibold">{u.name}</p>
-              <p className="text-sm text-ink/45">{u.email}</p>
+            <div className="flex items-center gap-3">
+              <img
+                src={u.photoUrl || defaultAvatarUrl(u.name, 'staff')}
+                alt={u.name}
+                className="h-12 w-12 rounded-full object-cover ring-1 ring-ink/10"
+              />
+              <div>
+                <p className="font-semibold">{u.name}</p>
+                <p className="text-sm text-ink/45">{u.email}</p>
+                <p className="font-mono text-[10px] tracking-wider text-ink/35">ID · {shortAccountId(u.id)}</p>
+              </div>
             </div>
             <div className="flex items-center gap-3">
               <RoleBadge role={u.role} />
@@ -66,21 +76,58 @@ export function Usuarios() {
             className="space-y-3"
             onSubmit={(e) => {
               e.preventDefault()
-              saveUser(editing)
+              const photoUrl =
+                editing.photoUrl || defaultAvatarUrl(editing.name || 'Usuario', 'staff')
+              saveUser({ ...editing, photoUrl })
               setEditing(null)
             }}
           >
+            <div className="flex items-center gap-3 rounded-2xl bg-cream px-3 py-3">
+              <img
+                src={editing.photoUrl || defaultAvatarUrl(editing.name || 'Usuario', 'staff')}
+                alt=""
+                className="h-14 w-14 rounded-full object-cover"
+              />
+              <p className="text-xs text-ink/45">Vista previa de la foto de sesión</p>
+            </div>
             <Field label="Nombre">
-              <input className={inputClass} value={editing.name} onChange={(e) => setEditing({ ...editing, name: e.target.value })} required />
+              <input
+                className={inputClass}
+                value={editing.name}
+                onChange={(e) => setEditing({ ...editing, name: e.target.value })}
+                required
+              />
             </Field>
             <Field label="Correo">
-              <input className={inputClass} type="email" value={editing.email} onChange={(e) => setEditing({ ...editing, email: e.target.value })} required />
+              <input
+                className={inputClass}
+                type="email"
+                value={editing.email}
+                onChange={(e) => setEditing({ ...editing, email: e.target.value })}
+                required
+              />
             </Field>
             <Field label="Contraseña">
-              <input className={inputClass} value={editing.password} onChange={(e) => setEditing({ ...editing, password: e.target.value })} />
+              <input
+                className={inputClass}
+                value={editing.password}
+                onChange={(e) => setEditing({ ...editing, password: e.target.value })}
+              />
+            </Field>
+            <Field label="URL foto (opcional)">
+              <input
+                className={inputClass}
+                value={editing.photoUrl || ''}
+                onChange={(e) => setEditing({ ...editing, photoUrl: e.target.value })}
+                placeholder="https://..."
+              />
             </Field>
             <Field label="Rol">
-              <select className={inputClass} value={editing.role} onChange={(e) => setEditing({ ...editing, role: e.target.value as Role })}>
+              <select
+                className={inputClass}
+                value={editing.role}
+                onChange={(e) => setEditing({ ...editing, role: e.target.value as Role })}
+              >
                 {ROLES.map((r) => (
                   <option key={r} value={r}>
                     {ROLE_LABEL[r]}
@@ -89,7 +136,11 @@ export function Usuarios() {
               </select>
             </Field>
             <Field label="PIN">
-              <input className={inputClass} value={editing.pin} onChange={(e) => setEditing({ ...editing, pin: e.target.value })} />
+              <input
+                className={inputClass}
+                value={editing.pin}
+                onChange={(e) => setEditing({ ...editing, pin: e.target.value })}
+              />
             </Field>
             <button className="w-full rounded-xl bg-ember py-3 font-semibold text-white">Guardar</button>
           </form>

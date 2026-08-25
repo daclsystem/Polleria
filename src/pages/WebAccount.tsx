@@ -16,6 +16,8 @@ import { useStore } from '../store/StoreContext'
 import { soles } from '../lib/format'
 import type { Customer, Order } from '../types'
 import { RecoverAccountForm } from '../components/RecoverAccountForm'
+import { ConfirmLogout } from '../components/ConfirmLogout'
+import { defaultAvatarUrl, shortAccountId } from '../lib/avatar'
 
 /** Sesión independiente del cliente web (no mezcla con staff) */
 const CUST_KEY = 'polleria-customer-session'
@@ -68,6 +70,7 @@ export function WebAccount() {
   const [authMode, setAuthMode] = useState<'login' | 'register' | 'recover'>('login')
   const [form, setForm] = useState({ name: '', phone: '937493214', password: '', email: '', address: '' })
   const [error, setError] = useState('')
+  const [logoutOpen, setLogoutOpen] = useState(false)
 
   useEffect(() => {
     try {
@@ -145,6 +148,7 @@ export function WebAccount() {
   const logout = () => {
     setCustomer(null)
     localStorage.removeItem(CUST_KEY)
+    setLogoutOpen(false)
   }
 
   if (!customer) {
@@ -298,6 +302,16 @@ export function WebAccount() {
 
   return (
     <div className="min-h-dvh bg-gray-50">
+      <ConfirmLogout
+        open={logoutOpen}
+        name={customer.name}
+        roleLabel="Cliente"
+        accountId={customer.id}
+        photoUrl={customer.photoUrl || defaultAvatarUrl(customer.name, 'customer')}
+        tone="customer"
+        onCancel={() => setLogoutOpen(false)}
+        onConfirm={logout}
+      />
       {/* Header */}
       <header className="sticky top-0 z-40 bg-[#1a3d1a] shadow-xl">
         <div className="mx-auto flex h-16 max-w-5xl items-center justify-between px-4">
@@ -305,12 +319,22 @@ export function WebAccount() {
             <button onClick={() => navigate('/web')} className="flex h-9 w-9 items-center justify-center rounded-full bg-white/10 text-white hover:bg-white/20">
               <ArrowLeft size={18} />
             </button>
+            <img
+              src={customer.photoUrl || defaultAvatarUrl(customer.name, 'customer')}
+              alt={customer.name}
+              className="h-10 w-10 rounded-full object-cover ring-2 ring-[#ffd700]/50"
+            />
             <div>
               <p className="text-sm font-bold text-[#ffd700]">Hola, {customer.name.split(' ')[0]}</p>
-              <p className="text-xs text-green-300">{customer.phone}</p>
+              <p className="font-mono text-[10px] tracking-wider text-green-300/80">
+                ID · {shortAccountId(customer.id)} · {customer.phone}
+              </p>
             </div>
           </div>
-          <button onClick={logout} className="flex items-center gap-2 rounded-full bg-white/10 px-4 py-2 text-sm font-medium text-white hover:bg-white/20">
+          <button
+            onClick={() => setLogoutOpen(true)}
+            className="flex items-center gap-2 rounded-full bg-white/10 px-4 py-2 text-sm font-medium text-white hover:bg-white/20"
+          >
             <LogOut size={14} /> Salir
           </button>
         </div>

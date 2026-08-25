@@ -32,6 +32,8 @@ import { withBase } from '../lib/paths'
 import { APP_VERSION } from '../lib/version'
 import { LiveToasts } from './LiveToasts'
 import { unlockSounds } from '../lib/sounds'
+import { ConfirmLogout } from './ConfirmLogout'
+import { defaultAvatarUrl, shortAccountId } from '../lib/avatar'
 
 const NAV: { to: string; label: string; hint: string; icon: LucideIcon; module: ModuleId }[] = [
   { to: '/', label: 'Inicio', hint: 'Resumen del día', icon: LayoutDashboard, module: 'dashboard' },
@@ -56,7 +58,22 @@ const NAV: { to: string; label: string; hint: string; icon: LucideIcon; module: 
 
 const GROUPS: { title: string; modules: ModuleId[] }[] = [
   { title: 'Trabajar ahora', modules: ['dashboard', 'pos', 'comandas', 'cocina', 'mesas', 'reservas', 'pedidos-web'] },
-  { title: 'Administrar', modules: ['menu', 'inventario', 'usuarios', 'clientes', 'conductores', 'reportes', 'sucursales', 'facturacion', 'whatsapp', 'web-config', 'config'] },
+  {
+    title: 'Administrar',
+    modules: [
+      'menu',
+      'inventario',
+      'usuarios',
+      'clientes',
+      'conductores',
+      'reportes',
+      'sucursales',
+      'facturacion',
+      'whatsapp',
+      'web-config',
+      'config',
+    ],
+  },
 ]
 
 const BOTTOM: Record<Role, ModuleId[]> = {
@@ -71,18 +88,31 @@ export function Layout() {
   const { apiMode, apiLoading, apiError, live } = useStore()
   const navigate = useNavigate()
   const [open, setOpen] = useState(false)
+  const [logoutOpen, setLogoutOpen] = useState(false)
 
   const items = NAV.filter((i) => can(i.module))
   const bottomIds = user ? BOTTOM[user.role] : []
   const bottom = NAV.filter((i) => bottomIds.includes(i.module) && can(i.module))
   const bottomCount = Math.min(bottom.length, 3) + 1
+  const photo = user?.photoUrl || defaultAvatarUrl(user?.name || 'Usuario', 'staff')
 
   return (
-    <div
-      className="flex min-h-dvh bg-cream"
-      onPointerDownCapture={() => unlockSounds()}
-    >
+    <div className="flex min-h-dvh bg-cream" onPointerDownCapture={() => unlockSounds()}>
       <LiveToasts />
+      <ConfirmLogout
+        open={logoutOpen}
+        name={user?.name || ''}
+        roleLabel={user ? ROLE_LABEL[user.role] : undefined}
+        accountId={user?.id || ''}
+        photoUrl={photo}
+        tone="staff"
+        onCancel={() => setLogoutOpen(false)}
+        onConfirm={() => {
+          setLogoutOpen(false)
+          logout()
+          navigate('/login')
+        }}
+      />
       <aside
         className={`fixed inset-y-0 left-0 z-40 w-[min(18.5rem,88vw)] flame-bg text-cream transition-transform duration-200 lg:static lg:w-[17.5rem] lg:translate-x-0 ${
           open ? 'translate-x-0' : '-translate-x-full'
@@ -138,13 +168,22 @@ export function Layout() {
             })}
           </nav>
           <div className="border-t border-white/10 p-4">
-            <p className="truncate text-sm font-semibold">{user?.name}</p>
-            <p className="text-xs text-cream/50">{user ? ROLE_LABEL[user.role] : ''}</p>
+            <div className="flex items-center gap-3">
+              <img
+                src={photo}
+                alt={user?.name || ''}
+                className="h-12 w-12 shrink-0 rounded-full object-cover ring-2 ring-white/20"
+              />
+              <div className="min-w-0">
+                <p className="truncate text-sm font-semibold">{user?.name}</p>
+                <p className="text-xs text-cream/50">{user ? ROLE_LABEL[user.role] : ''}</p>
+                <p className="mt-0.5 font-mono text-[10px] tracking-wider text-cream/35">
+                  ID · {shortAccountId(user?.id)}
+                </p>
+              </div>
+            </div>
             <button
-              onClick={() => {
-                logout()
-                navigate('/login')
-              }}
+              onClick={() => setLogoutOpen(true)}
               className="mt-3 flex min-h-11 w-full items-center gap-2 rounded-2xl bg-white/8 px-3 py-2 text-sm text-cream/80 hover:bg-white/12"
             >
               <LogOut size={16} />
@@ -171,7 +210,9 @@ export function Layout() {
             <Menu size={20} />
           </button>
           <div className="min-w-0">
-            <p className="truncate font-display text-lg leading-none tracking-tight lg:hidden">Chifa-Pollería Lopez</p>
+            <p className="truncate font-display text-lg leading-none tracking-tight lg:hidden">
+              Chifa-Pollería Lopez
+            </p>
             <p className="hidden text-sm text-ink/40 capitalize sm:block">
               {new Date().toLocaleDateString('es-PE', {
                 weekday: 'long',
@@ -181,6 +222,15 @@ export function Layout() {
             </p>
           </div>
           <div className="ml-auto flex items-center gap-2">
+            {user ? (
+              <div className="hidden items-center gap-2 sm:flex">
+                <img src={photo} alt="" className="h-8 w-8 rounded-full object-cover ring-1 ring-ink/10" />
+                <div className="min-w-0 leading-tight">
+                  <p className="truncate text-xs font-bold text-ink">{user.name}</p>
+                  <p className="font-mono text-[10px] text-ink/40">ID · {shortAccountId(user.id)}</p>
+                </div>
+              </div>
+            ) : null}
             {apiMode ? (
               <span
                 className={`hidden items-center gap-1.5 rounded-full px-2.5 py-1 text-[10px] font-bold tracking-wide uppercase sm:inline-flex ${

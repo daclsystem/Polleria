@@ -3,6 +3,7 @@ import { Check, Copy, ExternalLink, Printer } from 'lucide-react'
 import { useStore } from '../store/StoreContext'
 import { copyText, formatDateTime, padOrder, soles } from '../lib/format'
 import { printTicket } from '../lib/print'
+import { filterKitchenItems } from '../lib/kitchen'
 import { customerMenuUrl, withBase } from '../lib/paths'
 import { PageTitle, StatusBadge } from '../components/ui'
 
@@ -16,7 +17,7 @@ export function PedidosWeb() {
     <div>
       <PageTitle
         title="Pedidos del cliente"
-        hint="Comparte este enlace en WhatsApp, Instagram o un QR en las mesas."
+        hint="Venta externa (app/web). Cocina solo recibe productos marcados como preparación."
       />
       <div className="mt-5 flex flex-col gap-2 rounded-3xl bg-ink p-4 text-cream sm:flex-row sm:items-center">
         <code className="min-w-0 flex-1 truncate text-sm text-gold">{link}</code>
@@ -63,19 +64,45 @@ export function PedidosWeb() {
               </div>
             </div>
             <ul className="mt-3 text-sm text-ink/70">
-              {o.items.map((i, idx) => (
-                <li key={idx}>
-                  {i.qty}× {i.name}
-                </li>
-              ))}
+              {o.items.map((i, idx) => {
+                const kitchen = filterKitchenItems([i], state.products).length > 0
+                return (
+                  <li key={idx} className="flex flex-wrap items-center gap-2">
+                    <span>
+                      {i.qty}× {i.name}
+                    </span>
+                    <span
+                      className={`rounded-full px-1.5 py-0.5 text-[10px] font-bold ${
+                        kitchen ? 'bg-amber-100 text-amber-900' : 'bg-sky-100 text-sky-800'
+                      }`}
+                    >
+                      {kitchen ? 'cocina' : 'barra'}
+                    </span>
+                  </li>
+                )
+              })}
             </ul>
             <div className="mt-3 flex flex-wrap gap-2">
               {o.status === 'nuevo' ? (
                 <button
                   className="min-h-10 rounded-xl bg-amber-500 px-3 py-1.5 text-sm font-semibold text-white"
                   onClick={() => {
-                    updateOrderStatus(o.id, 'en_cocina')
-                    printTicket(o, state.settings, 'cocina')
+                    const kitchen = filterKitchenItems(o.items, state.products)
+                    if (kitchen.length > 0) {
+                      updateOrderStatus(o.id, 'en_cocina')
+                      printTicket(
+                        {
+                          ...o,
+                          items: kitchen,
+                          notes: `WEB / APP · ${o.notes || ''}`.trim(),
+                        },
+                        state.settings,
+                        'cocina',
+                      )
+                    } else {
+                      // Solo barra (bebidas, etc.): listo para entregar / empaquetar
+                      updateOrderStatus(o.id, 'listo')
+                    }
                   }}
                 >
                   Aceptar e imprimir cocina

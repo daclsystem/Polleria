@@ -2,13 +2,40 @@ import { Router } from 'express'
 import { v4 as uuid } from 'uuid'
 import { getPool, sql } from '../db.js'
 import { authRequired } from '../auth.js'
-import { emitEvent } from '../realtime.js'
+import { emitEvent, roomsForOrderStatus } from '../realtime.js'
 import { notifyOrderCreatedServer, notifyOrderStatusServer } from '../lib/whatsappNotify.js'
 
 export const ordersRouter = Router()
 
 function paramId(value: string | string[]): string {
   return Array.isArray(value) ? value[0] : value
+}
+
+/** ¿Hay al menos un producto de preparación (SendToKitchen)? */
+async function productsNeedKitchen(productIds: Array<string | undefined | null>) {
+  const ids = [...new Set(productIds.filter((id): id is string => Boolean(id)))]
+  if (!ids.length) return false
+  try {
+    const pool = await getPool()
+    const req = pool.request()
+    const placeholders = ids.map((_, i) => {
+      req.input(`p${i}`, sql.UniqueIdentifier, ids[i])
+      return `@p${i}`
+    })
+    const r = await req.query(`
+      SELECT TOP 1 1 AS ok
+      FROM dbo.Products
+      WHERE Id IN (${placeholders.join(',')})
+        AND ISNULL(
+          SendToKitchen,
+          CASE WHEN Category LIKE N'%Bebida%' OR Category LIKE N'%Gaseosa%' THEN 0 ELSE 1 END
+        ) = 1
+    `)
+    return r.recordset.length > 0
+  } catch {
+    // Columna aún no migrada: notificar cocina por defecto
+    return true
+  }
 }
 
 function mapTrackOrder(order: Record<string, unknown>, items: unknown[]) {
@@ -22,6 +49,8 @@ function mapTrackOrder(order: Record<string, unknown>, items: unknown[]) {
       ? `***${String(order.CustomerPhone).replace(/\D/g, '').slice(-4)}`
       : undefined,
     address: order.Address || undefined,
+    addressLat: order.AddressLat != null ? Number(order.AddressLat) : undefined,
+    addressLng: order.AddressLng != null ? Number(order.AddressLng) : undefined,
     items: (items as Array<Record<string, unknown>>).map((it) => ({
       name: it.Name,
       qty: Number(it.Qty),
@@ -78,7 +107,15 @@ ordersRouter.get('/track/:id', async (req, res) => {
 
     if (tel) {
       const phone = String(order.CustomerPhone || '').replace(/\D/g, '')
-      if (!phone.endsWith(tel.slice(-9)) && !phone.endsWith(tel.slice(-4))) {
+      const telDigits = tel.replace(/\D/g, '')
+      const ok =
+        !telDigits ||
+        !phone ||
+        phone.endsWith(telDigits.slice(-9)) ||
+        phone.endsWith(telDigits.slice(-4)) ||
+        telDigits.endsWith(phone.slice(-9)) ||
+        telDigits.endsWith(phone.slice(-4))
+      if (!ok) {
         return res.status(403).json({ error: 'Teléfono no coincide con el pedido' })
       }
     }
@@ -310,10 +347,13 @@ ordersRouter.post('/', async (req, res) => {
     await tx.commit()
 
     const order = await loadOrder(orderId)
-    emitEvent('order:created', order, ['ops', 'cocina', 'caja'])
-    emitEvent('kitchen:new', order, ['cocina'])
+    emitEvent('order:created', order, ['ops', 'caja'])
+    const needsKitchen = await productsNeedKitchen(body.items.map((i) => i.productId))
+    if (needsKitchen) {
+      emitEvent('kitchen:new', order, ['cocina'])
+    }
 
-    // WhatsApp automático: detalle + tracking (no bloquea la respuesta)
+    // WhatsApp: solo delivery o pedido del cliente (app/web) — no mesa/salón POS
     void notifyOrderCreatedServer({
       ...(order as Record<string, unknown>),
       Id: orderId,
@@ -325,6 +365,7 @@ ordersRouter.post('/', async (req, res) => {
       Address: (order as { Address?: string }).Address,
       Total: (order as { Total: number }).Total,
       CodPaymentMethod: (order as { CodPaymentMethod?: string }).CodPaymentMethod,
+      Source: (order as { Source?: string }).Source || body.source,
       items: ((order as { items?: Array<{ Name: string; Qty: number; Price: number }> }).items || []).map((i) => ({
         Name: i.Name,
         Qty: i.Qty,
@@ -332,10 +373,13 @@ ordersRouter.post('/', async (req, res) => {
       })),
     }).catch((e) => console.warn('[whatsapp] create', (e as Error).message))
 
+    const isCustomerChannel = body.source === 'web' || body.type === 'delivery' || body.type === 'web'
     res.status(201).json({
       order,
-      trackingUrl: `${(process.env.FRONT_PUBLIC_URL || 'https://indevsoft.com/polleria').replace(/\/$/, '')}/web/seguimiento/${orderId}`,
-      whatsappPending: true,
+      trackingUrl: isCustomerChannel
+        ? `${(process.env.FRONT_PUBLIC_URL || 'https://indevsoft.com/polleria').replace(/\/$/, '')}/web/seguimiento/${orderId}`
+        : undefined,
+      whatsappPending: isCustomerChannel,
     })
   } catch (e) {
     await tx.rollback()
@@ -376,7 +420,7 @@ ordersRouter.patch('/:id/status', authRequired, async (req, res) => {
   }
 
   const order = await loadOrder(orderId)
-  emitEvent('order:status', order, ['ops', 'cocina', 'caja', 'mesas'])
+  emitEvent('order:status', order, roomsForOrderStatus(status))
 
   if (order && (order as { CustomerPhone?: string }).CustomerPhone) {
     void notifyOrderStatusServer(
@@ -389,6 +433,7 @@ ordersRouter.patch('/:id/status', authRequired, async (req, res) => {
         CustomerPhone: (order as { CustomerPhone?: string }).CustomerPhone,
         Address: (order as { Address?: string }).Address,
         Total: (order as { Total: number }).Total,
+        Source: (order as { Source?: string }).Source,
         items: ((order as { items?: Array<{ Name: string; Qty: number; Price: number }> }).items || []).map((i) => ({
           Name: i.Name,
           Qty: i.Qty,
@@ -427,6 +472,7 @@ ordersRouter.post('/:id/items', authRequired, async (req, res) => {
   const tx = new sql.Transaction(pool)
   await tx.begin()
   try {
+    const needsKitchenBump = await productsNeedKitchen(items.map((i) => i.productId))
     const maxSort = await new sql.Request(tx)
       .input('orderId', sql.UniqueIdentifier, orderId)
       .query(`SELECT ISNULL(MAX(SortOrder), -1) AS m FROM dbo.OrderItems WHERE OrderId=@orderId`)
@@ -470,20 +516,40 @@ ordersRouter.post('/:id/items', authRequired, async (req, res) => {
         .input('subtotal', sql.Decimal(10, 2), totals.subtotal)
         .input('igv', sql.Decimal(10, 2), totals.igv)
         .input('total', sql.Decimal(10, 2), totals.total)
+        .input('bumpKitchen', sql.Bit, needsKitchenBump ? 1 : 0)
         .query(`
           UPDATE dbo.Orders
-          SET Discount=@discount, Subtotal=@subtotal, Igv=@igv, Total=@total, UpdatedAt=SYSUTCDATETIME()
+          SET Discount=@discount, Subtotal=@subtotal, Igv=@igv, Total=@total,
+              -- Ítems nuevos de prep → vuelven a "Recibidos" (nuevo), no a "En fuego"
+              Status = CASE
+                WHEN @bumpKitchen = 1 THEN N'nuevo'
+                ELSE Status
+              END,
+              UpdatedAt=SYSUTCDATETIME()
           WHERE Id=@id
         `)
     } else {
       await new sql.Request(tx)
         .input('id', sql.UniqueIdentifier, orderId)
-        .query(`UPDATE dbo.Orders SET UpdatedAt=SYSUTCDATETIME() WHERE Id=@id`)
+        .input('bumpKitchen', sql.Bit, needsKitchenBump ? 1 : 0)
+        .query(`
+          UPDATE dbo.Orders
+          SET Status = CASE
+                WHEN @bumpKitchen = 1 THEN N'nuevo'
+                ELSE Status
+              END,
+              UpdatedAt=SYSUTCDATETIME()
+          WHERE Id=@id
+        `)
     }
 
     await tx.commit()
     const order = await loadOrder(orderId)
-    emitEvent('order:updated', order, ['ops', 'cocina', 'caja', 'mesas'])
+    emitEvent('order:updated', order, ['ops', 'caja', 'mesas', 'cocina'])
+    if (needsKitchenBump) {
+      // Un solo aviso a cocina (kitchen:new). El status queda en "nuevo" (Recibidos).
+      emitEvent('kitchen:new', order, ['cocina'])
+    }
     res.json({ order })
   } catch (e) {
     await tx.rollback()

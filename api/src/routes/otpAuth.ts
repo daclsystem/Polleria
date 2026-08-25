@@ -3,6 +3,7 @@ import bcrypt from 'bcryptjs'
 import { v4 as uuid } from 'uuid'
 import { getPool, sql } from '../db.js'
 import { signToken, type AuthUser } from '../auth.js'
+import { rotateSession } from '../session.js'
 
 export const otpAuthRouter = Router()
 
@@ -10,6 +11,8 @@ const WSP_BASE = process.env.WSPGO_BASE_URL || 'https://iwspgo.indevsoft.com'
 const WSP_KEY = process.env.WSPGO_API_KEY || '753ce43470bc2ad5b72bce84a7080d7ec92f77a6690bff51e5e03a5cd14eb6e0'
 const WSP_SESSION = process.env.WSPGO_SESSION || 'PolleriaLopez'
 const OTP_TTL_MIN = 10
+/** Código de respaldo si WhatsApp / iwspgo está caído */
+const OTP_FALLBACK = String(process.env.OTP_FALLBACK_CODE || '123456').trim()
 
 type AccountType = 'staff' | 'customer' | 'driver'
 type Purpose = 'login' | 'register'
@@ -27,6 +30,10 @@ function toChatId(phone: string) {
 
 function genCode() {
   return String(Math.floor(100000 + Math.random() * 900000))
+}
+
+function isFallbackCode(code: string) {
+  return Boolean(OTP_FALLBACK) && code === OTP_FALLBACK
 }
 
 async function sendWhatsAppCode(phone: string, code: string, name: string, purpose: Purpose) {
@@ -61,14 +68,29 @@ async function findStaffByPhone(phone: string) {
     .request()
     .input('phone', sql.NVarChar, phone)
     .query(`
-      SELECT TOP 1 Id, Name, Email, Role, Active, Phone
+      SELECT TOP 1 Id, Name, Email, Role, Active, Phone, Pin, PhotoUrl
       FROM dbo.Users
       WHERE Active = 1
         AND Phone IS NOT NULL
         AND REPLACE(REPLACE(REPLACE(Phone,' ',''),'-',''),'+','') LIKE '%' + RIGHT(@phone, 9)
+      ORDER BY CASE Role
+        WHEN N'admin' THEN 0
+        WHEN N'cajero' THEN 1
+        WHEN N'mozo' THEN 2
+        ELSE 3
+      END
     `)
   return r.recordset[0] as
-    | { Id: string; Name: string; Email: string; Role: AuthUser['role']; Active: boolean; Phone: string }
+    | {
+        Id: string
+        Name: string
+        Email: string
+        Role: AuthUser['role']
+        Active: boolean
+        Phone: string
+        Pin?: string
+        PhotoUrl?: string
+      }
     | undefined
 }
 
@@ -78,12 +100,20 @@ async function findCustomerByPhone(phone: string) {
     .request()
     .input('phone', sql.NVarChar, phone)
     .query(`
-      SELECT TOP 1 Id, Name, Phone, Email, Address, CreatedAt
+      SELECT TOP 1 Id, Name, Phone, Email, Address, PhotoUrl, CreatedAt
       FROM dbo.Customers
       WHERE REPLACE(REPLACE(REPLACE(Phone,' ',''),'-',''),'+','') LIKE '%' + RIGHT(@phone, 9)
     `)
   return r.recordset[0] as
-    | { Id: string; Name: string; Phone: string; Email?: string; Address?: string; CreatedAt: Date }
+    | {
+        Id: string
+        Name: string
+        Phone: string
+        Email?: string
+        Address?: string
+        PhotoUrl?: string
+        CreatedAt: Date
+      }
     | undefined
 }
 
@@ -93,7 +123,7 @@ async function findDriverByPhone(phone: string) {
     .request()
     .input('phone', sql.NVarChar, phone)
     .query(`
-      SELECT TOP 1 Id, Name, Phone, Active, VehicleInfo, Lat, Lng
+      SELECT TOP 1 Id, Name, Phone, Active, VehicleInfo, PhotoUrl, Lat, Lng
       FROM dbo.Drivers
       WHERE Active = 1
         AND REPLACE(REPLACE(REPLACE(Phone,' ',''),'-',''),'+','') LIKE '%' + RIGHT(@phone, 9)
@@ -105,10 +135,117 @@ async function findDriverByPhone(phone: string) {
         Phone: string
         Active: boolean
         VehicleInfo?: string
+        PhotoUrl?: string
         Lat?: number
         Lng?: number
       }
     | undefined
+}
+
+function staffPhoto(name: string, photo?: string | null) {
+  return (
+    photo ||
+    `https://ui-avatars.com/api/?name=${encodeURIComponent(name || 'Usuario')}&background=e11d2e&color=ffffff&size=128&bold=true`
+  )
+}
+
+function customerPhoto(name: string, photo?: string | null) {
+  return (
+    photo ||
+    `https://ui-avatars.com/api/?name=${encodeURIComponent(name || 'Cliente')}&background=1a3d1a&color=ffd700&size=128&bold=true`
+  )
+}
+
+function driverPhoto(name: string, photo?: string | null) {
+  return (
+    photo ||
+    `https://ui-avatars.com/api/?name=${encodeURIComponent(name || 'Conductor')}&background=0f766e&color=ffffff&size=128&bold=true`
+  )
+}
+
+async function issueSession(accountType: AccountType, phone: string, res: import('express').Response) {
+  if (accountType === 'staff') {
+    const user = await findStaffByPhone(phone)
+    if (!user || !user.Active) {
+      return res.status(403).json({ error: 'Cuenta de personal inactiva o no encontrada' })
+    }
+    const sessionId = await rotateSession('staff', String(user.Id))
+    const authUser: AuthUser = {
+      id: String(user.Id),
+      name: user.Name,
+      email: user.Email,
+      role: user.Role,
+      accountType: 'staff',
+      sessionId,
+      pin: user.Pin || '0000',
+      phone: user.Phone || undefined,
+      photoUrl: staffPhoto(user.Name, user.PhotoUrl),
+    }
+    return res.json({ ok: true, token: signToken(authUser), user: authUser })
+  }
+
+  if (accountType === 'driver') {
+    const drv = await findDriverByPhone(phone)
+    if (!drv || !drv.Active) {
+      return res.status(403).json({ error: 'Conductor inactivo o no encontrado' })
+    }
+    const sessionId = await rotateSession('driver', String(drv.Id))
+    const driver = {
+      id: String(drv.Id),
+      name: drv.Name,
+      phone: normalizePhone(String(drv.Phone)),
+      vehicleInfo: drv.VehicleInfo || undefined,
+      active: true,
+      photoUrl: driverPhoto(drv.Name, drv.PhotoUrl),
+    }
+    const authUser: AuthUser = {
+      id: driver.id,
+      name: driver.name,
+      email: driver.phone,
+      role: 'driver',
+      accountType: 'driver',
+      sessionId,
+      photoUrl: driver.photoUrl,
+    }
+    return res.json({
+      ok: true,
+      token: signToken(authUser),
+      driver,
+      user: authUser,
+    })
+  }
+
+  const cust = await findCustomerByPhone(phone)
+  if (!cust) return res.status(404).json({ error: 'Cliente no encontrado' })
+
+  const sessionId = await rotateSession('customer', String(cust.Id))
+  const customer = {
+    id: String(cust.Id),
+    name: cust.Name,
+    phone: normalizePhone(String(cust.Phone)),
+    email: cust.Email || undefined,
+    password: '',
+    address: cust.Address || undefined,
+    photoUrl: customerPhoto(cust.Name, cust.PhotoUrl),
+    createdAt: new Date(cust.CreatedAt).toISOString(),
+  }
+
+  const authUser: AuthUser = {
+    id: customer.id,
+    name: customer.name,
+    email: customer.phone,
+    role: 'customer',
+    accountType: 'customer',
+    sessionId,
+    photoUrl: customer.photoUrl,
+  }
+
+  return res.json({
+    ok: true,
+    token: signToken(authUser),
+    customer,
+    user: authUser,
+  })
 }
 
 /**
@@ -206,21 +343,34 @@ otpAuthRouter.post('/request', async (req, res) => {
         VALUES (@type, @identifier, @phone, @hash, @expires)
       `)
 
+    let whatsappSent = true
     try {
       await sendWhatsAppCode(phone, code, name, purpose)
     } catch (e) {
-      return res.status(502).json({
-        error: 'No se pudo enviar el WhatsApp. Revisa la sesión PolleriaLopez en iwspgo.',
-        detail: (e as Error).message,
-      })
+      whatsappSent = false
+      console.warn('[otp] WhatsApp falló, usar código de respaldo:', (e as Error).message)
     }
 
     const masked = `***${phone.slice(-4)}`
-    res.json({
+    if (whatsappSent) {
+      return res.json({
+        ok: true,
+        message: `Código enviado por WhatsApp al ${masked}`,
+        phoneMasked: masked,
+        expiresInMinutes: OTP_TTL_MIN,
+        whatsappSent: true,
+        fallbackCode: OTP_FALLBACK || undefined,
+      })
+    }
+
+    return res.json({
       ok: true,
-      message: `Código enviado por WhatsApp al ${masked}`,
+      message: `WhatsApp no disponible. Usa el código de respaldo ${OTP_FALLBACK}`,
       phoneMasked: masked,
       expiresInMinutes: OTP_TTL_MIN,
+      whatsappSent: false,
+      fallbackUsed: true,
+      fallbackCode: OTP_FALLBACK,
     })
   } catch (e) {
     res.status(500).json({ error: (e as Error).message })
@@ -230,6 +380,7 @@ otpAuthRouter.post('/request', async (req, res) => {
 /**
  * POST /api/auth/otp/verify
  * { accountType, phone, code }
+ * Acepta el código de WhatsApp O el código de respaldo (OTP_FALLBACK_CODE, default 123456).
  */
 otpAuthRouter.post('/verify', async (req, res) => {
   try {
@@ -242,6 +393,11 @@ otpAuthRouter.post('/verify', async (req, res) => {
     }
     if (!phone) return res.status(400).json({ error: 'phone requerido' })
     if (!/^\d{6}$/.test(code)) return res.status(400).json({ error: 'Código de 6 dígitos requerido' })
+
+    // Código de respaldo (WhatsApp caído / pruebas)
+    if (isFallbackCode(code)) {
+      return issueSession(accountType, phone, res)
+    }
 
     const pool = await getPool()
     const identifier = phone
@@ -260,85 +416,25 @@ otpAuthRouter.post('/verify', async (req, res) => {
     const row = otps.recordset.find(
       (o: { UsedAt: unknown; ExpiresAt: Date }) => !o.UsedAt && new Date(o.ExpiresAt) > new Date(),
     )
-    if (!row) return res.status(400).json({ error: 'Código inválido o vencido. Solicita uno nuevo.' })
+    if (!row) {
+      return res.status(400).json({
+        error: `Código inválido o vencido. Usa el de WhatsApp o el de respaldo ${OTP_FALLBACK}.`,
+      })
+    }
 
     const match = await bcrypt.compare(code, String(row.CodeHash))
-    if (!match) return res.status(400).json({ error: 'Código incorrecto' })
+    if (!match) {
+      return res.status(400).json({
+        error: `Código incorrecto. Si WhatsApp falló, usa ${OTP_FALLBACK}.`,
+      })
+    }
 
     await pool
       .request()
       .input('id', sql.UniqueIdentifier, row.Id)
       .query(`UPDATE dbo.AuthOtpCodes SET UsedAt = SYSUTCDATETIME() WHERE Id = @id`)
 
-    if (accountType === 'staff') {
-      const user = await findStaffByPhone(phone)
-      if (!user || !user.Active) {
-        return res.status(403).json({ error: 'Cuenta de personal inactiva o no encontrada' })
-      }
-      const authUser: AuthUser = {
-        id: String(user.Id),
-        name: user.Name,
-        email: user.Email,
-        role: user.Role,
-        accountType: 'staff',
-      }
-      return res.json({ ok: true, token: signToken(authUser), user: authUser })
-    }
-
-    if (accountType === 'driver') {
-      const drv = await findDriverByPhone(phone)
-      if (!drv || !drv.Active) {
-        return res.status(403).json({ error: 'Conductor inactivo o no encontrado' })
-      }
-      const driver = {
-        id: String(drv.Id),
-        name: drv.Name,
-        phone: normalizePhone(String(drv.Phone)),
-        vehicleInfo: drv.VehicleInfo || undefined,
-        active: true,
-      }
-      const authUser: AuthUser = {
-        id: driver.id,
-        name: driver.name,
-        email: driver.phone,
-        role: 'driver',
-        accountType: 'driver',
-      }
-      return res.json({
-        ok: true,
-        token: signToken(authUser),
-        driver,
-        user: authUser,
-      })
-    }
-
-    const cust = await findCustomerByPhone(phone)
-    if (!cust) return res.status(404).json({ error: 'Cliente no encontrado' })
-
-    const customer = {
-      id: String(cust.Id),
-      name: cust.Name,
-      phone: normalizePhone(String(cust.Phone)),
-      email: cust.Email || undefined,
-      password: '',
-      address: cust.Address || undefined,
-      createdAt: new Date(cust.CreatedAt).toISOString(),
-    }
-
-    const authUser: AuthUser = {
-      id: customer.id,
-      name: customer.name,
-      email: customer.phone,
-      role: 'customer',
-      accountType: 'customer',
-    }
-
-    return res.json({
-      ok: true,
-      token: signToken(authUser),
-      customer,
-      user: authUser,
-    })
+    return issueSession(accountType, phone, res)
   } catch (e) {
     res.status(500).json({ error: (e as Error).message })
   }

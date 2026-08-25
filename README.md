@@ -7,9 +7,11 @@ Sistema tipo **PedidosYa**: pedidos en local/web, cocina, cobro, clientes, condu
 | Qué | URL |
 |-----|-----|
 | Front local | http://127.0.0.1:5174/polleria/ |
+| Front producción | https://apipchifapollerialopez.indevsoft.com/polleria/ |
 | Login personal | `/polleria/login` |
 | App conductor | `/polleria/conductor` |
 | Carta / cliente | `/polleria/web` · `/polleria/pedir` |
+| Seguimiento | `/polleria/web/seguimiento/:id?tel=...` |
 | API | https://apipchifapollerialopez.indevsoft.com |
 | Health API | https://apipchifapollerialopez.indevsoft.com/health |
 
@@ -19,20 +21,40 @@ Front: crear `.env.local` con:
 VITE_API_URL=https://apipchifapollerialopez.indevsoft.com
 ```
 
-## Cuentas de prueba (una por rol)
+## Sesiones independientes (1 por cuenta)
 
-Usuarios **demo** para probar. Luego se pueden borrar y dejar solo el administrador.
+Admin, cajero, cocina, mozo, cliente y conductor tienen **sesión propia**.
+
+Si la misma cuenta inicia en **otra PC / celular**, la sesión anterior se **cierra sola** (`SESSION_REPLACED`).
+
+Tokens separados en el navegador: staff / driver / customer (no se pisan entre sí).
+
+Login principal: **celular + código**.
+
+| Dato | Valor |
+|------|--------|
+| Celular por defecto | `937493214` |
+| Código de respaldo (si WhatsApp cae) | `123456` |
+
+1. Abres `/login` (o conductor / cliente) → el número ya viene cargado.  
+2. Continuar → intenta WhatsApp.  
+3. Si WhatsApp falla: usa **`123456`** (viene precargado) y entras igual.
+
+Env API opcional: `OTP_FALLBACK_CODE=123456`
 
 ### Personal del local — login en `/login`
 
-Puedes entrar con **correo + contraseña** (recomendado para pruebas) o con **WhatsApp (OTP)**.
+Cada rol tiene su celular registrado. Demo:
 
-| Rol | Para qué | Correo | Contraseña | PIN | Celular |
-|-----|----------|--------|------------|-----|---------|
-| **Admin** | Todo el sistema | `admin@lopez.pe` | `admin123` | `1234` | `937493214` |
-| **Cajero** (pago) | Cobrar, POS, facturación | `cajero@lopez.pe` | `cajero123` | `2222` | `911111111` |
-| **Cocina** | Preparar pedidos | `cocina@lopez.pe` | `cocina123` | `3333` | `922222222` |
-| **Mozo** | Mesas, tomar pedido | `mozo@lopez.pe` | `mozo123` | `4444` | `933333333` |
+| Rol | Celular | Correo (referencia) |
+|-----|---------|---------------------|
+| **Admin** | `937493214` | admin@lopez.pe |
+| **Cajero** (pago) | `911111111` | cajero@lopez.pe |
+| **Cocina** | `922222222` | cocina@lopez.pe |
+| **Mozo** | `933333333` | mozo@lopez.pe |
+| **Mozo 2** | `944444444` | mozo2@lopez.pe |
+
+> Con el número default `937493214` + código `123456` entras como **Administrador**.
 
 ### Cliente — `/web/cuenta` o al tomar pedido
 

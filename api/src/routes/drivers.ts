@@ -2,7 +2,7 @@ import { Router } from 'express'
 import { v4 as uuid } from 'uuid'
 import { getPool, sql } from '../db.js'
 import { authRequired, requireRoles } from '../auth.js'
-import { emitEvent } from '../realtime.js'
+import { emitEvent, roomsForOrderStatus } from '../realtime.js'
 import { notifyOrderStatusServer } from '../lib/whatsappNotify.js'
 
 export const driversRouter = Router()
@@ -385,7 +385,7 @@ driversRouter.post('/me/delivered', authRequired, async (req, res) => {
       .query(`UPDATE dbo.Orders SET Status=N'entregado', UpdatedAt=SYSUTCDATETIME() WHERE Id=@id`)
 
     const order = { ...row, Status: 'entregado' }
-    emitEvent('order:status', order, ['ops', 'cocina', 'caja', 'mesas', 'delivery'])
+    emitEvent('order:status', order, roomsForOrderStatus('entregado'))
     notifyOrderStatusServer(
       {
         Id: order.Id,
@@ -464,7 +464,7 @@ driversRouter.get('/me/route', authRequired, async (req, res) => {
   }
 })
 
-/** Conductor: actualizar ubicación */
+/** Conductor: actualizar ubicación (y propagar a pedidos activos) */
 driversRouter.post('/me/location', authRequired, async (req, res) => {
   if (!isDriver(req)) return res.status(403).json({ error: 'Solo conductores' })
   const lat = Number(req.body?.lat)
@@ -473,9 +473,10 @@ driversRouter.post('/me/location', authRequired, async (req, res) => {
     return res.status(400).json({ error: 'lat/lng requeridos' })
   }
   const pool = await getPool()
+  const driverId = req.user!.id
   await pool
     .request()
-    .input('id', sql.UniqueIdentifier, req.user!.id)
+    .input('id', sql.UniqueIdentifier, driverId)
     .input('lat', sql.Decimal(10, 7), lat)
     .input('lng', sql.Decimal(10, 7), lng)
     .query(`
@@ -487,7 +488,7 @@ driversRouter.post('/me/location', authRequired, async (req, res) => {
     await pool
       .request()
       .input('orderId', sql.UniqueIdentifier, orderId)
-      .input('driverId', sql.UniqueIdentifier, req.user!.id)
+      .input('driverId', sql.UniqueIdentifier, driverId)
       .input('lat', sql.Decimal(10, 7), lat)
       .input('lng', sql.Decimal(10, 7), lng)
       .query(`
@@ -495,7 +496,36 @@ driversRouter.post('/me/location', authRequired, async (req, res) => {
         SET DriverLat=@lat, DriverLng=@lng, UpdatedAt=SYSUTCDATETIME()
         WHERE Id=@orderId AND DriverId=@driverId
       `)
+  } else {
+    // Sin orderId: actualizar todos los pedidos activos del conductor
+    // para que el mapa del cliente vea la posición en vivo.
+    await pool
+      .request()
+      .input('driverId', sql.UniqueIdentifier, driverId)
+      .input('lat', sql.Decimal(10, 7), lat)
+      .input('lng', sql.Decimal(10, 7), lng)
+      .query(`
+        UPDATE dbo.Orders
+        SET DriverLat=@lat, DriverLng=@lng, UpdatedAt=SYSUTCDATETIME()
+        WHERE DriverId=@driverId
+          AND Status IN (N'nuevo', N'en_cocina', N'listo')
+      `)
   }
+
+  const active = await pool
+    .request()
+    .input('driverId', sql.UniqueIdentifier, driverId)
+    .query(`
+      SELECT Id FROM dbo.Orders
+      WHERE DriverId=@driverId AND Status IN (N'nuevo', N'en_cocina', N'listo')
+    `)
+
+  const rooms = ['delivery', ...active.recordset.map((r: { Id: string }) => `track:${String(r.Id)}`)]
+  emitEvent(
+    'driver:location',
+    { driverId, lat, lng, orderIds: active.recordset.map((r: { Id: string }) => String(r.Id)) },
+    rooms,
+  )
 
   res.json({ ok: true })
 })

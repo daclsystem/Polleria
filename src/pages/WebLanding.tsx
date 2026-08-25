@@ -18,7 +18,9 @@ import { soles } from '../lib/format'
 import { APP_VERSION } from '../lib/version'
 import { ProductModal } from '../components/ProductModal'
 import type { OrderItem, Product } from '../types'
-import { apiGetBanners } from '../lib/apiClient'
+import { apiDeliveryQuote, apiGetBanners } from '../lib/apiClient'
+import { useDeviceLocation } from '../hooks/useDeviceLocation'
+import { getPlataforma, platformLabel } from '../lib/platform'
 
 interface Banner {
   id: string
@@ -57,11 +59,18 @@ export function WebLanding() {
   const [name, setName] = useState('')
   const [phone, setPhoneVal] = useState('937493214')
   const [address, setAddress] = useState('')
+  const [addressLat, setAddressLat] = useState<number | null>(null)
+  const [addressLng, setAddressLng] = useState<number | null>(null)
+  const [quotedFee, setQuotedFee] = useState<number | null>(null)
+  const [quoteInfo, setQuoteInfo] = useState<string | null>(null)
+  const [locBusy, setLocBusy] = useState(false)
   const [note, setNote] = useState('')
   const [pay, setPay] = useState<'yape' | 'efectivo'>('yape')
   const [orderSuccess, setOrderSuccess] = useState<string | null>(null)
   const [modalProduct, setModalProduct] = useState<Product | null>(null)
   const menuRef = useRef<HTMLDivElement>(null)
+  const plataforma = getPlataforma()
+  const { requestOnce, reverseGeocode, error: locError } = useDeviceLocation({ auto: false })
 
   useEffect(() => {
     try {
@@ -94,8 +103,43 @@ export function WebLanding() {
 
   const qty = items.reduce((s, i) => s + i.qty, 0)
   const subtotal = items.reduce((s, i) => s + i.qty * i.price, 0)
-  const deliveryFee = mode === 'delivery' ? state.settings.deliveryFee : 0
+  const deliveryFee =
+    mode === 'delivery' ? (quotedFee != null ? quotedFee : state.settings.deliveryFee) : 0
   const total = subtotal + deliveryFee
+
+  const detectMyLocation = async () => {
+    setLocBusy(true)
+    setQuoteInfo(null)
+    try {
+      const c = await requestOnce(false)
+      setAddressLat(c.lat)
+      setAddressLng(c.lng)
+      const addr = await reverseGeocode(c.lat, c.lng)
+      if (addr) setAddress(addr)
+      else setAddress((prev) => prev || `Ubicación GPS (${c.lat.toFixed(5)}, ${c.lng.toFixed(5)})`)
+      try {
+        const q = (await apiDeliveryQuote({ lat: c.lat, lng: c.lng })) as {
+          fee?: number
+          distanceKm?: number
+          timeMin?: number
+          error?: string
+        }
+        if (typeof q.fee === 'number') {
+          setQuotedFee(q.fee)
+          setQuoteInfo(
+            `${q.distanceKm?.toFixed(1) ?? '?'} km · ~${q.timeMin ?? '?'} min · ${platformLabel(plataforma)}`,
+          )
+        }
+      } catch (e) {
+        setQuotedFee(null)
+        setQuoteInfo((e as Error).message || 'No se pudo cotizar delivery; se usa tarifa fija')
+      }
+    } catch {
+      /* error en locError del hook */
+    } finally {
+      setLocBusy(false)
+    }
+  }
 
   const openProductModal = (id: string) => {
     const p = state.products.find((x) => x.id === id)
@@ -183,6 +227,8 @@ export function WebLanding() {
         customerPhone: phone,
         customerId,
         address: mode === 'delivery' ? address : undefined,
+        addressLat: mode === 'delivery' && addressLat != null ? addressLat : undefined,
+        addressLng: mode === 'delivery' && addressLng != null ? addressLng : undefined,
         discount: 0,
         paymentMethod: pay,
         paid: pay === 'yape',
@@ -190,6 +236,7 @@ export function WebLanding() {
         createdBy: 'Web',
         source: 'web',
         deliveryFee: mode === 'delivery' ? deliveryFee : 0,
+        deliveryDistanceKm: undefined,
       })
       setItems([])
       setCheckoutOpen(false)
@@ -738,8 +785,43 @@ export function WebLanding() {
               </div>
               {mode === 'delivery' && (
                 <div>
-                  <label className="text-sm font-bold text-gray-700">Dirección de entrega *</label>
-                  <input className="mt-1.5 w-full rounded-xl border border-gray-200 px-4 py-3.5 text-sm focus:border-green-500 focus:ring-2 focus:ring-green-500/20 focus:outline-none" value={address} onChange={(e) => setAddress(e.target.value)} required placeholder="Av. Principal 123, Distrito" />
+                  <div className="flex items-center justify-between gap-2">
+                    <label className="text-sm font-bold text-gray-700">Dirección de entrega *</label>
+                    <span className="text-[10px] font-semibold text-gray-400">
+                      {platformLabel(plataforma)}
+                    </span>
+                  </div>
+                  <input
+                    className="mt-1.5 w-full rounded-xl border border-gray-200 px-4 py-3.5 text-sm focus:border-green-500 focus:ring-2 focus:ring-green-500/20 focus:outline-none"
+                    value={address}
+                    onChange={(e) => {
+                      setAddress(e.target.value)
+                      setAddressLat(null)
+                      setAddressLng(null)
+                      setQuotedFee(null)
+                    }}
+                    required
+                    placeholder="Av. Principal 123, Distrito"
+                  />
+                  <button
+                    type="button"
+                    disabled={locBusy}
+                    onClick={() => void detectMyLocation()}
+                    className="mt-2 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-[#1a3d1a] px-4 py-3 text-sm font-bold text-white disabled:opacity-60"
+                  >
+                    <MapPin size={16} />
+                    {locBusy ? 'Detectando ubicación…' : 'Usar mi ubicación GPS'}
+                  </button>
+                  {addressLat != null && addressLng != null ? (
+                    <p className="mt-1.5 text-xs text-emerald-700">
+                      GPS listo · {addressLat.toFixed(5)}, {addressLng.toFixed(5)}
+                      {quoteInfo ? ` · ${quoteInfo}` : ''}
+                    </p>
+                  ) : null}
+                  {locError ? <p className="mt-1 text-xs text-amber-700">{locError}</p> : null}
+                  {quoteInfo && addressLat == null ? (
+                    <p className="mt-1 text-xs text-amber-700">{quoteInfo}</p>
+                  ) : null}
                 </div>
               )}
               <div>

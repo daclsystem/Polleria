@@ -35,9 +35,16 @@ crudRouter.post('/products', authRequired, requireRoles('admin'), async (req, re
     .input('imageUrl', sql.NVarChar, p.imageUrl || null)
     .input('available', sql.Bit, p.available !== false)
     .input('prep', sql.Int, Number(p.prepMinutes || 10))
+    .input(
+      'kitchen',
+      sql.Bit,
+      p.sendToKitchen !== undefined
+        ? Boolean(p.sendToKitchen)
+        : !/bebida|gaseosa/i.test(String(p.category || '')),
+    )
     .query(`
-      INSERT INTO dbo.Products (Id, Name, Description, Category, Price, OriginalPrice, Emoji, Tone, ImageUrl, Available, PrepMinutes)
-      VALUES (@id, @name, @description, @category, @price, @original, @emoji, @tone, @imageUrl, @available, @prep)
+      INSERT INTO dbo.Products (Id, Name, Description, Category, Price, OriginalPrice, Emoji, Tone, ImageUrl, Available, PrepMinutes, SendToKitchen)
+      VALUES (@id, @name, @description, @category, @price, @original, @emoji, @tone, @imageUrl, @available, @prep, @kitchen)
     `)
   res.status(201).json({ id })
 })
@@ -59,11 +66,18 @@ crudRouter.put('/products/:id', authRequired, requireRoles('admin'), async (req,
     .input('imageUrl', sql.NVarChar, p.imageUrl || null)
     .input('available', sql.Bit, p.available !== false)
     .input('prep', sql.Int, Number(p.prepMinutes || 10))
+    .input(
+      'kitchen',
+      sql.Bit,
+      p.sendToKitchen !== undefined
+        ? Boolean(p.sendToKitchen)
+        : !/bebida|gaseosa/i.test(String(p.category || '')),
+    )
     .query(`
       UPDATE dbo.Products SET
         Name=@name, Description=@description, Category=@category, Price=@price,
         OriginalPrice=@original, Emoji=@emoji, Tone=@tone, ImageUrl=@imageUrl,
-        Available=@available, PrepMinutes=@prep, UpdatedAt=SYSUTCDATETIME()
+        Available=@available, PrepMinutes=@prep, SendToKitchen=@kitchen, UpdatedAt=SYSUTCDATETIME()
       WHERE Id=@id
     `)
   res.json({ ok: true })
@@ -89,10 +103,14 @@ crudRouter.post('/users', authRequired, requireRoles('admin'), async (req, res) 
     active?: boolean
     pin?: string
     phone?: string
+    photoUrl?: string
   }
   if (!u.name || !u.email || !u.role) return res.status(400).json({ error: 'name, email, role requeridos' })
   const id = isGuid(u.id) ? u.id! : uuid()
   const hash = await bcrypt.hash(u.password || 'changeme', 10)
+  const photo =
+    u.photoUrl ||
+    `https://ui-avatars.com/api/?name=${encodeURIComponent(u.name)}&background=e11d2e&color=ffffff&size=128&bold=true`
   const pool = await getPool()
   await pool
     .request()
@@ -104,9 +122,10 @@ crudRouter.post('/users', authRequired, requireRoles('admin'), async (req, res) 
     .input('active', sql.Bit, u.active !== false)
     .input('pin', sql.NVarChar, u.pin || '0000')
     .input('phone', sql.NVarChar, u.phone || null)
+    .input('photo', sql.NVarChar, photo)
     .query(`
-      INSERT INTO dbo.Users (Id, Name, Email, PasswordHash, Role, Active, Pin, Phone)
-      VALUES (@id, @name, @email, @hash, @role, @active, @pin, @phone)
+      INSERT INTO dbo.Users (Id, Name, Email, PasswordHash, Role, Active, Pin, Phone, PhotoUrl)
+      VALUES (@id, @name, @email, @hash, @role, @active, @pin, @phone, @photo)
     `)
   res.status(201).json({ id })
 })
@@ -121,8 +140,12 @@ crudRouter.put('/users/:id', authRequired, requireRoles('admin'), async (req, re
     active?: boolean
     pin?: string
     phone?: string
+    photoUrl?: string
   }
   const pool = await getPool()
+  const photo =
+    u.photoUrl ||
+    `https://ui-avatars.com/api/?name=${encodeURIComponent(u.name || 'Usuario')}&background=e11d2e&color=ffffff&size=128&bold=true`
   const reqDb = pool
     .request()
     .input('id', sql.UniqueIdentifier, id)
@@ -132,19 +155,20 @@ crudRouter.put('/users/:id', authRequired, requireRoles('admin'), async (req, re
     .input('active', sql.Bit, u.active !== false)
     .input('pin', sql.NVarChar, u.pin || '0000')
     .input('phone', sql.NVarChar, u.phone || null)
+    .input('photo', sql.NVarChar, photo)
 
   if (u.password && u.password.length >= 4) {
     const hash = await bcrypt.hash(u.password, 10)
     reqDb.input('hash', sql.NVarChar, hash)
     await reqDb.query(`
       UPDATE dbo.Users SET Name=@name, Email=@email, PasswordHash=@hash, Role=@role,
-        Active=@active, Pin=@pin, Phone=@phone, UpdatedAt=SYSUTCDATETIME()
+        Active=@active, Pin=@pin, Phone=@phone, PhotoUrl=@photo, UpdatedAt=SYSUTCDATETIME()
       WHERE Id=@id
     `)
   } else {
     await reqDb.query(`
       UPDATE dbo.Users SET Name=@name, Email=@email, Role=@role,
-        Active=@active, Pin=@pin, Phone=@phone, UpdatedAt=SYSUTCDATETIME()
+        Active=@active, Pin=@pin, Phone=@phone, PhotoUrl=@photo, UpdatedAt=SYSUTCDATETIME()
       WHERE Id=@id
     `)
   }
@@ -556,6 +580,7 @@ crudRouter.post('/customers/login', async (req, res) => {
       email: row.Email || undefined,
       password: '',
       address: row.Address || undefined,
+      photoUrl: row.PhotoUrl || defaultPhoto(String(row.Name)),
       createdAt: new Date(row.CreatedAt).toISOString(),
     },
   })

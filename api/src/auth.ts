@@ -2,6 +2,7 @@ import { Router, type Request, type Response, type NextFunction } from 'express'
 import jwt from 'jsonwebtoken'
 import bcrypt from 'bcryptjs'
 import { getPool, sql } from './db.js'
+import { rotateSession, sessionIsActive } from './session.js'
 
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret'
 
@@ -11,6 +12,11 @@ export interface AuthUser {
   email: string
   role: 'admin' | 'cajero' | 'cocina' | 'mozo' | 'driver' | 'customer'
   accountType?: 'staff' | 'customer' | 'driver'
+  /** Sesión activa: si inicia en otro dispositivo, esta queda inválida */
+  sessionId?: string
+  pin?: string
+  phone?: string
+  photoUrl?: string
 }
 
 declare global {
@@ -25,16 +31,24 @@ export function signToken(user: AuthUser) {
   return jwt.sign(user, JWT_SECRET, { expiresIn: '12h' })
 }
 
-export function authRequired(req: Request, res: Response, next: NextFunction) {
+export async function authRequired(req: Request, res: Response, next: NextFunction) {
   const header = req.headers.authorization
   if (!header?.startsWith('Bearer ')) {
-    return res.status(401).json({ error: 'No autorizado' })
+    return res.status(401).json({ error: 'No autorizado', code: 'NO_TOKEN' })
   }
   try {
-    req.user = jwt.verify(header.slice(7), JWT_SECRET) as AuthUser
+    const payload = jwt.verify(header.slice(7), JWT_SECRET) as AuthUser
+    const active = await sessionIsActive(payload)
+    if (!active) {
+      return res.status(401).json({
+        error: 'Sesión cerrada: iniciaste sesión en otro dispositivo',
+        code: 'SESSION_REPLACED',
+      })
+    }
+    req.user = payload
     next()
   } catch {
-    return res.status(401).json({ error: 'Token inválido' })
+    return res.status(401).json({ error: 'Token inválido', code: 'BAD_TOKEN' })
   }
 }
 
@@ -57,7 +71,7 @@ authRouter.post('/login', async (req, res) => {
   const result = await pool
     .request()
     .input('email', sql.NVarChar, email)
-    .query(`SELECT TOP 1 Id, Name, Email, PasswordHash, Role, Active FROM dbo.Users WHERE Email = @email`)
+    .query(`SELECT TOP 1 Id, Name, Email, PasswordHash, Role, Active, Pin, Phone, PhotoUrl FROM dbo.Users WHERE Email = @email`)
 
   const row = result.recordset[0]
   if (!row || !row.Active) return res.status(401).json({ error: 'Credenciales inválidas' })
@@ -67,7 +81,6 @@ authRouter.post('/login', async (req, res) => {
   if (hash.startsWith('$2')) {
     ok = await bcrypt.compare(password, hash)
   } else {
-    // seed demo en texto plano → migrar a bcrypt
     ok = hash === password
     if (ok) {
       const newHash = await bcrypt.hash(password, 10)
@@ -81,11 +94,20 @@ authRouter.post('/login', async (req, res) => {
 
   if (!ok) return res.status(401).json({ error: 'Credenciales inválidas' })
 
+  const sessionId = await rotateSession('staff', String(row.Id))
+  const photoUrl =
+    row.PhotoUrl ||
+    `https://ui-avatars.com/api/?name=${encodeURIComponent(String(row.Name || 'Usuario'))}&background=e11d2e&color=ffffff&size=128&bold=true`
   const user: AuthUser = {
-    id: row.Id,
+    id: String(row.Id),
     name: row.Name,
     email: row.Email,
     role: row.Role,
+    accountType: 'staff',
+    sessionId,
+    pin: row.Pin || '0000',
+    phone: row.Phone || undefined,
+    photoUrl,
   }
 
   return res.json({ token: signToken(user), user })
@@ -93,4 +115,9 @@ authRouter.post('/login', async (req, res) => {
 
 authRouter.get('/me', authRequired, (req, res) => {
   res.json({ user: req.user })
+})
+
+/** Comprueba si la sesión sigue vigente (para el front) */
+authRouter.get('/session', authRequired, (req, res) => {
+  res.json({ ok: true, user: req.user })
 })

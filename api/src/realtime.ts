@@ -7,6 +7,7 @@ export type RealtimeEvent =
   | 'order:status'
   | 'order:paid'
   | 'order:driver'
+  | 'driver:location'
   | 'kitchen:new'
   | 'table:updated'
   | 'reservation:updated'
@@ -24,7 +25,8 @@ export function initRealtime(httpServer: HttpServer, corsOrigins: string[]) {
 
   io.on('connection', (socket) => {
     socket.on('join', (room: string) => {
-      if (typeof room === 'string' && room.length < 40) {
+      // ops/cocina/... o track:<guid> para seguimiento del cliente
+      if (typeof room === 'string' && room.length < 60) {
         socket.join(room)
       }
     })
@@ -36,12 +38,34 @@ export function initRealtime(httpServer: HttpServer, corsOrigins: string[]) {
   return io
 }
 
+/**
+ * Emite a las salas indicadas UNA sola vez por cliente
+ * (aunque el socket esté en varias salas a la vez).
+ * No hace broadcast global.
+ */
 export function emitEvent(event: RealtimeEvent, payload: unknown, rooms: string[] = ['ops', 'cocina', 'caja']) {
   if (!io) return
-  for (const room of rooms) {
-    io.to(room).emit(event, payload)
+  const unique = [...new Set(rooms.filter(Boolean))]
+  if (unique.length === 0) return
+  io.to(unique).emit(event, payload)
+}
+
+/** Salas según estado del pedido (quién debe enterarse) */
+export function roomsForOrderStatus(status: string): string[] {
+  switch (status) {
+    case 'en_cocina':
+      return ['cocina', 'ops']
+    case 'listo':
+      return ['mesas', 'caja', 'ops', 'delivery']
+    case 'entregado':
+      return ['ops', 'caja', 'mesas', 'delivery']
+    case 'cancelado':
+      return ['ops', 'caja', 'cocina', 'mesas', 'delivery']
+    case 'nuevo':
+      return ['ops', 'caja', 'cocina']
+    default:
+      return ['ops', 'caja']
   }
-  io.emit(event, payload)
 }
 
 export function getIo() {

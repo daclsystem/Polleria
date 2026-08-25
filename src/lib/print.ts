@@ -60,7 +60,7 @@ function buildCocinaTicket(order: Order, settings: Settings, config: PrinterConf
   if (config.beepOnPrint) p.beep()
 
   p.center().bold().double()
-  p.line('COMANDA COCINA')
+  p.line(order.notes?.includes('ADICIONAL') ? 'COMANDA ADICIONAL' : 'COMANDA COCINA')
   p.double(false)
   p.line(settings.name)
   p.bold(false)

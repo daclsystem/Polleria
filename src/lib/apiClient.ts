@@ -10,17 +10,49 @@ import type {
   User,
 } from '../types'
 
-const TOKEN_KEY = 'polleria-api-token'
+const TOKEN_KEYS = {
+  staff: 'polleria-token-staff',
+  driver: 'polleria-token-driver',
+  customer: 'polleria-token-customer',
+} as const
 
-export function getApiToken() {
-  return localStorage.getItem(TOKEN_KEY)
+export type TokenScope = keyof typeof TOKEN_KEYS
+
+const LEGACY_TOKEN = 'polleria-api-token'
+
+export function getApiToken(scope: TokenScope = 'staff') {
+  const t = localStorage.getItem(TOKEN_KEYS[scope])
+  if (t) return t
+  // migrar token viejo solo a staff
+  if (scope === 'staff') {
+    const legacy = localStorage.getItem(LEGACY_TOKEN)
+    if (legacy) {
+      localStorage.setItem(TOKEN_KEYS.staff, legacy)
+      localStorage.removeItem(LEGACY_TOKEN)
+      return legacy
+    }
+  }
+  return null
 }
 
-export function setApiToken(token: string | null) {
-  if (token) localStorage.setItem(TOKEN_KEY, token)
-  else localStorage.removeItem(TOKEN_KEY)
+export function setApiToken(token: string | null, scope: TokenScope = 'staff') {
+  if (token) localStorage.setItem(TOKEN_KEYS[scope], token)
+  else localStorage.removeItem(TOKEN_KEYS[scope])
+  if (scope === 'staff') localStorage.removeItem(LEGACY_TOKEN)
   if (typeof window !== 'undefined') {
-    window.dispatchEvent(new CustomEvent('polleria-auth', { detail: { token: Boolean(token) } }))
+    window.dispatchEvent(
+      new CustomEvent('polleria-auth', { detail: { token: Boolean(token), scope } }),
+    )
+  }
+}
+
+export class ApiError extends Error {
+  code?: string
+  status: number
+  constructor(message: string, status: number, code?: string) {
+    super(message)
+    this.status = status
+    this.code = code
   }
 }
 
@@ -34,7 +66,7 @@ function isGuid(id?: string) {
 
 export async function apiFetch<T = unknown>(
   path: string,
-  options: RequestInit & { auth?: boolean } = {},
+  options: RequestInit & { auth?: boolean; scope?: TokenScope } = {},
 ): Promise<T> {
   if (!API_URL) throw new Error('VITE_API_URL no configurada')
   const headers = new Headers(options.headers || {})
@@ -42,13 +74,21 @@ export async function apiFetch<T = unknown>(
     headers.set('Content-Type', 'application/json')
   }
   if (options.auth !== false) {
-    const token = getApiToken()
+    const token = getApiToken(options.scope || 'staff')
     if (token) headers.set('Authorization', `Bearer ${token}`)
   }
   const res = await fetch(apiUrl(path), { ...options, headers })
   const data = await res.json().catch(() => ({}))
   if (!res.ok) {
-    throw new Error((data as { error?: string }).error || `HTTP ${res.status}`)
+    const err = data as { error?: string; code?: string }
+    if (err.code === 'SESSION_REPLACED' && typeof window !== 'undefined') {
+      window.dispatchEvent(
+        new CustomEvent('polleria-session-replaced', {
+          detail: { scope: options.scope || 'staff', message: err.error },
+        }),
+      )
+    }
+    throw new ApiError(err.error || `HTTP ${res.status}`, res.status, err.code)
   }
   return data as T
 }
@@ -62,7 +102,7 @@ export async function apiLogin(email: string, password: string) {
       body: JSON.stringify({ email, password }),
     },
   )
-  setApiToken(data.token)
+  setApiToken(data.token, 'staff')
   return data
 }
 
@@ -273,12 +313,13 @@ export async function apiDriverMyOrders() {
     available: DriverDeliveryOrder[]
     orders: DriverDeliveryOrder[]
     origin: { name: string; address: string; lat?: number; lng?: number }
-  }>('/api/drivers/me/orders')
+  }>('/api/drivers/me/orders', { scope: 'driver' })
 }
 
 export async function apiDriverClaim(orderId: string) {
   return apiFetch<{ ok: boolean; order: DriverDeliveryOrder }>('/api/drivers/me/claim', {
     method: 'POST',
+    scope: 'driver',
     body: JSON.stringify({ orderId }),
   })
 }
@@ -286,6 +327,7 @@ export async function apiDriverClaim(orderId: string) {
 export async function apiDriverRelease(orderId: string) {
   return apiFetch<{ ok: boolean }>('/api/drivers/me/release', {
     method: 'POST',
+    scope: 'driver',
     body: JSON.stringify({ orderId }),
   })
 }
@@ -293,6 +335,7 @@ export async function apiDriverRelease(orderId: string) {
 export async function apiDriverDelivered(orderId: string) {
   return apiFetch<{ ok: boolean }>('/api/drivers/me/delivered', {
     method: 'POST',
+    scope: 'driver',
     body: JSON.stringify({ orderId }),
   })
 }
@@ -303,12 +346,13 @@ export async function apiDriverRoute() {
     stops: DriverDeliveryOrder[]
     googleMapsUrl: string | null
     count: number
-  }>('/api/drivers/me/route')
+  }>('/api/drivers/me/route', { scope: 'driver' })
 }
 
 export async function apiDriverLocation(lat: number, lng: number, orderId?: string) {
   return apiFetch<{ ok: boolean }>('/api/drivers/me/location', {
     method: 'POST',
+    scope: 'driver',
     body: JSON.stringify({ lat, lng, orderId }),
   })
 }

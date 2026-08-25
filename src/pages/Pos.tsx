@@ -6,6 +6,7 @@ import { useStore } from '../store/StoreContext'
 import { padOrder, soles } from '../lib/format'
 import { printTicket } from '../lib/print'
 import { apiUpsertCustomer } from '../lib/apiClient'
+import { filterKitchenItems } from '../lib/kitchen'
 import type { OrderItem, OrderType, PaymentMethod } from '../types'
 import { Field, Modal, PageTitle, inputClass } from '../components/ui'
 
@@ -86,8 +87,21 @@ export function Pos() {
     if (!canSubmit) return
 
     if (isAppendMode && appendOrder) {
+      const kitchenNew = filterKitchenItems(items, state.products)
       addItemsToOrder(appendOrder.id, items, user?.name ?? 'POS')
-      printTicket({ ...appendOrder, items: [...appendOrder.items, ...items] }, state.settings, 'cocina')
+      // Comanda adicional: cocina lo ve en Recibidos (nuevo), no en fuego
+      if (kitchenNew.length > 0) {
+        printTicket(
+          {
+            ...appendOrder,
+            items: kitchenNew,
+            notes: `ADICIONAL · Mesa ${appendOrder.tableNumber ?? ''} · solo lo nuevo`,
+            status: 'nuevo',
+          },
+          state.settings,
+          'cocina',
+        )
+      }
       navigate('/comandas')
       return
     }
@@ -117,10 +131,14 @@ export function Pos() {
         paid,
         notes: notes || undefined,
         createdBy: user?.name ?? 'POS',
+        createdByUserId: user?.id,
         source: 'pos',
       })
       if (paid) payOrder(order.id, payMethod)
-      printTicket(order, state.settings, 'cocina')
+      const kitchenItems = filterKitchenItems(order.items, state.products)
+      if (kitchenItems.length > 0) {
+        printTicket({ ...order, items: kitchenItems }, state.settings, 'cocina')
+      }
       if (paid) setTimeout(() => printTicket(order, state.settings, 'caja'), 400)
       navigate('/comandas')
     } catch (e) {
@@ -205,7 +223,9 @@ export function Pos() {
           onClick={() => submit(false, 'pendiente')}
           className="min-h-12 rounded-2xl bg-ink py-3 font-bold text-cream disabled:opacity-40"
         >
-          {isAppendMode ? 'Agregar e imprimir cocina' : 'Enviar e imprimir cocina'}
+          {isAppendMode
+            ? 'Agregar (comanda solo lo nuevo de cocina)'
+            : 'Enviar e imprimir cocina'}
         </button>
         {!isAppendMode && (
           <button
@@ -216,6 +236,11 @@ export function Pos() {
             Cobrar, imprimir y enviar
           </button>
         )}
+        {isAppendMode ? (
+          <p className="text-center text-[11px] text-ink/40">
+            Cocina solo recibe platos nuevos (ej. chaufa). Bebidas no van a comanda.
+          </p>
+        ) : null}
       </div>
     </>
   )

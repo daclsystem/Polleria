@@ -37,19 +37,26 @@ async function ensureProducts() {
       .input('emoji', sql.NVarChar, p.emoji)
       .input('tone', sql.NVarChar, p.tone)
       .input('prep', sql.Int, p.prepMinutes)
+      .input('kitchen', sql.Bit, !/bebida|gaseosa/i.test(p.category))
       .query(`
-        INSERT INTO dbo.Products (Id, Name, Description, Category, Price, OriginalPrice, Emoji, Tone, Available, PrepMinutes)
-        VALUES (@id, @name, @description, @category, @price, @original, @emoji, @tone, 1, @prep)
+        INSERT INTO dbo.Products (Id, Name, Description, Category, Price, OriginalPrice, Emoji, Tone, Available, PrepMinutes, SendToKitchen)
+        VALUES (@id, @name, @description, @category, @price, @original, @emoji, @tone, 1, @prep, @kitchen)
       `)
   }
 }
 
 function mapProduct(r: Record<string, unknown>) {
+  const category = String(r.Category || '')
+  const sendRaw = r.SendToKitchen
+  const sendToKitchen =
+    sendRaw == null
+      ? !/bebida|gaseosa/i.test(category)
+      : Boolean(sendRaw)
   return {
     id: String(r.Id),
     name: r.Name,
     description: r.Description || '',
-    category: r.Category,
+    category,
     price: Number(r.Price),
     originalPrice: r.OriginalPrice != null ? Number(r.OriginalPrice) : undefined,
     emoji: r.Emoji || '🍗',
@@ -57,6 +64,7 @@ function mapProduct(r: Record<string, unknown>) {
     imageUrl: r.ImageUrl || undefined,
     available: Boolean(r.Available),
     prepMinutes: Number(r.PrepMinutes || 10),
+    sendToKitchen,
   }
 }
 
@@ -72,6 +80,8 @@ function mapTable(r: Record<string, unknown>) {
 }
 
 function mapOrder(r: Record<string, unknown>, items: unknown[] = []) {
+  const userId = r.CreatedByUserId ? String(r.CreatedByUserId) : undefined
+  const byName = r.CreatedByName ? String(r.CreatedByName) : undefined
   return {
     id: String(r.Id),
     number: Number(r.Number),
@@ -92,7 +102,8 @@ function mapOrder(r: Record<string, unknown>, items: unknown[] = []) {
     paid: Boolean(r.Paid),
     createdAt: new Date(r.CreatedAt as string).toISOString(),
     updatedAt: new Date(r.UpdatedAt as string).toISOString(),
-    createdBy: r.CreatedByUserId ? String(r.CreatedByUserId) : 'api',
+    createdBy: byName || (userId ? userId : 'api'),
+    createdByUserId: userId,
     notes: r.Notes || undefined,
     source: r.Source,
     driverId: r.DriverId ? String(r.DriverId) : undefined,
@@ -111,12 +122,17 @@ catalogRouter.get('/bootstrap', authRequired, async (_req, res) => {
 
     const [users, products, tables, inventory, settings, orders, customers, reservations, branches, ranges] =
       await Promise.all([
-        pool.request().query(`SELECT Id, Name, Email, Role, Active, Pin, Phone FROM dbo.Users ORDER BY Name`),
+        pool.request().query(`SELECT Id, Name, Email, Role, Active, Pin, Phone, PhotoUrl FROM dbo.Users ORDER BY Name`),
         pool.request().query(`SELECT * FROM dbo.Products ORDER BY Category, Name`),
         pool.request().query(`SELECT * FROM dbo.Tables ORDER BY Number`),
         pool.request().query(`SELECT * FROM dbo.Inventory ORDER BY Name`),
         pool.request().query(`SELECT TOP 1 * FROM dbo.Settings WHERE Id = 1`),
-        pool.request().query(`SELECT TOP 100 * FROM dbo.Orders ORDER BY CreatedAt DESC`),
+        pool.request().query(`
+          SELECT TOP 400 o.*, u.Name AS CreatedByName
+          FROM dbo.Orders o
+          LEFT JOIN dbo.Users u ON u.Id = o.CreatedByUserId
+          ORDER BY o.CreatedAt DESC
+        `),
         pool.request().query(`SELECT Id, Name, Phone, Email, Address, PhotoUrl, CreatedAt FROM dbo.Customers ORDER BY CreatedAt DESC`),
         pool.request().query(`SELECT TOP 50 * FROM dbo.Reservations ORDER BY [Date] DESC, [Time] DESC`),
         pool.request().query(`SELECT * FROM dbo.Branches ORDER BY Name`),
@@ -156,6 +172,9 @@ catalogRouter.get('/bootstrap', authRequired, async (_req, res) => {
         active: Boolean(u.Active),
         pin: u.Pin || '0000',
         phone: u.Phone || undefined,
+        photoUrl:
+          u.PhotoUrl ||
+          `https://ui-avatars.com/api/?name=${encodeURIComponent(String(u.Name || 'Usuario'))}&background=e11d2e&color=ffffff&size=128&bold=true`,
       })),
       products: products.recordset.map(mapProduct),
       tables: tables.recordset.map(mapTable),

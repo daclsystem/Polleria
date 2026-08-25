@@ -267,6 +267,7 @@ const products: Product[] = [
     tone: '#C9A227',
     available: true,
     prepMinutes: 1,
+    sendToKitchen: false,
   },
   {
     id: 'p17',
@@ -278,6 +279,7 @@ const products: Product[] = [
     tone: '#C9A227',
     available: true,
     prepMinutes: 1,
+    sendToKitchen: false,
   },
   {
     id: 'p18',
@@ -289,6 +291,7 @@ const products: Product[] = [
     tone: '#9B2226',
     available: true,
     prepMinutes: 1,
+    sendToKitchen: false,
   },
   {
     id: 'p19',

@@ -1,11 +1,13 @@
 import { useMemo, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { ArrowLeft, Minus, Plus, Printer, ShoppingBag, Trash2 } from 'lucide-react'
+import { ArrowLeft, MapPin, Minus, Plus, Printer, ShoppingBag, Trash2 } from 'lucide-react'
 import { useStore } from '../store/StoreContext'
 import { padOrder, soles } from '../lib/format'
 import { printTicket } from '../lib/print'
 import type { OrderItem } from '../types'
 import { Field, inputClass } from '../components/ui'
+import { useDeviceLocation } from '../hooks/useDeviceLocation'
+import { platformLabel } from '../lib/platform'
 
 export function CustomerApp() {
   const { orderId } = useParams()
@@ -23,8 +25,12 @@ function CustomerMenu() {
   const [name, setName] = useState('')
   const [phone, setPhone] = useState('937493214')
   const [address, setAddress] = useState('')
+  const [addressLat, setAddressLat] = useState<number | null>(null)
+  const [addressLng, setAddressLng] = useState<number | null>(null)
+  const [locBusy, setLocBusy] = useState(false)
   const [note, setNote] = useState('')
   const [pay, setPay] = useState<'yape' | 'efectivo'>('yape')
+  const { requestOnce, reverseGeocode, error: locError } = useDeviceLocation({ auto: false })
 
   const categories = ['Todos', ...new Set(state.products.filter((p) => p.available).map((p) => p.category))]
   const products = state.products.filter((p) => p.available && (cat === 'Todos' || p.category === cat))
@@ -57,12 +63,15 @@ function CustomerMenu() {
         customerName: name.trim(),
         customerPhone: phone,
         address: mode === 'delivery' ? address : undefined,
+        addressLat: mode === 'delivery' && addressLat != null ? addressLat : undefined,
+        addressLng: mode === 'delivery' && addressLng != null ? addressLng : undefined,
         discount: 0,
         paymentMethod: pay,
         paid: pay === 'yape',
         notes: note || undefined,
         createdBy: 'Web',
         source: 'web',
+        deliveryFee: mode === 'delivery' ? fee : 0,
       })
       const tel = phone.replace(/\D/g, '').slice(-9)
       navigate(`/web/seguimiento/${order.id}${tel ? `?tel=${tel}` : ''}`)
@@ -212,8 +221,37 @@ function CustomerMenu() {
                 />
               </Field>
               {mode === 'delivery' ? (
-                <Field label="Dirección">
-                  <input className={inputClass} value={address} onChange={(e) => setAddress(e.target.value)} required />
+                <Field label={`Dirección · ${platformLabel()}`}>
+                  <input
+                    className={inputClass}
+                    value={address}
+                    onChange={(e) => {
+                      setAddress(e.target.value)
+                      setAddressLat(null)
+                      setAddressLng(null)
+                    }}
+                    required
+                  />
+                  <button
+                    type="button"
+                    disabled={locBusy}
+                    className="mt-2 inline-flex min-h-10 w-full items-center justify-center gap-2 rounded-xl bg-ink text-sm font-semibold text-cream disabled:opacity-60"
+                    onClick={() => {
+                      setLocBusy(true)
+                      void requestOnce(false)
+                        .then(async (c) => {
+                          setAddressLat(c.lat)
+                          setAddressLng(c.lng)
+                          const addr = await reverseGeocode(c.lat, c.lng)
+                          setAddress(addr || `GPS ${c.lat.toFixed(5)}, ${c.lng.toFixed(5)}`)
+                        })
+                        .finally(() => setLocBusy(false))
+                    }}
+                  >
+                    <MapPin size={14} />
+                    {locBusy ? 'Detectando…' : 'Usar mi ubicación'}
+                  </button>
+                  {locError ? <p className="mt-1 text-xs text-amber-700">{locError}</p> : null}
                 </Field>
               ) : null}
               <Field label="Indicaciones">

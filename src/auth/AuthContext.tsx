@@ -1,15 +1,25 @@
-import { createContext, useContext, useMemo, useState, type ReactNode } from 'react'
+import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react'
 import { useStore } from '../store/StoreContext'
 import type { ModuleId, Role, User } from '../types'
 import { ROLE_MODULES } from '../types'
-import { getApiToken, setApiToken } from '../lib/apiClient'
+import { apiFetch, getApiToken, setApiToken } from '../lib/apiClient'
+import { withBase } from '../lib/paths'
+import { defaultAvatarUrl } from '../lib/avatar'
 
 const STAFF_SESSION_KEY = 'polleria-staff-session'
 
 interface AuthApi {
   user: User | null
   apiReady: boolean
-  loginWithSession: (user: { id: string; name: string; email: string; role: Role }) => Promise<void>
+  loginWithSession: (user: {
+    id: string
+    name: string
+    email: string
+    role: Role
+    pin?: string
+    phone?: string
+    photoUrl?: string
+  }) => Promise<void>
   logout: () => void
   can: (module: ModuleId) => boolean
   resetStaffPassword: (email: string, newPassword: string) => boolean
@@ -30,7 +40,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const user = apiUser
 
-  const loginWithSession = async (uIn: { id: string; name: string; email: string; role: Role }) => {
+  const logout = () => {
+    localStorage.removeItem(STAFF_SESSION_KEY)
+    localStorage.removeItem('polleria-api-user')
+    setApiToken(null, 'staff')
+    setApiUser(null)
+  }
+
+  const loginWithSession = async (uIn: {
+    id: string
+    name: string
+    email: string
+    role: Role
+    pin?: string
+    phone?: string
+    photoUrl?: string
+  }) => {
+    const fromCatalog = state.users.find((x) => x.id === uIn.id)
     const u: User = {
       id: uIn.id,
       name: uIn.name,
@@ -38,7 +64,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       password: '',
       role: uIn.role,
       active: true,
-      pin: '0000',
+      pin: uIn.pin || fromCatalog?.pin || '0000',
+      phone: uIn.phone || fromCatalog?.phone,
+      photoUrl:
+        uIn.photoUrl ||
+        fromCatalog?.photoUrl ||
+        defaultAvatarUrl(uIn.name, 'staff'),
     }
     localStorage.setItem(STAFF_SESSION_KEY, u.id)
     localStorage.setItem('polleria-api-user', JSON.stringify(u))
@@ -46,12 +77,49 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     await reloadFromApi()
   }
 
-  const logout = () => {
-    localStorage.removeItem(STAFF_SESSION_KEY)
-    localStorage.removeItem('polleria-api-user')
-    setApiToken(null)
-    setApiUser(null)
-  }
+  // Si el bootstrap trae foto/pin actualizados, reflejarlos en la sesión
+  useEffect(() => {
+    if (!apiUser) return
+    const fresh = state.users.find((x) => x.id === apiUser.id)
+    if (!fresh) return
+    if (
+      fresh.photoUrl === apiUser.photoUrl &&
+      fresh.pin === apiUser.pin &&
+      fresh.name === apiUser.name
+    ) {
+      return
+    }
+    const next: User = {
+      ...apiUser,
+      name: fresh.name,
+      pin: fresh.pin,
+      phone: fresh.phone,
+      photoUrl: fresh.photoUrl || apiUser.photoUrl || defaultAvatarUrl(fresh.name, 'staff'),
+    }
+    localStorage.setItem('polleria-api-user', JSON.stringify(next))
+    setApiUser(next)
+  }, [state.users, apiUser?.id])
+
+  useEffect(() => {
+    const onReplaced = (ev: Event) => {
+      const detail = (ev as CustomEvent<{ scope?: string; message?: string }>).detail
+      if (detail?.scope && detail.scope !== 'staff') return
+      alert(detail?.message || 'Tu sesión se cerró porque iniciaste en otro dispositivo')
+      logout()
+      window.location.assign(withBase('login'))
+    }
+    window.addEventListener('polleria-session-replaced', onReplaced)
+
+    const t = window.setInterval(() => {
+      if (!getApiToken('staff')) return
+      void apiFetch('/api/auth/session', { scope: 'staff' }).catch(() => {})
+    }, 20000)
+
+    return () => {
+      window.removeEventListener('polleria-session-replaced', onReplaced)
+      window.clearInterval(t)
+    }
+  }, [])
 
   const can = (module: ModuleId) => {
     if (!user) return false
@@ -68,7 +136,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const api = useMemo<AuthApi>(
     () => ({
       user,
-      apiReady: Boolean(getApiToken()),
+      apiReady: Boolean(getApiToken('staff')),
       loginWithSession,
       logout,
       can,

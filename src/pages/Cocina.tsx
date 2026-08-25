@@ -3,6 +3,7 @@ import { Printer, Volume2 } from 'lucide-react'
 import { elapsedMinutes, padOrder } from '../lib/format'
 import { printTicket } from '../lib/print'
 import { playSound, unlockSounds } from '../lib/sounds'
+import { filterKitchenItems } from '../lib/kitchen'
 import { useStore } from '../store/StoreContext'
 import type { Order, OrderStatus } from '../types'
 import { PageTitle } from '../components/ui'
@@ -21,7 +22,11 @@ const NEXT: Partial<Record<OrderStatus, OrderStatus>> = {
 
 export function Cocina() {
   const { state, updateOrderStatus } = useStore()
-  const live = state.orders.filter((o) => o.status === 'nuevo' || o.status === 'en_cocina' || o.status === 'listo')
+  const live = state.orders.filter((o) => {
+    if (o.status !== 'nuevo' && o.status !== 'en_cocina' && o.status !== 'listo') return false
+    // Solo pedidos con algo de preparación (POS + app web)
+    return filterKitchenItems(o.items, state.products).length > 0
+  })
   const knownNuevos = useRef<Set<string>>(new Set())
   const primed = useRef(false)
   const [soundOn, setSoundOn] = useState(false)
@@ -89,7 +94,18 @@ export function Cocina() {
                   <KitchenCard
                     key={o.id}
                     order={o}
-                    onPrint={() => printTicket(o, state.settings, 'cocina')}
+                    kitchenItems={filterKitchenItems(o.items, state.products)}
+                    onPrint={() =>
+                      printTicket(
+                        {
+                          ...o,
+                          items: filterKitchenItems(o.items, state.products),
+                          notes: o.source === 'web' ? `WEB / APP · ${o.notes || ''}`.trim() : o.notes,
+                        },
+                        state.settings,
+                        'cocina',
+                      )
+                    }
                     onAdvance={() => {
                       const n = NEXT[o.status]
                       if (n) {
@@ -115,10 +131,12 @@ export function Cocina() {
 
 function KitchenCard({
   order,
+  kitchenItems,
   onAdvance,
   onPrint,
 }: {
   order: Order
+  kitchenItems: Order['items']
   onAdvance: () => void
   onPrint: () => void
 }) {
@@ -131,6 +149,7 @@ function KitchenCard({
           <p className="font-display text-2xl">{padOrder(order.number)}</p>
           <p className="text-xs text-ink/50">
             {order.tableNumber ? `Mesa ${order.tableNumber}` : order.customerName} · {order.type}
+            {order.source === 'web' ? ' · APP' : ''}
           </p>
         </div>
         <span className={`rounded-full px-2 py-0.5 text-xs font-bold ${late ? 'bg-ember text-white' : 'bg-ink/10'}`}>
@@ -138,7 +157,7 @@ function KitchenCard({
         </span>
       </div>
       <ul className="mt-3 space-y-1.5">
-        {order.items.map((i, idx) => (
+        {kitchenItems.map((i, idx) => (
           <li key={idx} className="text-sm">
             <span className="font-bold">{i.qty}×</span> {i.name}
             {i.notes ? <span className="block text-xs text-ember">{i.notes}</span> : null}

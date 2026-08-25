@@ -28,6 +28,7 @@ Tras crear la BD, los usuarios de prueba quedan así (también documentados en e
 | cajero (pago) | cajero@lopez.pe | cajero123 | 2222 | 51911111111 |
 | cocina | cocina@lopez.pe | cocina123 | 3333 | 51922222222 |
 | mozo | mozo@lopez.pe | mozo123 | 4444 | 51933333333 |
+| mozo 2 | mozo2@lopez.pe | mozo123 | 4444 | 51944444444 |
 | cliente | María López | (OTP / pedido) | — | 51937493214 |
 | conductor | Carlos Repartidor | (OTP app) | — | 51962797752 |
 

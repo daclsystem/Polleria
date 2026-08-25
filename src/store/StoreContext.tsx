@@ -40,8 +40,13 @@ import {
   onRealtimeEvent,
   onRealtimeStatus,
   orderLabel,
+  readStaffRole,
+  roomsForStaffRole,
+  shouldNotifyRole,
+  type RealtimeEvent,
 } from '../lib/realtime'
 import { playSound } from '../lib/sounds'
+import { filterKitchenItems } from '../lib/kitchen'
 import type {
   AppState,
   Branch,
@@ -106,6 +111,7 @@ interface NewOrderInput {
   paid: boolean
   notes?: string
   createdBy: string
+  createdByUserId?: string
   source: Order['source']
   codPaymentMethod?: 'yape' | 'plin' | 'efectivo'
   codCashAmount?: number
@@ -176,10 +182,18 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const stateRef = useRef(state)
   stateRef.current = state
   const reloadTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const lastNoticeRef = useRef<{ text: string; at: number } | null>(null)
 
   const pushNotice = useCallback((text: string, tone: LiveNotice['tone'] = 'info') => {
+    const now = Date.now()
+    const last = lastNoticeRef.current
+    if (last && last.text === text && now - last.at < 4000) return
+    lastNoticeRef.current = { text, at: now }
     const id = uid('n')
-    setNotices((prev) => [{ id, text, tone }, ...prev].slice(0, 5))
+    setNotices((prev) => {
+      if (prev.some((n) => n.text === text)) return prev
+      return [{ id, text, tone }, ...prev].slice(0, 4)
+    })
     window.setTimeout(() => {
       setNotices((prev) => prev.filter((n) => n.id !== id))
     }, 6000)
@@ -231,11 +245,15 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     const startLive = () => {
       if (!getApiToken()) return () => {}
       void reloadFromApi()
-      connectRealtime(['ops', 'cocina', 'caja', 'mesas', 'delivery'])
+      const role = readStaffRole()
+      connectRealtime(roomsForStaffRole(role))
       const offStatus = onRealtimeStatus(setLive)
-      const offEvent = onRealtimeEvent((event, payload) => {
+      const offEvent = onRealtimeEvent((event: RealtimeEvent, payload) => {
         scheduleReload()
         const { n, name, status } = orderLabel(payload)
+        const currentRole = readStaffRole()
+        if (!shouldNotifyRole(currentRole, event, status)) return
+
         const num = n != null ? `#${String(n).padStart(4, '0')}` : 'Pedido'
 
         if (event === 'kitchen:new' || event === 'order:created') {
@@ -249,9 +267,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             pushNotice(`${num} entregado`, 'ok')
           } else if (status === 'cancelado') {
             pushNotice(`${num} cancelado`, 'warn')
-          } else if (status) {
-            pushNotice(`${num} → ${status}`, 'info')
+          } else if (status === 'nuevo') {
+            pushNotice(`${num} recibido`, 'info')
           }
+          // en_cocina y otros: sin toast (ya filtrado, o silencio)
         } else if (event === 'order:paid') {
           pushNotice(`${num} cobrado`, 'ok')
         } else if (event === 'order:driver') {
@@ -325,7 +344,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           subtotal: money.subtotal,
           igv: money.igv,
           total: money.total,
-          createdByUserId: guid(input.createdBy),
+          createdByUserId: guid(input.createdByUserId) || guid(input.createdBy),
           codPaymentMethod: codMethod,
           codCashAmount: input.codCashAmount,
           items: input.items.map((i) => ({
@@ -346,6 +365,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         const raw = res.order as Record<string, unknown>
         const realId = String(raw.Id || raw.id || uid('ord'))
         const realNumber = Number(raw.Number || raw.number || stateRef.current.nextOrderNumber)
+        const staffId = guid(input.createdByUserId) || guid(input.createdBy)
         const created: Order = {
           id: realId,
           number: realNumber,
@@ -365,6 +385,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           createdAt: new Date().toISOString(),
           updatedAt: new Date().toISOString(),
           createdBy: input.createdBy,
+          createdByUserId: staffId,
           notes: input.notes,
           source: input.source,
         }
@@ -421,6 +442,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       requireApi()
       let money = { subtotal: 0, igv: 0, total: 0 }
       let discount = 0
+      const kitchenNew = filterKitchenItems(newItems, stateRef.current.products)
       patchLocal((prev) => {
         const order = prev.orders.find((o) => o.id === id)
         if (!order) return prev
@@ -442,6 +464,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
                   ...o,
                   items: mergedItems,
                   ...money,
+                  // Adicional de cocina → Recibidos
+                  status: kitchenNew.length > 0 ? ('nuevo' as const) : o.status,
                   updatedAt: new Date().toISOString(),
                   createdBy: `${o.createdBy} / ${createdBy}`,
                 }

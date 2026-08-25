@@ -15,6 +15,8 @@ export interface User {
   pin: string
   /** Celular WhatsApp para recuperación de cuenta */
   phone?: string
+  /** Foto de perfil (MinIO o ui-avatars) */
+  photoUrl?: string
 }
 
 export interface ProductOption {
@@ -44,6 +46,8 @@ export interface Product {
   imageUrl?: string
   available: boolean
   prepMinutes: number
+  /** Si false, no imprime en comanda de cocina (ej. bebidas). Default: según categoría. */
+  sendToKitchen?: boolean
   optionGroups?: ProductOptionGroup[]
   tags?: string[]
 }
@@ -103,6 +107,8 @@ export interface Order {
   createdAt: string
   updatedAt: string
   createdBy: string
+  /** Usuario staff que tomó el pedido (GUID) — para reportes de mozos */
+  createdByUserId?: string
   notes?: string
   source: 'pos' | 'web'
   driverId?: string
@@ -240,21 +246,11 @@ export const MODULES = [
 export type ModuleId = (typeof MODULES)[number]
 
 export const ROLE_MODULES: Record<Role, ModuleId[]> = {
+  /** Solo admin ve “Administrar” (carta, equipo, clientes, conductores, etc.) */
   admin: [...MODULES],
-  cajero: [
-    'dashboard',
-    'pos',
-    'comandas',
-    'mesas',
-    'reservas',
-    'pedidos-web',
-    'clientes',
-    'reportes',
-    'facturacion',
-    'whatsapp',
-  ],
+  cajero: ['dashboard', 'pos', 'comandas', 'mesas', 'reservas', 'pedidos-web'],
   cocina: ['cocina', 'comandas'],
-  mozo: ['pos', 'comandas', 'mesas', 'reservas', 'clientes'],
+  mozo: ['pos', 'comandas', 'mesas', 'reservas'],
 }
 
 export const ROLE_LABEL: Record<Role, string> = {

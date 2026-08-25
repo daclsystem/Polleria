@@ -3,7 +3,7 @@ import { getPool, sql } from '../db.js'
 const WSP_BASE = process.env.WSPGO_BASE_URL || 'https://iwspgo.indevsoft.com'
 const WSP_KEY = process.env.WSPGO_API_KEY || '753ce43470bc2ad5b72bce84a7080d7ec92f77a6690bff51e5e03a5cd14eb6e0'
 const WSP_SESSION = process.env.WSPGO_SESSION || 'PolleriaLopez'
-const FRONT_URL = (process.env.FRONT_PUBLIC_URL || 'https://indevsoft.com/polleria').replace(/\/$/, '')
+const FRONT_URL = (process.env.FRONT_PUBLIC_URL || 'https://apipchifapollerialopez.indevsoft.com/polleria').replace(/\/$/, '')
 
 function normalizePhone(phone: string) {
   let digits = phone.replace(/\D/g, '')
@@ -54,7 +54,17 @@ type OrderLike = {
   Address?: string | null
   Total: number
   CodPaymentMethod?: string | null
+  Source?: string | null
   items?: Array<{ Name: string; Qty: number; Price: number }>
+}
+
+/** WhatsApp al cliente solo: delivery o pedido app/web (no mesa/salón POS) */
+export function shouldNotifyCustomerWhatsApp(order: Pick<OrderLike, 'Type' | 'Source'>) {
+  const type = String(order.Type || '').toLowerCase()
+  const source = String(order.Source || '').toLowerCase()
+  if (source === 'web') return true
+  if (type === 'delivery' || type === 'web') return true
+  return false
 }
 
 function detalle(order: OrderLike) {
@@ -78,8 +88,12 @@ const STATUS_MSG: Record<string, string> = {
   cancelado: '❌ *Cancelado*\nTu pedido fue cancelado. Si tienes dudas, escríbenos.',
 }
 
-/** Aviso al crear pedido: detalle + tracking (mensaje 1/3) */
+/** Aviso al crear pedido: detalle + tracking (mensaje 1/3) — solo delivery / cliente web */
 export async function notifyOrderCreatedServer(order: OrderLike) {
+  if (!shouldNotifyCustomerWhatsApp(order)) {
+    return { sent: false, reason: 'solo delivery o pedido del cliente (app/web)' }
+  }
+
   const phone = String(order.CustomerPhone || '')
   if (!phone) return { sent: false, reason: 'sin teléfono' }
 
@@ -111,13 +125,13 @@ export async function notifyOrderCreatedServer(order: OrderLike) {
 }
 
 /**
- * Aviso de estado (mensajes 2–3):
- * - listo / en camino
- * - entregado
- * - cancelado (excepción)
- * NO envía en_cocina ni nuevo (nuevo ya va en create).
+ * Aviso de estado (mensajes 2–3) — solo delivery / cliente web
  */
 export async function notifyOrderStatusServer(order: OrderLike, status: string) {
+  if (!shouldNotifyCustomerWhatsApp(order)) {
+    return { sent: false, reason: 'solo delivery o pedido del cliente (app/web)' }
+  }
+
   if (!NOTIFY_STATUSES.has(status)) {
     return { sent: false, reason: `estado ${status} omitido (anti-spam)` }
   }

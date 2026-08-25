@@ -15,6 +15,7 @@ const empty = (): Product => ({
   tone: '#E85D04',
   available: true,
   prepMinutes: 10,
+  sendToKitchen: true,
 })
 
 function ProductThumb({ product, className = '' }: { product: Product; className?: string }) {
@@ -100,7 +101,8 @@ export function MenuPage() {
                     <div>
                       <p className="font-semibold">{p.name}</p>
                       <p className="text-xs text-ink/45">
-                        {p.category} · {soles(p.price)}
+                        {p.category} · {soles(p.price)} ·{' '}
+                        {p.sendToKitchen === false ? 'Barra' : 'Cocina'}
                       </p>
                     </div>
                     <button
@@ -131,6 +133,7 @@ export function MenuPage() {
               <tr>
                 <th className="px-4 py-3">Plato</th>
                 <th className="px-4 py-3">Categoría</th>
+                <th className="px-4 py-3">Cocina</th>
                 <th className="px-4 py-3">Precio</th>
                 <th className="px-4 py-3">Estado</th>
                 <th className="px-4 py-3" />
@@ -146,6 +149,17 @@ export function MenuPage() {
                     </div>
                   </td>
                   <td className="px-4 py-3">{p.category}</td>
+                  <td className="px-4 py-3">
+                    <span
+                      className={`rounded-full px-2 py-0.5 text-[11px] font-bold ${
+                        p.sendToKitchen === false
+                          ? 'bg-sky-100 text-sky-800'
+                          : 'bg-amber-100 text-amber-900'
+                      }`}
+                    >
+                      {p.sendToKitchen === false ? 'No · barra' : 'Sí · prep'}
+                    </span>
+                  </td>
                   <td className="px-4 py-3">{soles(p.price)}</td>
                   <td className="px-4 py-3">
                     <button
@@ -228,6 +242,20 @@ export function MenuPage() {
                 <input type="number" className={inputClass} value={editing.prepMinutes} onChange={(e) => setEditing({ ...editing, prepMinutes: Number(e.target.value) })} />
               </Field>
             </div>
+            <label className="flex items-start gap-3 rounded-2xl bg-cream px-3 py-3 text-sm">
+              <input
+                type="checkbox"
+                className="mt-1"
+                checked={editing.sendToKitchen !== false}
+                onChange={(e) => setEditing({ ...editing, sendToKitchen: e.target.checked })}
+              />
+              <span>
+                <span className="block font-bold">Va a cocina (preparación)</span>
+                <span className="block text-xs text-ink/45">
+                  Si está apagado (ej. bebidas), no sale en comanda de cocina ni en pantalla cocina. Sirve para POS y pedidos del app web.
+                </span>
+              </span>
+            </label>
             <label className="flex items-center gap-2 text-sm">
               <input type="checkbox" checked={editing.available} onChange={(e) => setEditing({ ...editing, available: e.target.checked })} />
               Disponible

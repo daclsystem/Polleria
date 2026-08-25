@@ -6,6 +6,7 @@ export type MediaFolder = 'products' | 'audio' | 'media' | 'branding' | 'docs'
 function staffToken(): string | null {
   try {
     return (
+      localStorage.getItem('polleria-token-staff') ||
       localStorage.getItem('polleria-api-token') ||
       localStorage.getItem('chifa-lopez-token') ||
       localStorage.getItem('polleria-token')
