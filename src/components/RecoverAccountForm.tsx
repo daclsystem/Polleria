@@ -119,7 +119,7 @@ export function RecoverAccountForm({
               <input
                 className="mt-1.5 w-full rounded-xl border border-gray-200 bg-white px-4 py-3.5 text-sm"
                 inputMode="tel"
-                placeholder="962797752"
+                placeholder="999 999 999"
                 value={phone}
                 onChange={(e) => setPhone(e.target.value)}
               />

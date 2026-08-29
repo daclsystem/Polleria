@@ -7,13 +7,15 @@ import { PageTitle, StatusBadge, TypeBadge } from '../components/ui'
 
 export function Dashboard() {
   const { state } = useStore()
-  const { can } = useAuth()
+  const { can, user } = useAuth()
   const today = state.orders.filter((o) => isSameDay(o.createdAt) && o.status !== 'cancelado')
   const sales = today.filter((o) => o.paid).reduce((s, o) => s + o.total, 0)
   const tickets = today.length
   const paidCount = today.filter((o) => o.paid).length
+  const pendingPay = state.orders.filter((o) => !o.paid && o.status !== 'cancelado').length
   const avg = paidCount ? sales / paidCount : 0
   const kitchen = state.orders.filter((o) => o.status === 'nuevo' || o.status === 'en_cocina').length
+  const isCajero = user?.role === 'cajero'
 
   const days = Array.from({ length: 7 }, (_, i) => {
     const d = new Date()
@@ -53,7 +55,19 @@ export function Dashboard() {
           <Action to="/pos" title="Tomar pedido" hint="Salón, llevar o delivery" icon={UtensilsCrossed} accent />
         ) : null}
         {can('comandas') ? (
-          <Action to="/comandas" title="Ver pedidos" hint="Cobrar e imprimir" icon={ShoppingBag} />
+          <Action
+            to="/comandas"
+            title={isCajero ? 'Por cobrar' : 'Ver pedidos'}
+            hint={
+              isCajero
+                ? pendingPay === 1
+                  ? '1 pedido pendiente de pago'
+                  : `${pendingPay} pedidos pendientes de pago`
+                : 'Cobrar e imprimir'
+            }
+            icon={ShoppingBag}
+            accent={isCajero}
+          />
         ) : null}
         {can('cocina') ? (
           <Action to="/cocina" title="Ir a cocina" hint={`${kitchen} en preparación`} icon={ChefHat} />
@@ -64,8 +78,17 @@ export function Dashboard() {
       </div>
 
       <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
+        {isCajero ? (
+          <Stat
+            icon={ShoppingBag}
+            label="Por cobrar"
+            value={String(pendingPay)}
+            hint={pendingPay === 1 ? 'pedido pendiente de pago' : 'pedidos pendientes de pago'}
+          />
+        ) : (
+          <Stat icon={ShoppingBag} label="Comandas" value={String(tickets)} hint="Salón, llevar y web" />
+        )}
         <Stat icon={Wallet} label="Ventas" value={soles(sales)} hint={`${paidCount} cobrados`} />
-        <Stat icon={ShoppingBag} label="Comandas" value={String(tickets)} hint="Salón, llevar y web" />
         <Stat icon={Flame} label="Promedio" value={soles(avg || 0)} hint="Ticket cobrado" />
         <Stat icon={Clock3} label="En cocina" value={String(kitchen)} hint={late ? `${late} con demora` : 'Al día'} />
       </div>
@@ -227,13 +250,17 @@ function Action({
   return (
     <Link
       to={to}
-      className={`card card-press flex min-h-[5.5rem] flex-col justify-between p-4 ${
-        accent ? 'border-ember bg-ember text-white shadow-lg shadow-ember/25' : ''
+      className={`card-press flex min-h-[5.5rem] flex-col justify-between rounded-[1.35rem] p-4 ${
+        accent
+          ? 'bg-ember text-white shadow-lg shadow-ember/25'
+          : 'card'
       }`}
     >
       <Icon size={20} className={accent ? 'text-white' : 'text-ember'} />
       <div>
-        <p className="font-display text-base leading-tight sm:text-lg">{title}</p>
+        <p className={`font-display text-base leading-tight sm:text-lg ${accent ? 'text-white' : ''}`}>
+          {title}
+        </p>
         <p className={`mt-0.5 text-[11px] ${accent ? 'text-white/80' : 'text-ink/45'}`}>{hint}</p>
       </div>
     </Link>

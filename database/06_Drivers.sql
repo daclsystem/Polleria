@@ -36,19 +36,23 @@ ALTER TABLE dbo.AuthOtpCodes WITH NOCHECK
   ADD CONSTRAINT CK_AuthOtp_Type CHECK (AccountType IN (N'staff', N'customer', N'driver'));
 GO
 
--- Seed demo conductor (mismo celular admin para pruebas locales — cámbialo en prod)
-IF NOT EXISTS (SELECT 1 FROM dbo.Drivers)
+-- Seed demo conductor (celular de prueba 11111 — NUNCA número real)
+IF NOT EXISTS (SELECT 1 FROM dbo.Drivers WHERE Phone = N'11111')
 BEGIN
-  INSERT INTO dbo.Drivers (Id, Name, Phone, Active, VehicleInfo)
-  VALUES (NEWID(), N'Conductor Demo', N'51962797752', 1, N'Moto');
+  IF NOT EXISTS (SELECT 1 FROM dbo.Drivers)
+    INSERT INTO dbo.Drivers (Id, Name, Phone, Active, VehicleInfo)
+    VALUES (NEWID(), N'Carlos Repartidor', N'11111', 1, N'Moto');
+  ELSE
+    UPDATE TOP (1) dbo.Drivers SET Phone = N'11111', Active = 1 WHERE Active = 1;
 END
 GO
 
 -- Asegurar teléfonos staff
-UPDATE dbo.Users SET Phone = N'51962797752' WHERE Email = N'admin@lopez.pe' AND (Phone IS NULL OR Phone = N'');
-UPDATE dbo.Users SET Phone = N'51911111111' WHERE Email = N'cajero@lopez.pe' AND (Phone IS NULL OR Phone = N'');
-UPDATE dbo.Users SET Phone = N'51922222222' WHERE Email = N'cocina@lopez.pe' AND (Phone IS NULL OR Phone = N'');
-UPDATE dbo.Users SET Phone = N'51933333333' WHERE Email = N'mozo@lopez.pe' AND (Phone IS NULL OR Phone = N'');
+UPDATE dbo.Users SET Phone = N'9999999' WHERE Email = N'admin@lopez.pe';
+UPDATE dbo.Users SET Phone = N'88888' WHERE Email = N'cajero@lopez.pe';
+UPDATE dbo.Users SET Phone = N'77777' WHERE Email = N'cocina@lopez.pe';
+UPDATE dbo.Users SET Phone = N'66666' WHERE Email = N'mozo@lopez.pe';
+UPDATE dbo.Users SET Phone = N'55555' WHERE Email = N'mozo2@lopez.pe';
 GO
 
 PRINT N'OK: Drivers + OTP driver';

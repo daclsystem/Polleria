@@ -23,8 +23,10 @@ import {
   MessageCircle,
   Contact,
   Bike,
+  ChevronsLeft,
+  ChevronsRight,
 } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useAuth } from '../auth/AuthContext'
 import { useStore } from '../store/StoreContext'
 import { ROLE_LABEL, type ModuleId, type Role } from '../types'
@@ -78,10 +80,12 @@ const GROUPS: { title: string; modules: ModuleId[] }[] = [
 
 const BOTTOM: Record<Role, ModuleId[]> = {
   admin: ['dashboard', 'pos', 'comandas', 'cocina'],
-  cajero: ['dashboard', 'pos', 'comandas', 'mesas'],
-  cocina: ['cocina', 'comandas'],
+  cajero: ['dashboard', 'comandas'],
+  cocina: ['cocina'],
   mozo: ['mesas', 'pos', 'comandas'],
 }
+
+const SIDEBAR_KEY = 'polleria-sidebar-collapsed'
 
 export function Layout() {
   const { user, can, logout } = useAuth()
@@ -89,6 +93,25 @@ export function Layout() {
   const navigate = useNavigate()
   const [open, setOpen] = useState(false)
   const [logoutOpen, setLogoutOpen] = useState(false)
+  /** Desktop: contraído por defecto para dar espacio (cocina, etc.) */
+  const [collapsed, setCollapsed] = useState(() => {
+    try {
+      const saved = localStorage.getItem(SIDEBAR_KEY)
+      if (saved === '0') return false
+      if (saved === '1') return true
+    } catch {
+      /* ignore */
+    }
+    return true
+  })
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(SIDEBAR_KEY, collapsed ? '1' : '0')
+    } catch {
+      /* ignore */
+    }
+  }, [collapsed])
 
   const items = NAV.filter((i) => can(i.module))
   const bottomIds = user ? BOTTOM[user.role] : []
@@ -114,27 +137,49 @@ export function Layout() {
         }}
       />
       <aside
-        className={`fixed inset-y-0 left-0 z-40 w-[min(18.5rem,88vw)] flame-bg text-cream transition-transform duration-200 lg:static lg:w-[17.5rem] lg:translate-x-0 ${
+        className={`fixed inset-y-0 left-0 z-40 w-[min(18.5rem,88vw)] flame-bg text-cream transition-[width,transform] duration-200 lg:static lg:translate-x-0 ${
           open ? 'translate-x-0' : '-translate-x-full'
-        }`}
+        } ${collapsed ? 'lg:w-[4.25rem]' : 'lg:w-[17.5rem]'}`}
       >
         <div className="flex h-full flex-col">
-          <div className="flex items-center justify-between px-5 py-6">
-            <div>
+          <div
+            className={`flex items-center justify-between px-5 py-5 ${
+              collapsed ? 'lg:justify-center lg:px-1.5' : ''
+            }`}
+          >
+            <div className={`min-w-0 ${collapsed ? 'lg:hidden' : ''}`}>
               <p className="font-display text-[1.4rem] leading-none tracking-tight">Chifa-Pollería</p>
               <p className="mt-1 text-[11px] font-medium tracking-[0.18em] text-cream/45 uppercase">Lopez</p>
             </div>
-            <button className="tap rounded-xl p-2 lg:hidden" onClick={() => setOpen(false)}>
+            {collapsed ? (
+              <p className="hidden font-display text-lg text-gold lg:block" title="Chifa-Pollería Lopez">
+                CL
+              </p>
+            ) : null}
+            <button className="tap rounded-xl p-2 lg:hidden" onClick={() => setOpen(false)} aria-label="Cerrar">
               <X size={18} />
             </button>
+            <button
+              type="button"
+              className="tap hidden rounded-xl p-2 text-cream/70 hover:bg-white/10 hover:text-cream lg:inline-flex"
+              onClick={() => setCollapsed((v) => !v)}
+              aria-label={collapsed ? 'Expandir menú' : 'Contraer menú'}
+              title={collapsed ? 'Expandir' : 'Contraer'}
+            >
+              {collapsed ? <ChevronsRight size={18} /> : <ChevronsLeft size={18} />}
+            </button>
           </div>
-          <nav className="flex-1 space-y-5 overflow-y-auto px-3 pb-4">
+          <nav className={`flex-1 space-y-5 overflow-y-auto px-3 pb-4 ${collapsed ? 'lg:px-1.5' : ''}`}>
             {GROUPS.map((group) => {
               const groupItems = items.filter((i) => group.modules.includes(i.module))
               if (groupItems.length === 0) return null
               return (
                 <div key={group.title}>
-                  <p className="mb-1.5 px-3 text-[10px] font-bold tracking-[0.16em] text-cream/35 uppercase">
+                  <p
+                    className={`mb-1.5 px-3 text-[10px] font-bold tracking-[0.16em] text-cream/35 uppercase ${
+                      collapsed ? 'lg:hidden' : ''
+                    }`}
+                  >
                     {group.title}
                   </p>
                   <div className="space-y-0.5">
@@ -145,9 +190,12 @@ export function Layout() {
                           key={item.to}
                           to={item.to}
                           end={item.to === '/'}
+                          title={`${item.label} · ${item.hint}`}
                           onClick={() => setOpen(false)}
                           className={({ isActive }) =>
                             `flex min-h-12 items-center gap-3 rounded-2xl px-3 py-2 transition ${
+                              collapsed ? 'lg:justify-center lg:gap-0 lg:px-0 lg:py-2.5' : ''
+                            } ${
                               isActive
                                 ? 'bg-ember text-white shadow-lg shadow-ember/25'
                                 : 'text-cream/75 hover:bg-white/6 hover:text-cream'
@@ -155,7 +203,7 @@ export function Layout() {
                           }
                         >
                           <Icon size={18} className="shrink-0" />
-                          <span className="min-w-0">
+                          <span className={`min-w-0 ${collapsed ? 'lg:hidden' : ''}`}>
                             <span className="block text-sm font-semibold leading-tight">{item.label}</span>
                             <span className="block text-[11px] opacity-70">{item.hint}</span>
                           </span>
@@ -167,14 +215,15 @@ export function Layout() {
               )
             })}
           </nav>
-          <div className="border-t border-white/10 p-4">
-            <div className="flex items-center gap-3">
+          <div className={`border-t border-white/10 p-4 ${collapsed ? 'lg:p-2' : ''}`}>
+            <div className={`flex items-center gap-3 ${collapsed ? 'lg:justify-center lg:gap-0' : ''}`}>
               <img
                 src={photo}
                 alt={user?.name || ''}
                 className="h-12 w-12 shrink-0 rounded-full object-cover ring-2 ring-white/20"
+                title={user?.name}
               />
-              <div className="min-w-0">
+              <div className={`min-w-0 ${collapsed ? 'lg:hidden' : ''}`}>
                 <p className="truncate text-sm font-semibold">{user?.name}</p>
                 <p className="text-xs text-cream/50">{user ? ROLE_LABEL[user.role] : ''}</p>
                 <p className="mt-0.5 font-mono text-[10px] tracking-wider text-cream/35">
@@ -184,12 +233,17 @@ export function Layout() {
             </div>
             <button
               onClick={() => setLogoutOpen(true)}
-              className="mt-3 flex min-h-11 w-full items-center gap-2 rounded-2xl bg-white/8 px-3 py-2 text-sm text-cream/80 hover:bg-white/12"
+              title="Cerrar sesión"
+              className={`mt-3 flex min-h-11 w-full items-center gap-2 rounded-2xl bg-white/8 px-3 py-2 text-sm text-cream/80 hover:bg-white/12 ${
+                collapsed ? 'lg:justify-center lg:gap-0 lg:px-0' : ''
+              }`}
             >
               <LogOut size={16} />
-              Cerrar sesión
+              <span className={collapsed ? 'lg:hidden' : ''}>Cerrar sesión</span>
             </button>
-            <p className="mt-3 text-center text-[10px] text-cream/30">v{APP_VERSION}</p>
+            <p className={`mt-3 text-center text-[10px] text-cream/30 ${collapsed ? 'lg:hidden' : ''}`}>
+              v{APP_VERSION}
+            </p>
           </div>
         </div>
       </aside>
@@ -200,7 +254,7 @@ export function Layout() {
           aria-label="Cerrar menú"
         />
       ) : null}
-      <div className="flex min-w-0 flex-1 flex-col pb-[4.75rem] lg:pb-0">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col pb-[4.75rem] lg:pb-0">
         <header className="surface-header sticky top-0 z-20 flex items-center gap-3 px-3 py-2.5 sm:px-5 lg:px-8">
           <button
             className="tap rounded-xl p-2 hover:bg-ink/[0.04] lg:hidden"
@@ -208,6 +262,15 @@ export function Layout() {
             aria-label="Menú"
           >
             <Menu size={20} />
+          </button>
+          <button
+            type="button"
+            className="tap hidden rounded-xl p-2 hover:bg-ink/[0.04] lg:inline-flex"
+            onClick={() => setCollapsed((v) => !v)}
+            aria-label={collapsed ? 'Expandir menú' : 'Contraer menú'}
+            title={collapsed ? 'Expandir menú' : 'Contraer menú'}
+          >
+            {collapsed ? <ChevronsRight size={20} /> : <ChevronsLeft size={20} />}
           </button>
           <div className="min-w-0">
             <p className="truncate font-display text-lg leading-none tracking-tight lg:hidden">
@@ -274,7 +337,7 @@ export function Layout() {
             No se pudo sincronizar con el API: {apiError}
           </div>
         ) : null}
-        <main className="flex-1 p-3 sm:p-5 lg:p-8">
+        <main className="min-h-0 flex-1 overflow-y-auto p-3 sm:p-5 lg:p-8">
           <Outlet />
         </main>
       </div>
@@ -292,7 +355,9 @@ export function Layout() {
               : item.module === 'pos'
                 ? 'Tomar'
                 : item.module === 'comandas'
-                  ? 'Ver'
+                  ? user?.role === 'cajero'
+                    ? 'Cobrar'
+                    : 'Ver'
                   : item.module === 'cocina'
                     ? 'Cocina'
                     : item.module === 'mesas'

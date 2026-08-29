@@ -39,7 +39,7 @@ mediaRouter.get('/config', (_req, res) => {
   res.json({
     bucket,
     publicBase,
-    folders: ['products', 'audio', 'media', 'branding', 'docs'],
+    folders: ['products', 'audio', 'media', 'branding', 'docs', 'deliveries'],
   })
 })
 

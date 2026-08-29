@@ -22,14 +22,14 @@
 
 Tras crear la BD, los usuarios de prueba quedan así (también documentados en el README raíz):
 
-| Rol | Email | Password | PIN | Phone |
-|-----|-------|----------|-----|-------|
-| admin | admin@lopez.pe | admin123 | 1234 | 51937493214 |
-| cajero (pago) | cajero@lopez.pe | cajero123 | 2222 | 51911111111 |
-| cocina | cocina@lopez.pe | cocina123 | 3333 | 51922222222 |
-| mozo | mozo@lopez.pe | mozo123 | 4444 | 51933333333 |
-| mozo 2 | mozo2@lopez.pe | mozo123 | 4444 | 51944444444 |
-| cliente | María López | (OTP / pedido) | — | 51937493214 |
-| conductor | Carlos Repartidor | (OTP app) | — | 51962797752 |
+| Rol | Id (seed front) | Email | Password | PIN | Phone |
+|-----|------------------|-------|----------|-----|-------|
+| admin | u1 | admin@lopez.pe | admin123 | 1234 | 9999999 |
+| cajero (pago) | u2 | cajero@lopez.pe | cajero123 | 2222 | 88888 |
+| cocina | u3 | cocina@lopez.pe | cocina123 | 3333 | 77777 |
+| mozo | u4 | mozo@lopez.pe | mozo123 | 4444 | 66666 |
+| mozo 2 | u5 | mozo2@lopez.pe | mozo123 | 4444 | 55555 |
+| cliente | — | María López | (OTP / pedido) | — | 51937493214 |
+| conductor | — | Carlos Repartidor | (OTP app) | — | 11111 |
 
 Scripts útiles: `09_Seed_Cliente_Conductor.sql`.

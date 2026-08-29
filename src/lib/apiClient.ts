@@ -133,6 +133,13 @@ export async function apiCreateOrder(body: unknown) {
   )
 }
 
+export async function apiMyOrders() {
+  return apiFetch<{ orders: unknown[] }>('/api/orders/mine', {
+    method: 'GET',
+    scope: 'customer',
+  })
+}
+
 export async function apiUpdateOrderStatus(
   id: string,
   status: string,
@@ -144,6 +151,31 @@ export async function apiUpdateOrderStatus(
   })
 }
 
+/** Cocina: baja de almacén (puede ser antes de Empezar) */
+export async function apiStockSacar(id: string, itemIds?: string[]) {
+  return apiFetch<{
+    order: unknown
+    deducted: unknown[]
+    lowStock: unknown[]
+    itemIds: string[]
+  }>(`/api/orders/${id}/stock/sacar`, {
+    method: 'POST',
+    body: JSON.stringify({ itemIds }),
+  })
+}
+
+/** Retorno a almacén de lo ya descontado */
+export async function apiStockRetorno(id: string, itemIds?: string[]) {
+  return apiFetch<{
+    order: unknown
+    deducted: unknown[]
+    itemIds: string[]
+  }>(`/api/orders/${id}/stock/retorno`, {
+    method: 'POST',
+    body: JSON.stringify({ itemIds }),
+  })
+}
+
 export async function apiPayOrder(
   id: string,
   payments: Array<{ method: string; amount: number; cashTendered?: number }>,
@@ -151,6 +183,13 @@ export async function apiPayOrder(
   return apiFetch<{ order: unknown; paid: boolean }>(`/api/orders/${id}/payments`, {
     method: 'POST',
     body: JSON.stringify({ payments }),
+  })
+}
+
+/** Caja: liquidar pedido web entregado (ya pagado online) */
+export async function apiSettleCashier(orderId: string) {
+  return apiFetch<{ order: unknown; settled: boolean }>(`/api/orders/${orderId}/settle-cashier`, {
+    method: 'POST',
   })
 }
 
@@ -308,6 +347,11 @@ export type DriverDeliveryOrder = {
   sequence?: number
   notes?: string
   codPaymentMethod?: string
+  driverArrivedAt?: string
+  deliveryPhotoUrl?: string
+  driverCollectedMethod?: string
+  driverCollectedAmount?: number
+  driverSettledAt?: string
   createdAt: string
 }
 
@@ -336,11 +380,30 @@ export async function apiDriverRelease(orderId: string) {
   })
 }
 
-export async function apiDriverDelivered(orderId: string) {
-  return apiFetch<{ ok: boolean }>('/api/drivers/me/delivered', {
+export async function apiDriverArrived(orderId: string) {
+  return apiFetch<{ ok: boolean; order: DriverDeliveryOrder }>('/api/drivers/me/arrived', {
     method: 'POST',
     scope: 'driver',
     body: JSON.stringify({ orderId }),
+  })
+}
+
+export async function apiDriverDelivered(orderId: string, photoUrl: string) {
+  return apiFetch<{ ok: boolean; order: DriverDeliveryOrder }>('/api/drivers/me/delivered', {
+    method: 'POST',
+    scope: 'driver',
+    body: JSON.stringify({ orderId, photoUrl }),
+  })
+}
+
+export async function apiDriverSettle(
+  orderId: string,
+  data: { method: 'efectivo' | 'yape' | 'plin' | 'ya_pagado'; amount?: number },
+) {
+  return apiFetch<{ ok: boolean; order: DriverDeliveryOrder }>('/api/drivers/me/settle', {
+    method: 'POST',
+    scope: 'driver',
+    body: JSON.stringify({ orderId, ...data }),
   })
 }
 

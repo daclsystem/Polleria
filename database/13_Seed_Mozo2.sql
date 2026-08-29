@@ -13,7 +13,7 @@ BEGIN
     N'mozo',
     1,
     N'4444',
-    N'51944444444',
+    N'55555',
     N'https://ui-avatars.com/api/?name=Mozo+2&background=e11d2e&color=ffffff&size=128&bold=true'
   );
   PRINT N'OK: INSERT Mozo 2';
@@ -25,7 +25,7 @@ BEGIN
       Role = N'mozo',
       Active = 1,
       Pin = N'4444',
-      Phone = N'51944444444',
+      Phone = N'55555',
       PasswordHash = N'$2b$10$l5KA3zRSN7bWRHPFy/Rb5uRZEfg1tnRVTzSz0DdWh7LE4j.Doqosa',
       PhotoUrl = ISNULL(PhotoUrl, N'https://ui-avatars.com/api/?name=Mozo+2&background=e11d2e&color=ffffff&size=128&bold=true'),
       UpdatedAt = SYSUTCDATETIME()

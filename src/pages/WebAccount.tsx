@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { useNavigate, useSearchParams } from 'react-router-dom'
+import { useNavigate, useSearchParams, Link } from 'react-router-dom'
 import {
   ArrowLeft,
   Clock,
@@ -15,12 +15,16 @@ import 'leaflet/dist/leaflet.css'
 import { useStore } from '../store/StoreContext'
 import { soles } from '../lib/format'
 import type { Customer, Order } from '../types'
-import { RecoverAccountForm } from '../components/RecoverAccountForm'
+import { PhoneOtpLogin } from '../components/PhoneOtpLogin'
 import { ConfirmLogout } from '../components/ConfirmLogout'
 import { defaultAvatarUrl, shortAccountId } from '../lib/avatar'
-
-/** Sesión independiente del cliente web (no mezcla con staff) */
-const CUST_KEY = 'polleria-customer-session'
+import { apiMyOrders } from '../lib/apiClient'
+import {
+  clearCustomerSession,
+  getCustomerHome,
+  getCustomerSession,
+  setCustomerSession,
+} from '../lib/customerSession'
 
 const TILE_URL = 'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png'
 const TILE_ATTR = '&copy; CARTO &copy; OSM'
@@ -61,31 +65,45 @@ const driverIcon = createIcon('🛵', 38)
 const homeIcon = createIcon('🏠', 32)
 
 export function WebAccount() {
-  const { state, registerCustomer, loginCustomer, saveCustomerPassword } = useStore()
+  const { state } = useStore()
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
   const [customer, setCustomer] = useState<Customer | null>(null)
+  const [myOrders, setMyOrders] = useState<Order[]>([])
   const [tab, setTab] = useState<'orders' | 'tracking'>('orders')
   const [trackingOrderId, setTrackingOrderId] = useState<string | null>(null)
-  const [authMode, setAuthMode] = useState<'login' | 'register' | 'recover'>('login')
-  const [form, setForm] = useState({ name: '', phone: '937493214', password: '', email: '', address: '' })
-  const [error, setError] = useState('')
+  const [authPurpose, setAuthPurpose] = useState<'login' | 'register'>('login')
   const [logoutOpen, setLogoutOpen] = useState(false)
+  const [ordersReady, setOrdersReady] = useState(false)
+  const homePath = getCustomerHome()
+
+  const loadOrders = async () => {
+    try {
+      const r = await apiMyOrders()
+      setMyOrders((r.orders || []) as Order[])
+    } catch {
+      const sess = getCustomerSession()
+      if (sess) {
+        setMyOrders(
+          state.orders
+            .filter((o) => o.customerId === sess.id || o.customerPhone === sess.phone)
+            .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()),
+        )
+      } else {
+        setMyOrders([])
+      }
+    } finally {
+      setOrdersReady(true)
+    }
+  }
 
   useEffect(() => {
-    try {
-      const raw = localStorage.getItem(CUST_KEY) || localStorage.getItem('chifa-lopez-customer')
-      if (raw) {
-        const parsed = JSON.parse(raw) as Customer
-        const fresh = (state.customers || []).find((c) => c.id === parsed.id)
-        if (fresh) {
-          setCustomer(fresh)
-          localStorage.setItem(CUST_KEY, JSON.stringify(fresh))
-          localStorage.removeItem('chifa-lopez-customer')
-        }
-      }
-    } catch {}
-  }, [state.customers])
+    const sess = getCustomerSession()
+    if (sess) {
+      setCustomer(sess)
+      void loadOrders()
+    }
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     const orderId = searchParams.get('track')
@@ -95,59 +113,26 @@ export function WebAccount() {
     }
   }, [searchParams])
 
-  const myOrders = useMemo(() => {
-    if (!customer) return []
-    return state.orders
-      .filter((o) => o.customerId === customer.id || o.customerPhone === customer.phone)
-      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
-  }, [customer, state.orders])
+  // Sin pedidos → home de la sesión (carta web o app)
+  useEffect(() => {
+    if (!customer || !ordersReady) return
+    if (myOrders.length > 0) return
+    const trackId = searchParams.get('track')
+    if (trackId) return
+    navigate(homePath, { replace: true })
+  }, [customer, ordersReady, myOrders.length, searchParams, navigate, homePath])
 
   const activeOrder = useMemo(() => {
-    if (trackingOrderId) return state.orders.find((o) => o.id === trackingOrderId)
+    if (trackingOrderId) {
+      return myOrders.find((o) => o.id === trackingOrderId) || state.orders.find((o) => o.id === trackingOrderId)
+    }
     return myOrders.find((o) => o.status !== 'entregado' && o.status !== 'cancelado')
   }, [trackingOrderId, myOrders, state.orders])
 
-  const handleLogin = async (e: React.FormEvent) => {
-    e.preventDefault()
-    setError('')
-    try {
-      const cust = await loginCustomer(form.phone, form.password)
-      if (cust) {
-        setCustomer(cust)
-        localStorage.setItem(CUST_KEY, JSON.stringify(cust))
-      } else {
-        setError('Teléfono o contraseña incorrectos')
-      }
-    } catch (err) {
-      setError((err as Error).message || 'No se pudo iniciar sesión')
-    }
-  }
-
-  const handleRegister = async (e: React.FormEvent) => {
-    e.preventDefault()
-    setError('')
-    if (!form.name.trim() || !form.phone.trim() || !form.password.trim()) {
-      setError('Completa los campos obligatorios')
-      return
-    }
-    try {
-      const cust = await registerCustomer({
-        name: form.name.trim(),
-        phone: form.phone.trim(),
-        email: form.email.trim() || undefined,
-        password: form.password,
-        address: form.address.trim() || undefined,
-      })
-      setCustomer(cust)
-      localStorage.setItem(CUST_KEY, JSON.stringify(cust))
-    } catch (err) {
-      setError((err as Error).message || 'No se pudo registrar')
-    }
-  }
-
   const logout = () => {
     setCustomer(null)
-    localStorage.removeItem(CUST_KEY)
+    setMyOrders([])
+    clearCustomerSession()
     setLogoutOpen(false)
   }
 
@@ -156,146 +141,49 @@ export function WebAccount() {
       <div className="flex min-h-dvh items-center justify-center bg-gradient-to-br from-green-50 via-white to-yellow-50 p-4">
         <div className="w-full max-w-md">
           <div className="mb-8 text-center">
-            <button onClick={() => navigate('/web')} className="mb-4 inline-flex items-center gap-2 text-sm font-medium text-green-700 hover:underline">
-              <ArrowLeft size={16} /> Volver a la tienda
+            <button onClick={() => navigate(homePath)} className="mb-4 inline-flex items-center gap-2 text-sm font-medium text-green-700 hover:underline">
+              <ArrowLeft size={16} /> Volver al inicio
             </button>
             <img src="/polleria/logo-lopez.png" alt="Logo" className="mx-auto h-20 w-auto rounded-2xl shadow-lg" />
             <h1 className="mt-4 text-2xl font-black text-gray-900">Mi Cuenta</h1>
-            <p className="mt-1 text-sm text-gray-500">Inicia sesión para ver tus pedidos y hacer seguimiento</p>
+            <p className="mt-1 text-sm text-gray-500">Entra con tu celular para ver el historial de pedidos</p>
           </div>
 
           <div className="rounded-3xl bg-white p-6 shadow-xl ring-1 ring-gray-100">
-            {authMode === 'recover' ? (
-              <RecoverAccountForm
-                accountType="customer"
-                defaultPhone={form.phone}
-                onBack={() => setAuthMode('login')}
-                onLocalReset={(identifier, newPassword) =>
-                  saveCustomerPassword(identifier, newPassword)
+            <PhoneOtpLogin
+              accountType="customer"
+              purpose={authPurpose}
+              showName={authPurpose === 'register'}
+              title={authPurpose === 'register' ? 'Regístrate' : 'Ingresa con tu celular'}
+              hint="Tu número es tu usuario. Te enviamos un código por WhatsApp."
+              onSwitchPurpose={() => setAuthPurpose((p) => (p === 'login' ? 'register' : 'login'))}
+              onSuccess={(data) => {
+                if (!data.customer) return
+                const cust: Customer = {
+                  id: data.customer.id,
+                  name: data.customer.name,
+                  phone: data.customer.phone,
+                  email: data.customer.email,
+                  password: '',
+                  address: data.customer.address,
+                  photoUrl: data.customer.photoUrl,
+                  createdAt: data.customer.createdAt,
                 }
-              />
-            ) : (
-              <>
-            <div className="mb-6 flex rounded-2xl bg-gray-100 p-1">
-              <button
-                onClick={() => { setAuthMode('login'); setError('') }}
-                className={`flex-1 rounded-xl py-2.5 text-sm font-bold transition ${authMode === 'login' ? 'bg-[#1a3d1a] text-[#ffd700] shadow' : 'text-gray-600'}`}
-              >
-                Iniciar Sesión
-              </button>
-              <button
-                onClick={() => { setAuthMode('register'); setError('') }}
-                className={`flex-1 rounded-xl py-2.5 text-sm font-bold transition ${authMode === 'register' ? 'bg-[#1a3d1a] text-[#ffd700] shadow' : 'text-gray-600'}`}
-              >
-                Registrarme
-              </button>
-            </div>
-
-            {error && (
-              <div className="mb-4 rounded-xl bg-red-50 px-4 py-3 text-sm font-medium text-red-700">{error}</div>
-            )}
-
-            {authMode === 'login' ? (
-              <form onSubmit={handleLogin} className="space-y-4">
-                <div>
-                  <label className="text-sm font-bold text-gray-700">Número de celular</label>
-                  <input
-                    className="mt-1.5 w-full rounded-xl border border-gray-200 px-4 py-3.5 text-sm focus:border-green-500 focus:ring-2 focus:ring-green-500/20 focus:outline-none"
-                    placeholder="999 111 222"
-                    inputMode="tel"
-                    value={form.phone}
-                    onChange={(e) => setForm({ ...form, phone: e.target.value })}
-                    required
-                  />
-                </div>
-                <div>
-                  <label className="text-sm font-bold text-gray-700">Contraseña</label>
-                  <input
-                    type="password"
-                    className="mt-1.5 w-full rounded-xl border border-gray-200 px-4 py-3.5 text-sm focus:border-green-500 focus:ring-2 focus:ring-green-500/20 focus:outline-none"
-                    placeholder="••••••"
-                    value={form.password}
-                    onChange={(e) => setForm({ ...form, password: e.target.value })}
-                    required
-                  />
-                </div>
-                <button type="submit" className="w-full rounded-2xl bg-[#ffd700] py-4 text-lg font-black text-[#1a3d1a] shadow-lg shadow-yellow-500/20 transition hover:bg-yellow-400">
-                  Ingresar
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setAuthMode('recover')}
-                  className="w-full text-center text-sm font-semibold text-green-800 hover:underline"
-                >
-                  ¿Olvidaste tu contraseña? Código por WhatsApp
-                </button>
-              </form>
-            ) : (
-              <form onSubmit={handleRegister} className="space-y-3">
-                <div>
-                  <label className="text-sm font-bold text-gray-700">Nombre completo *</label>
-                  <input
-                    className="mt-1 w-full rounded-xl border border-gray-200 px-4 py-3 text-sm focus:border-green-500 focus:ring-2 focus:ring-green-500/20 focus:outline-none"
-                    placeholder="Juan Pérez"
-                    value={form.name}
-                    onChange={(e) => setForm({ ...form, name: e.target.value })}
-                    required
-                  />
-                </div>
-                <div>
-                  <label className="text-sm font-bold text-gray-700">Celular *</label>
-                  <input
-                    className="mt-1 w-full rounded-xl border border-gray-200 px-4 py-3 text-sm focus:border-green-500 focus:ring-2 focus:ring-green-500/20 focus:outline-none"
-                    placeholder="999 111 222"
-                    inputMode="tel"
-                    value={form.phone}
-                    onChange={(e) => setForm({ ...form, phone: e.target.value })}
-                    required
-                  />
-                </div>
-                <div>
-                  <label className="text-sm font-bold text-gray-700">Contraseña *</label>
-                  <input
-                    type="password"
-                    className="mt-1 w-full rounded-xl border border-gray-200 px-4 py-3 text-sm focus:border-green-500 focus:ring-2 focus:ring-green-500/20 focus:outline-none"
-                    placeholder="Mínimo 6 caracteres"
-                    value={form.password}
-                    onChange={(e) => setForm({ ...form, password: e.target.value })}
-                    required
-                  />
-                </div>
-                <div>
-                  <label className="text-sm font-bold text-gray-700">Email (opcional)</label>
-                  <input
-                    type="email"
-                    className="mt-1 w-full rounded-xl border border-gray-200 px-4 py-3 text-sm focus:border-green-500 focus:ring-2 focus:ring-green-500/20 focus:outline-none"
-                    placeholder="correo@ejemplo.com"
-                    value={form.email}
-                    onChange={(e) => setForm({ ...form, email: e.target.value })}
-                  />
-                </div>
-                <div>
-                  <label className="text-sm font-bold text-gray-700">Dirección (opcional)</label>
-                  <input
-                    className="mt-1 w-full rounded-xl border border-gray-200 px-4 py-3 text-sm focus:border-green-500 focus:ring-2 focus:ring-green-500/20 focus:outline-none"
-                    placeholder="Av. Principal 123"
-                    value={form.address}
-                    onChange={(e) => setForm({ ...form, address: e.target.value })}
-                  />
-                </div>
-                <button type="submit" className="w-full rounded-2xl bg-[#ffd700] py-4 text-lg font-black text-[#1a3d1a] shadow-lg shadow-yellow-500/20 transition hover:bg-yellow-400">
-                  Crear Cuenta
-                </button>
-              </form>
-            )}
-
-            <p className="mt-4 text-center text-xs text-gray-400">
-              Demo: teléfono <strong>987654321</strong> / contraseña <strong>123456</strong>
-            </p>
-              </>
-            )}
+                setCustomerSession(cust, data.token, '/web')
+                setCustomer(cust)
+                void loadOrders()
+              }}
+            />
           </div>
         </div>
+      </div>
+    )
+  }
+
+  if (ordersReady && myOrders.length === 0 && !searchParams.get('track')) {
+    return (
+      <div className="flex min-h-dvh items-center justify-center bg-gray-50">
+        <p className="text-sm font-medium text-gray-500">Sin pedidos · yendo al inicio…</p>
       </div>
     )
   }
@@ -316,7 +204,7 @@ export function WebAccount() {
       <header className="sticky top-0 z-40 bg-[#1a3d1a] shadow-xl">
         <div className="mx-auto flex h-16 max-w-5xl items-center justify-between px-4">
           <div className="flex items-center gap-3">
-            <button onClick={() => navigate('/web')} className="flex h-9 w-9 items-center justify-center rounded-full bg-white/10 text-white hover:bg-white/20">
+            <button onClick={() => navigate(homePath)} className="flex h-9 w-9 items-center justify-center rounded-full bg-white/10 text-white hover:bg-white/20">
               <ArrowLeft size={18} />
             </button>
             <img
@@ -344,7 +232,7 @@ export function WebAccount() {
       <div className="sticky top-16 z-30 bg-white shadow-sm">
         <div className="mx-auto flex max-w-5xl">
           <button
-            onClick={() => { setTab('orders'); setTrackingOrderId(null) }}
+            onClick={() => { setTab('orders'); setTrackingOrderId(null); void loadOrders() }}
             className={`flex flex-1 items-center justify-center gap-2 border-b-3 py-4 text-sm font-bold transition ${tab === 'orders' ? 'border-[#1a3d1a] text-[#1a3d1a]' : 'border-transparent text-gray-400'}`}
           >
             <ShoppingBag size={16} /> Mis Pedidos
@@ -367,8 +255,8 @@ export function WebAccount() {
                   <ShoppingBag size={32} className="text-gray-300" />
                 </div>
                 <p className="mt-4 text-lg font-semibold text-gray-400">Aún no tienes pedidos</p>
-                <button onClick={() => navigate('/web')} className="mt-4 font-bold text-green-700 hover:underline">
-                  Hacer mi primer pedido
+                <button onClick={() => navigate(homePath)} className="mt-4 font-bold text-green-700 hover:underline">
+                  Ir al inicio y pedir
                 </button>
               </div>
             ) : (
@@ -390,6 +278,7 @@ export function WebAccount() {
     </div>
   )
 }
+
 
 function OrderCard({ order, onTrack }: { order: Order; onTrack: () => void }) {
   const statusColors: Record<string, string> = {
@@ -492,7 +381,10 @@ function TrackingView({ order }: { order?: Order }) {
           <Truck size={32} className="text-gray-300" />
         </div>
         <p className="mt-4 text-lg font-semibold text-gray-400">No tienes pedidos activos para rastrear</p>
-        <p className="mt-2 text-sm text-gray-400">Cuando hagas un pedido de delivery, podrás ver su ubicación aquí</p>
+        <p className="mt-2 text-sm text-gray-400">Cuando hagas un pedido, podrás verlo aquí</p>
+        <Link to={getCustomerHome()} className="mt-4 font-bold text-green-700 hover:underline">
+          Ir al inicio
+        </Link>
       </div>
     )
   }

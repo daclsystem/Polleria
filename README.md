@@ -33,7 +33,7 @@ Login principal: **celular + código**.
 
 | Dato | Valor |
 |------|--------|
-| Celular por defecto | `937493214` |
+| Celular por defecto | `9999999` |
 | Código de respaldo (si WhatsApp cae) | `123456` |
 
 1. Abres `/login` (o conductor / cliente) → el número ya viene cargado.  
@@ -46,15 +46,15 @@ Env API opcional: `OTP_FALLBACK_CODE=123456`
 
 Cada rol tiene su celular registrado. Demo:
 
-| Rol | Celular | Correo (referencia) |
-|-----|---------|---------------------|
-| **Admin** | `937493214` | admin@lopez.pe |
-| **Cajero** (pago) | `911111111` | cajero@lopez.pe |
-| **Cocina** | `922222222` | cocina@lopez.pe |
-| **Mozo** | `933333333` | mozo@lopez.pe |
-| **Mozo 2** | `944444444` | mozo2@lopez.pe |
+| Rol | Id | Celular | Correo (referencia) |
+|-----|----|---------|---------------------|
+| **Admin** | `u1` | `9999999` | admin@lopez.pe |
+| **Cajero** (pago) | `u2` | `88888` | cajero@lopez.pe |
+| **Cocina** | `u3` | `77777` | cocina@lopez.pe |
+| **Mozo** | `u4` | `66666` | mozo@lopez.pe |
+| **Mozo 2** | `u5` | `55555` | mozo2@lopez.pe |
 
-> Con el número default `937493214` + código `123456` entras como **Administrador**.
+> Con el número default `9999999` + código `123456` entras como **Administrador**.
 
 ### Cliente — `/web/cuenta` o al tomar pedido
 
@@ -66,7 +66,7 @@ Cada rol tiene su celular registrado. Demo:
 
 | Nombre | Teléfono | Vehículo |
 |--------|----------|----------|
-| Carlos Repartidor | `962797752` | Moto · ABC-123 |
+| Carlos Repartidor | `11111` | Moto · ABC-123 |
 
 Login conductor: celular + código WhatsApp (debe estar registrado en **Conductores**).
 

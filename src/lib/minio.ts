@@ -1,15 +1,16 @@
 import { API_URL, apiUrl } from './api'
 
-export type MediaFolder = 'products' | 'audio' | 'media' | 'branding' | 'docs'
+export type MediaFolder = 'products' | 'audio' | 'media' | 'branding' | 'docs' | 'deliveries'
 
-/** Preferir token staff si existe */
-function staffToken(): string | null {
+/** Preferir token staff; si no, token conductor (foto de entrega) */
+function authToken(): string | null {
   try {
     return (
       localStorage.getItem('polleria-token-staff') ||
       localStorage.getItem('polleria-api-token') ||
       localStorage.getItem('chifa-lopez-token') ||
-      localStorage.getItem('polleria-token')
+      localStorage.getItem('polleria-token') ||
+      localStorage.getItem('polleria-token-driver')
     )
   } catch {
     return null
@@ -36,7 +37,7 @@ export async function uploadToMinio(
   form.append('file', file)
   form.append('folder', options?.folder || 'media')
 
-  const token = staffToken()
+  const token = authToken()
   const path = options?.publicUpload || !token ? '/api/media/upload-public' : '/api/media/upload'
 
   return new Promise((resolve, reject) => {
@@ -74,4 +75,8 @@ export function uploadProductImage(file: File, onProgress?: (n: number) => void)
 
 export function uploadAudio(file: File, onProgress?: (n: number) => void) {
   return uploadToMinio(file, { folder: 'audio', onProgress, publicUpload: true })
+}
+
+export function uploadDeliveryPhoto(file: File, onProgress?: (n: number) => void) {
+  return uploadToMinio(file, { folder: 'deliveries', onProgress })
 }

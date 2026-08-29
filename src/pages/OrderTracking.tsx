@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Link, useParams, useSearchParams } from 'react-router-dom'
+import { Link, Navigate, useParams, useSearchParams } from 'react-router-dom'
 import {
   ArrowLeft,
   Check,
@@ -21,6 +21,7 @@ import { connectRealtime, onRealtimeEvent } from '../lib/realtime'
 import { buildNavigationUrl } from '../lib/mapsNav'
 import { getPlataforma, mapsAppLabel, platformLabel } from '../lib/platform'
 import { useDeviceLocation } from '../hooks/useDeviceLocation'
+import { getCustomerHome, getCustomerSession } from '../lib/customerSession'
 
 const STORE: [number, number] = [-13.1083, -76.0114]
 const TILE = 'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png'
@@ -37,6 +38,8 @@ type TrackOrder = {
   items: Array<{ name: string; qty: number; price: number }>
   total: number
   paid: boolean
+  driverId?: string
+  driverName?: string
   driverLat?: number
   driverLng?: number
   createdAt: string
@@ -44,24 +47,62 @@ type TrackOrder = {
   codPaymentMethod?: string
 }
 
-const STEPS = [
+type TrackStep = {
+  key: string
+  label: string
+  desc: string
+  icon: typeof ShoppingBag
+}
+
+const STEPS_PICKUP: TrackStep[] = [
   { key: 'nuevo', label: 'Pedido recibido', desc: 'Ya lo tenemos', icon: ShoppingBag },
   { key: 'en_cocina', label: 'Preparando', desc: 'En cocina', icon: ChefHat },
-  { key: 'listo', label: 'Listo / en camino', desc: 'Sale a delivery o recojo', icon: Package },
-  { key: 'entregado', label: 'Entregado', desc: '¡Buen provecho!', icon: Truck },
-] as const
+  { key: 'listo', label: 'Listo para recojo', desc: 'Pasa por el local', icon: Package },
+  { key: 'entregado', label: 'Entregado', desc: '¡Buen provecho!', icon: Check },
+]
+
+/** Delivery: “listo” y “en camino” son pasos distintos (repartidor asignado / GPS). */
+const STEPS_DELIVERY: TrackStep[] = [
+  { key: 'nuevo', label: 'Pedido recibido', desc: 'Ya lo tenemos', icon: ShoppingBag },
+  { key: 'en_cocina', label: 'Preparando', desc: 'En cocina', icon: ChefHat },
+  { key: 'listo', label: 'Listo', desc: 'Esperando repartidor', icon: Package },
+  { key: 'en_camino', label: 'En camino', desc: 'El repartidor va a tu dirección', icon: Truck },
+  { key: 'entregado', label: 'Entregado', desc: '¡Buen provecho!', icon: Check },
+]
 
 const STATUS_NOTIFY: Record<string, string> = {
   en_cocina: 'Tu pedido se está preparando',
-  listo: 'Tu pedido está listo / en camino',
+  listo: 'Tu pedido está listo',
+  en_camino: 'Tu pedido va en camino',
   entregado: 'Pedido entregado. ¡Buen provecho!',
   cancelado: 'Tu pedido fue cancelado',
 }
 
-function stepIndex(status: string) {
+function isDeliveryType(type?: string) {
+  return type === 'delivery' || type === 'web'
+}
+
+function trackSteps(type?: string) {
+  return isDeliveryType(type) ? STEPS_DELIVERY : STEPS_PICKUP
+}
+
+/** Índice del paso actual para el cliente (delivery distingue listo vs en camino). */
+function stepIndex(
+  status: string,
+  opts: { isDelivery: boolean; hasDriver: boolean },
+) {
   if (status === 'cancelado') return -1
-  const i = STEPS.findIndex((s) => s.key === status)
-  return i >= 0 ? i : 0
+  if (!opts.isDelivery) {
+    const i = STEPS_PICKUP.findIndex((s) => s.key === status)
+    return i >= 0 ? i : 0
+  }
+  if (status === 'nuevo') return 0
+  if (status === 'en_cocina') return 1
+  // Listo sin repartidor = esperando; con repartidor = en camino
+  if (status === 'listo') return opts.hasDriver ? 3 : 2
+  // Entregado solo cuenta en camino+entregado si hubo repartidor
+  if (status === 'entregado') return opts.hasDriver ? 4 : 2
+  return 0
 }
 
 function icon(emoji: string) {
@@ -164,13 +205,22 @@ export function OrderTracking() {
     if (ok) notifyWeb('Notificaciones activas', 'Te avisamos cuando cambie el estado del pedido')
   }
 
-  const idx = useMemo(() => (order ? stepIndex(order.status) : 0), [order])
-  const isDelivery = order?.type === 'delivery' || order?.type === 'web'
+  const isDelivery = isDeliveryType(order?.type)
   const driverPos: [number, number] | null = liveDriver
     ? [liveDriver.lat, liveDriver.lng]
     : order?.driverLat != null && order?.driverLng != null
       ? [order.driverLat, order.driverLng]
       : null
+  // Asignación de repartidor (no solo GPS)
+  const hasDriver = Boolean(order?.driverId) || Boolean(driverPos)
+  const idx = useMemo(
+    () =>
+      order
+        ? stepIndex(order.status, { isDelivery, hasDriver })
+        : 0,
+    [order, isDelivery, hasDriver],
+  )
+  const steps = useMemo(() => trackSteps(order?.type), [order?.type])
   const destPos: [number, number] | null =
     order?.addressLat != null && order?.addressLng != null
       ? [order.addressLat, order.addressLng]
@@ -185,10 +235,14 @@ export function OrderTracking() {
     return pts
   }, [driverPos, destPos])
 
-  const storeNavUrl = buildNavigationUrl(
-    { lat: STORE[0], lng: STORE[1], address: 'Chifa-Pollería Lopez' },
-    { label: 'Local' },
-  )
+  /** Solo recojo/llevar: el cliente va al local. En delivery no aplica (eso es del repartidor). */
+  const storeNavUrl =
+    !isDelivery
+      ? buildNavigationUrl(
+          { lat: STORE[0], lng: STORE[1], address: 'Chifa-Pollería Lopez' },
+          { label: 'Local' },
+        )
+      : null
 
   if (loading) {
     return (
@@ -199,24 +253,16 @@ export function OrderTracking() {
   }
 
   if (error || !order) {
-    return (
-      <div className="flex min-h-dvh flex-col items-center justify-center gap-4 bg-[#f6f7f9] p-6 text-center">
-        <p className="text-lg font-bold text-gray-800">{error || 'Pedido no encontrado'}</p>
-        <p className="max-w-sm text-sm text-gray-500">
-          Revisa el enlace de WhatsApp o pide el número de pedido en el local.
-        </p>
-        <Link to="/web" className="rounded-full bg-[#1a3d1a] px-5 py-2.5 text-sm font-bold text-white">
-          Ir a la carta
-        </Link>
-      </div>
-    )
+    const home = getCustomerSession() ? getCustomerHome() : '/web'
+    return <Navigate to={home} replace />
   }
 
+  const home = getCustomerHome()
   return (
     <div className="min-h-dvh bg-[#f6f7f9]">
       <header className="bg-[#1a3d1a] px-4 pb-8 pt-5 text-white">
-        <Link to="/web" className="mb-4 inline-flex items-center gap-2 text-sm text-green-100/80">
-          <ArrowLeft size={16} /> Volver
+        <Link to={home} className="mb-4 inline-flex items-center gap-2 text-sm text-green-100/80">
+          <ArrowLeft size={16} /> Volver al inicio
         </Link>
         <p className="text-xs font-bold tracking-widest text-[#ffd700] uppercase">Seguimiento en vivo</p>
         <h1 className="mt-1 text-2xl font-black">Pedido #{order.number}</h1>
@@ -241,7 +287,7 @@ export function OrderTracking() {
             <p className="rounded-xl bg-red-50 px-3 py-2 text-sm font-semibold text-red-700">Pedido cancelado</p>
           ) : (
             <ol className="space-y-4">
-              {STEPS.map((s, i) => {
+              {steps.map((s, i) => {
                 const done = i <= idx
                 const current = i === idx
                 const Icon = s.icon
@@ -269,6 +315,15 @@ export function OrderTracking() {
             <Clock size={12} /> Actualizado{' '}
             {new Date(order.updatedAt).toLocaleTimeString('es-PE', { hour: '2-digit', minute: '2-digit' })}
           </p>
+          {isDelivery && order.driverName ? (
+            <p className="mt-2 rounded-xl bg-teal-50 px-3 py-2 text-sm font-semibold text-teal-800">
+              Repartidor: {order.driverName}
+            </p>
+          ) : isDelivery && order.status === 'listo' && !hasDriver ? (
+            <p className="mt-2 rounded-xl bg-amber-50 px-3 py-2 text-sm font-semibold text-amber-800">
+              Esperando asignación de repartidor
+            </p>
+          ) : null}
         </section>
 
         {isDelivery && order.status !== 'cancelado' && order.status !== 'entregado' ? (
@@ -316,18 +371,19 @@ export function OrderTracking() {
           </section>
         ) : null}
 
-        <div className="flex flex-wrap gap-2">
-          {storeNavUrl ? (
+        {/* Cómo llegar: solo para recojo (el cliente va al local). En delivery es del repartidor. */}
+        {!isDelivery && storeNavUrl ? (
+          <div className="flex flex-wrap gap-2">
             <a
               href={storeNavUrl}
               target="_blank"
               rel="noreferrer"
               className="inline-flex min-h-11 flex-1 items-center justify-center gap-2 rounded-2xl bg-[#1a3d1a] px-4 text-sm font-bold text-white"
             >
-              <Navigation size={16} /> Cómo llegar ({mapsLabel})
+              <Navigation size={16} /> Cómo llegar al local ({mapsLabel})
             </a>
-          ) : null}
-        </div>
+          </div>
+        ) : null}
 
         <section className="rounded-2xl bg-white p-5 shadow-sm ring-1 ring-black/5">
           <h2 className="font-black text-gray-900">Detalle del pedido</h2>

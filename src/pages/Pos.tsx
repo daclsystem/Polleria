@@ -12,9 +12,9 @@ import type { OrderItem, OrderType, PaymentMethod } from '../types'
 import { Field, Modal, PageTitle, inputClass } from '../components/ui'
 
 const TYPES: { id: OrderType; label: string }[] = [
-  { id: 'salon', label: 'Salón' },
-  { id: 'llevar', label: 'Llevar' },
-  { id: 'delivery', label: 'Delivery' },
+  { id: 'salon', label: 'Salón / mesa' },
+  { id: 'llevar', label: 'Recojo (llamada/WSP)' },
+  { id: 'delivery', label: 'Delivery (llamada/WSP)' },
 ]
 
 export function Pos() {
@@ -42,9 +42,7 @@ export function Pos() {
   const [customerName, setCustomerName] = useState(
     isAppendMode ? (appendOrder?.customerName ?? '') : '',
   )
-  const [phone, setPhone] = useState(
-    isAppendMode ? (appendOrder?.customerPhone ?? '937493214') : '937493214',
-  )
+  const [phone, setPhone] = useState(isAppendMode ? (appendOrder?.customerPhone ?? '') : '')
   const [address, setAddress] = useState('')
   const [notes, setNotes] = useState('')
   const [discount, setDiscount] = useState(0)

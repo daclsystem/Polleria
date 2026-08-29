@@ -45,19 +45,19 @@ export function platformLabel(p: PlatformKind = getPlataforma()): string {
   }
 }
 
-/** Texto de ayuda cuando el GPS está bloqueado, según SO. */
+/** Texto de ayuda cuando el GPS está bloqueado, según SO (primer plano / segundo plano). */
 export function locationHelpForOS(os: DeviceOS = getDeviceOS()): string {
   switch (os) {
     case 'ios':
-      return 'En iPhone: Ajustes → Safari (o Chrome) → Ubicación → Permitir. Luego recarga esta página.'
+      return 'iPhone: Ajustes → Safari (o Chrome) → Ubicación → Permitir. Para seguir en segundo plano deja la app abierta o añade a Inicio; iOS limita GPS en pestaña en segundo plano.'
     case 'android':
-      return 'En Android: toca el candado/info de la URL → Permisos → Ubicación → Permitir, y recarga.'
+      return 'Android: candado/info de la URL → Permisos → Ubicación → Permitir. Ideal: “Permitir todo el tiempo” y no cerrar la pestaña; Chrome limita GPS si la app está en segundo plano.'
     case 'mac':
-      return 'En Mac: Preferencias del Sistema → Privacidad → Ubicación, y permite el navegador.'
+      return 'Mac: Ajustes del Sistema → Privacidad y seguridad → Ubicación → permite el navegador.'
     case 'windows':
-      return 'En Windows: Configuración → Privacidad → Ubicación, y permite el navegador.'
+      return 'Windows: Configuración → Privacidad → Ubicación → permite el navegador.'
     default:
-      return 'Activa la ubicación en la configuración del navegador y recarga la página.'
+      return 'Activa la ubicación en el navegador (primer plano). En segundo plano la web suele pausar el GPS; deja la pestaña abierta.'
   }
 }
 

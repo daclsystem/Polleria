@@ -12,6 +12,7 @@ export type RealtimeEvent =
   | 'kitchen:new'
   | 'table:updated'
   | 'reservation:updated'
+  | 'inventory:updated'
 
 export type RealtimeRoom = 'ops' | 'cocina' | 'caja' | 'mesas' | 'delivery'
 
@@ -52,8 +53,11 @@ export function shouldNotifyRole(
     return event !== 'order:updated' && event !== 'table:updated' && event !== 'reservation:updated'
   }
   if (role === 'cocina') {
-    // Solo comanda nueva de preparación (no duplicar con order:status)
-    return event === 'kitchen:new' || (event === 'order:status' && status === 'cancelado')
+    return (
+      event === 'kitchen:new' ||
+      event === 'inventory:updated' ||
+      (event === 'order:status' && status === 'cancelado')
+    )
   }
   if (role === 'mozo') {
     // Solo estados de sus mesas (el filtro por createdByUserId va en StoreContext)
@@ -70,6 +74,7 @@ export function shouldNotifyRole(
       event === 'order:created' ||
       event === 'order:paid' ||
       event === 'order:driver' ||
+      event === 'inventory:updated' ||
       (event === 'order:status' && ['listo', 'entregado', 'cancelado', 'nuevo'].includes(String(status)))
     )
   }
@@ -92,6 +97,24 @@ export function onRealtimeStatus(fn: (ok: boolean) => void) {
 function setConnected(ok: boolean) {
   connected = ok
   statusListeners.forEach((fn) => fn(ok))
+}
+
+const reconnectListeners = new Set<() => void>()
+
+/** Tras reconectar Socket.IO (o al volver el foco vía Store) */
+export function onRealtimeReconnect(fn: () => void) {
+  reconnectListeners.add(fn)
+  return () => reconnectListeners.delete(fn)
+}
+
+function notifyReconnect() {
+  reconnectListeners.forEach((fn) => {
+    try {
+      fn()
+    } catch {
+      /* ignore */
+    }
+  })
 }
 
 export function onRealtimeEvent(fn: Handler) {
@@ -138,11 +161,17 @@ export function connectRealtime(rooms: string[] = ['ops']) {
     reconnectionAttempts: Infinity,
   })
 
+  let firstConnect = true
   socket.on('connect', () => {
     setConnected(true)
     // Re-join after reconnect
     const list = [...joinedRooms]
     if (list.length) list.forEach((r) => socket!.emit('join', r))
+    if (firstConnect) {
+      firstConnect = false
+    } else {
+      notifyReconnect()
+    }
   })
   socket.on('disconnect', () => setConnected(false))
   socket.on('connect_error', () => setConnected(false))
@@ -157,6 +186,7 @@ export function connectRealtime(rooms: string[] = ['ops']) {
     'kitchen:new',
     'table:updated',
     'reservation:updated',
+    'inventory:updated',
   ]
   for (const ev of events) {
     socket.on(ev, (payload: unknown) => emitLocal(ev, payload))

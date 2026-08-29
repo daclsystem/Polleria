@@ -100,6 +100,8 @@ function mapOrder(r: Record<string, unknown>, items: unknown[] = []) {
     total: Number(r.Total),
     paymentMethod: r.Paid ? 'efectivo' : 'pendiente',
     paid: Boolean(r.Paid),
+    codPaymentMethod: r.CodPaymentMethod ? String(r.CodPaymentMethod) : undefined,
+    codCashAmount: r.CodCashAmount != null ? Number(r.CodCashAmount) : undefined,
     createdAt: new Date(r.CreatedAt as string).toISOString(),
     updatedAt: new Date(r.UpdatedAt as string).toISOString(),
     createdBy: byName || (userId ? userId : 'api'),
@@ -111,6 +113,9 @@ function mapOrder(r: Record<string, unknown>, items: unknown[] = []) {
     driverLng: r.DriverLng != null ? Number(r.DriverLng) : undefined,
     addressLat: r.AddressLat != null ? Number(r.AddressLat) : undefined,
     addressLng: r.AddressLng != null ? Number(r.AddressLng) : undefined,
+    driverArrivedAt: r.DriverArrivedAt ? new Date(r.DriverArrivedAt as string).toISOString() : undefined,
+    deliveryPhotoUrl: r.DeliveryPhotoUrl ? String(r.DeliveryPhotoUrl) : undefined,
+    driverSettledAt: r.DriverSettledAt ? new Date(r.DriverSettledAt as string).toISOString() : undefined,
   }
 }
 
@@ -158,6 +163,7 @@ catalogRouter.get('/bootstrap', authRequired, async (_req, res) => {
           price: Number(it.Price),
           notes: it.Notes || undefined,
           kitchenStatus: it.KitchenStatus ? String(it.KitchenStatus) : undefined,
+          stockDeducted: Boolean(it.StockDeducted),
         })
         itemsByOrder.set(oid, list)
       }

@@ -17,10 +17,12 @@ import { useStore } from '../store/StoreContext'
 import { soles } from '../lib/format'
 import { APP_VERSION } from '../lib/version'
 import { ProductModal } from '../components/ProductModal'
-import type { OrderItem, Product } from '../types'
+import { PhoneOtpLogin } from '../components/PhoneOtpLogin'
+import type { Customer, OrderItem, Product } from '../types'
 import { apiDeliveryQuote, apiGetBanners } from '../lib/apiClient'
 import { useDeviceLocation } from '../hooks/useDeviceLocation'
 import { getPlataforma, platformLabel } from '../lib/platform'
+import { getCustomerSession, setCustomerHome, setCustomerSession } from '../lib/customerSession'
 
 interface Banner {
   id: string
@@ -57,7 +59,7 @@ export function WebLanding() {
   const [checkoutOpen, setCheckoutOpen] = useState(false)
   const [mode, setMode] = useState<'llevar' | 'delivery'>('delivery')
   const [name, setName] = useState('')
-  const [phone, setPhoneVal] = useState('937493214')
+  const [phone, setPhoneVal] = useState('')
   const [address, setAddress] = useState('')
   const [addressLat, setAddressLat] = useState<number | null>(null)
   const [addressLng, setAddressLng] = useState<number | null>(null)
@@ -68,21 +70,37 @@ export function WebLanding() {
   const [pay, setPay] = useState<'yape' | 'efectivo'>('yape')
   const [orderSuccess, setOrderSuccess] = useState<string | null>(null)
   const [modalProduct, setModalProduct] = useState<Product | null>(null)
+  const [customer, setCustomer] = useState<Customer | null>(null)
+  const [authOpen, setAuthOpen] = useState(false)
+  const [authPurpose, setAuthPurpose] = useState<'login' | 'register'>('login')
   const menuRef = useRef<HTMLDivElement>(null)
   const plataforma = getPlataforma()
   const { requestOnce, reverseGeocode, error: locError } = useDeviceLocation({ auto: false })
 
+  const applyCustomer = (cust: Customer) => {
+    setCustomer(cust)
+    setName(cust.name || '')
+    setPhoneVal(cust.phone || '')
+    if (cust.address) setAddress(cust.address)
+  }
+
   useEffect(() => {
-    try {
-      const raw = localStorage.getItem('chifa-lopez-customer')
-      if (raw) {
-        const cust = JSON.parse(raw)
-        if (cust?.name && !name) setName(cust.name)
-        if (cust?.phone && !phone) setPhoneVal(cust.phone)
-        if (cust?.address && !address) setAddress(cust.address)
-      }
-    } catch {}
+    const sess = getCustomerSession()
+    if (sess) {
+      setCustomerHome('/web')
+      applyCustomer(sess)
+    }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const openCheckout = () => {
+    setCartOpen(false)
+    if (!getCustomerSession() && !customer) {
+      setAuthPurpose('login')
+      setAuthOpen(true)
+      return
+    }
+    setCheckoutOpen(true)
+  }
 
   useEffect(() => {
     if (banners.length <= 1) return
@@ -211,27 +229,30 @@ export function WebLanding() {
       mode === 'delivery' && deliveryFee > 0
         ? [...items, { productId: 'delivery', name: 'Delivery', qty: 1, price: deliveryFee }]
         : items
-    let customerId: string | undefined
+    let customerId = customer?.id
     try {
-      const raw = localStorage.getItem('polleria-customer-session') || localStorage.getItem('chifa-lopez-customer')
-      if (raw) {
-        const cust = JSON.parse(raw)
-        customerId = cust?.id
-      }
+      if (!customerId) customerId = getCustomerSession()?.id
     } catch {}
+    if (!customerId) {
+      setAuthPurpose('login')
+      setAuthOpen(true)
+      return
+    }
     try {
       const order = await createOrder({
         type: mode === 'delivery' ? 'delivery' : 'llevar',
         items: orderItems,
-        customerName: name.trim(),
-        customerPhone: phone,
+        customerName: name.trim() || customer?.name || 'Cliente',
+        customerPhone: phone || customer?.phone,
         customerId,
         address: mode === 'delivery' ? address : undefined,
         addressLat: mode === 'delivery' && addressLat != null ? addressLat : undefined,
         addressLng: mode === 'delivery' && addressLng != null ? addressLng : undefined,
         discount: 0,
-        paymentMethod: pay,
-        paid: pay === 'yape',
+        paymentMethod: 'pendiente',
+        paid: false,
+        codPaymentMethod: pay,
+        codCashAmount: pay === 'efectivo' ? total : undefined,
         notes: note || undefined,
         createdBy: 'Web',
         source: 'web',
@@ -241,7 +262,7 @@ export function WebLanding() {
       setItems([])
       setCheckoutOpen(false)
       setCartOpen(false)
-      const tel = phone.replace(/\D/g, '').slice(-9)
+      const tel = (phone || customer?.phone || '').replace(/\D/g, '').slice(-9)
       navigate(`/web/seguimiento/${order.id}${tel ? `?tel=${tel}` : ''}`)
     } catch (err) {
       alert((err as Error).message || 'No se pudo crear el pedido')
@@ -299,11 +320,17 @@ export function WebLanding() {
           </div>
           <div className="flex items-center gap-2">
             <button
-              onClick={() => navigate('/web/cuenta')}
+              onClick={() => {
+                if (customer) navigate('/web/cuenta')
+                else {
+                  setAuthPurpose('login')
+                  setAuthOpen(true)
+                }
+              }}
               className="flex h-11 items-center gap-2 rounded-full border border-white/20 bg-white/10 px-4 text-sm font-bold text-white transition hover:bg-white/20"
             >
               <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" /></svg>
-              <span className="hidden sm:inline">Mi Cuenta</span>
+              <span className="hidden sm:inline">{customer ? customer.name.split(' ')[0] : 'Mi Cuenta'}</span>
             </button>
             <button
               onClick={() => setCartOpen(true)}
@@ -695,7 +722,7 @@ export function WebLanding() {
                   <span className="text-[#1a3d1a]">{soles(subtotal)}</span>
                 </div>
                 <button
-                  onClick={() => { setCartOpen(false); setCheckoutOpen(true) }}
+                  onClick={openCheckout}
                   className="mt-5 w-full rounded-2xl bg-[#ffd700] py-4 text-lg font-black text-[#1a3d1a] shadow-lg shadow-yellow-500/20 transition hover:bg-yellow-400"
                 >
                   Continuar con el Pedido →
@@ -717,6 +744,51 @@ export function WebLanding() {
         />
       )}
 
+
+      {/* AUTH CLIENTE (celular) */}
+      {authOpen && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
+          <button className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setAuthOpen(false)} />
+          <div className="relative w-full max-w-md overflow-hidden rounded-3xl bg-white p-6 shadow-2xl">
+            <button
+              type="button"
+              onClick={() => setAuthOpen(false)}
+              className="absolute right-3 top-3 rounded-full p-2 hover:bg-gray-100"
+            >
+              <X size={20} />
+            </button>
+            <PhoneOtpLogin
+              accountType="customer"
+              purpose={authPurpose}
+              showName={authPurpose === 'register'}
+              title={authPurpose === 'register' ? 'Crea tu cuenta' : 'Ingresa con tu celular'}
+              hint={
+                authPurpose === 'register'
+                  ? 'Te registramos con tu número. Así guardamos tu historial de pedidos.'
+                  : 'Si aún no tienes cuenta, regístrate. El login es tu celular + código.'
+              }
+              onSwitchPurpose={() => setAuthPurpose((p) => (p === 'login' ? 'register' : 'login'))}
+              onSuccess={(data) => {
+                if (!data.customer) return
+                const cust: Customer = {
+                  id: data.customer.id,
+                  name: data.customer.name,
+                  phone: data.customer.phone,
+                  email: data.customer.email,
+                  password: '',
+                  address: data.customer.address,
+                  photoUrl: data.customer.photoUrl,
+                  createdAt: data.customer.createdAt,
+                }
+                setCustomerSession(cust, data.token, '/web')
+                applyCustomer(cust)
+                setAuthOpen(false)
+                setCheckoutOpen(true)
+              }}
+            />
+          </div>
+        </div>
+      )}
 
       {/* CHECKOUT */}
       {checkoutOpen && (
@@ -775,13 +847,11 @@ export function WebLanding() {
                 </button>
               </div>
 
-              <div>
-                <label className="text-sm font-bold text-gray-700">Tu nombre *</label>
-                <input className="mt-1.5 w-full rounded-xl border border-gray-200 px-4 py-3.5 text-sm focus:border-green-500 focus:ring-2 focus:ring-green-500/20 focus:outline-none" value={name} onChange={(e) => setName(e.target.value)} required placeholder="Nombre completo" />
-              </div>
-              <div>
-                <label className="text-sm font-bold text-gray-700">Celular *</label>
-                <input className="mt-1.5 w-full rounded-xl border border-gray-200 px-4 py-3.5 text-sm focus:border-green-500 focus:ring-2 focus:ring-green-500/20 focus:outline-none" value={phone} onChange={(e) => setPhoneVal(e.target.value)} required inputMode="tel" placeholder="937493214" />
+              <div className="rounded-2xl bg-gray-50 p-4 ring-1 ring-gray-100">
+                <p className="text-xs font-bold tracking-wide text-gray-400 uppercase">Cuenta</p>
+                <p className="mt-1 font-bold text-gray-900">{name || customer?.name}</p>
+                <p className="text-sm text-gray-600">Celular · {phone || customer?.phone}</p>
+                <p className="mt-1 text-xs text-gray-400">Tu historial queda ligado a este número.</p>
               </div>
               {mode === 'delivery' && (
                 <div>
@@ -829,7 +899,10 @@ export function WebLanding() {
                 <input className="mt-1.5 w-full rounded-xl border border-gray-200 px-4 py-3.5 text-sm focus:border-green-500 focus:ring-2 focus:ring-green-500/20 focus:outline-none" value={note} onChange={(e) => setNote(e.target.value)} placeholder="Tocar timbre, dejar en portería..." />
               </div>
               <div>
-                <label className="text-sm font-bold text-gray-700">Método de pago</label>
+                <label className="text-sm font-bold text-gray-700">Pago al repartidor</label>
+                <p className="mt-1 text-xs text-gray-500">
+                  El pedido queda pendiente de liquidación; el repartidor cobrará en la entrega.
+                </p>
                 <div className="mt-2 flex gap-2">
                   <button type="button" onClick={() => setPay('yape')}
                     className={`flex-1 rounded-xl py-3.5 text-sm font-bold transition ${pay === 'yape' ? 'bg-purple-600 text-white shadow-md' : 'bg-gray-100 text-gray-600'}`}

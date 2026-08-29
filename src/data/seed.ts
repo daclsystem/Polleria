@@ -478,7 +478,7 @@ export function createSeed(): AppState {
         role: 'admin',
         active: true,
         pin: '0000',
-        phone: '51962797752',
+        phone: '9999999',
       },
       {
         id: 'u2',
@@ -488,7 +488,7 @@ export function createSeed(): AppState {
         role: 'cajero',
         active: true,
         pin: '1111',
-        phone: '51911111111',
+        phone: '88888',
       },
       {
         id: 'u3',
@@ -498,7 +498,7 @@ export function createSeed(): AppState {
         role: 'cocina',
         active: true,
         pin: '2222',
-        phone: '51922222222',
+        phone: '77777',
       },
       {
         id: 'u4',
@@ -508,7 +508,7 @@ export function createSeed(): AppState {
         role: 'mozo',
         active: true,
         pin: '3333',
-        phone: '51933333333',
+        phone: '66666',
       },
       {
         id: 'u5',
@@ -518,7 +518,7 @@ export function createSeed(): AppState {
         role: 'mozo',
         active: true,
         pin: '4444',
-        phone: '51944444444',
+        phone: '55555',
       },
     ],
     products,

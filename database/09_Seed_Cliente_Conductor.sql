@@ -42,17 +42,14 @@ BEGIN
 END
 GO
 
--- 2) Conductor demo en sección Conductores
-IF NOT EXISTS (
-  SELECT 1 FROM dbo.Drivers
-  WHERE REPLACE(REPLACE(REPLACE(Phone,' ',''),'-',''),'+','') LIKE N'%962797752'
-)
+-- 2) Conductor demo (celular de prueba 11111 — sin número real)
+IF NOT EXISTS (SELECT 1 FROM dbo.Drivers WHERE Phone = N'11111')
 BEGIN
   INSERT INTO dbo.Drivers (Id, Name, Phone, Active, VehicleInfo, PhotoUrl)
   VALUES (
     NEWID(),
     N'Carlos Repartidor',
-    N'51962797752',
+    N'11111',
     1,
     N'Moto · ABC-123',
     N'https://ui-avatars.com/api/?name=Carlos+Repartidor&background=0f766e&color=ffffff&size=128&bold=true'
@@ -65,8 +62,14 @@ BEGIN
       Active = 1,
       VehicleInfo = ISNULL(VehicleInfo, N'Moto · ABC-123'),
       PhotoUrl = ISNULL(PhotoUrl, N'https://ui-avatars.com/api/?name=Carlos+Repartidor&background=0f766e&color=ffffff&size=128&bold=true')
-  WHERE REPLACE(REPLACE(REPLACE(Phone,' ',''),'-',''),'+','') LIKE N'%962797752';
+  WHERE Phone = N'11111';
 END
+GO
+
+-- Quitar celulares reales de demo si quedaron
+UPDATE dbo.Drivers
+SET Phone = N'11111'
+WHERE REPLACE(REPLACE(REPLACE(Phone,' ',''),'-',''),'+','') LIKE N'%962797752';
 GO
 
 PRINT N'OK: 1 cliente + 1 conductor listos';

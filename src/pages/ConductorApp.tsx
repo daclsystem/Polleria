@@ -2,24 +2,28 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import {
   Bike,
+  Camera,
   CheckCircle2,
   LogOut,
-  MapPinned,
+  MapPin,
+  MessageCircle,
+  MessageSquare,
   Navigation,
-  Package,
   Phone,
   RefreshCw,
+  Wallet,
 } from 'lucide-react'
 import { PhoneOtpLogin } from '../components/PhoneOtpLogin'
 import { ConfirmLogout } from '../components/ConfirmLogout'
+import { Empty, PageTitle } from '../components/ui'
 import { defaultAvatarUrl, shortAccountId } from '../lib/avatar'
 import {
-  apiDriverClaim,
+  apiDriverArrived,
   apiDriverDelivered,
   apiDriverLocation,
   apiDriverMyOrders,
-  apiDriverRelease,
   apiDriverRoute,
+  apiDriverSettle,
   setApiToken,
   type DriverDeliveryOrder,
 } from '../lib/apiClient'
@@ -28,10 +32,21 @@ import { padOrder, soles } from '../lib/format'
 import { APP_VERSION } from '../lib/version'
 import { ensureWebNotifications, notifyWeb } from '../lib/webNotify'
 import { useDeviceLocation } from '../hooks/useDeviceLocation'
-import { buildMultiStopUrl, openNavigation } from '../lib/mapsNav'
-import { getPlataforma, mapsAppLabel, platformLabel } from '../lib/platform'
+import { buildMultiStopUrl, buildWazeForStops, openInApp } from '../lib/mapsNav'
+import { getPlataforma, platformLabel } from '../lib/platform'
+import { uploadDeliveryPhoto } from '../lib/minio'
 
 const DRIVER_KEY = 'polleria-driver-session'
+
+function digitsPhone(phone?: string | null) {
+  return String(phone || '').replace(/\D/g, '')
+}
+
+function whatsappPhone(phone?: string | null) {
+  let d = digitsPhone(phone)
+  if (d.length === 9 && d.startsWith('9')) d = `51${d}`
+  return d
+}
 
 type DriverSession = {
   id: string
@@ -50,29 +65,47 @@ function loadSession(): DriverSession | null {
   }
 }
 
+type DriverAction = 'ubicado' | 'entregado' | 'liquidar' | 'listo'
+
+function driverAction(o: DriverDeliveryOrder): DriverAction {
+  if (o.driverSettledAt) return 'listo'
+  // Si ya estaba pagado (web), repartidor no liquida - lo hace caja
+  if (o.status === 'entregado' && o.paid) return 'listo'
+  if (o.status === 'entregado') return 'liquidar'
+  if (o.driverArrivedAt) return 'entregado'
+  return 'ubicado'
+}
+
+const FLOW_STEPS = [
+  { key: 'en_camino', label: 'En camino' },
+  { key: 'ubicado', label: 'Ubicado' },
+  { key: 'entregado', label: 'Entregado' },
+  { key: 'liquidar', label: 'Liquidar' },
+] as const
+
 export function ConductorApp() {
   const [driver, setDriver] = useState<DriverSession | null>(() => loadSession())
   const [mine, setMine] = useState<DriverDeliveryOrder[]>([])
-  const [available, setAvailable] = useState<DriverDeliveryOrder[]>([])
   const [routeUrl, setRouteUrl] = useState<string | null>(null)
+  const [wazeUrl, setWazeUrl] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   const [err, setErr] = useState<string | null>(null)
   const [busyId, setBusyId] = useState<string | null>(null)
   const [logoutOpen, setLogoutOpen] = useState(false)
   const [notifyOn, setNotifyOn] = useState(false)
-  const knownAvailable = useRef<Set<string>>(new Set())
-  const primedAvail = useRef(false)
+  const knownMine = useRef<Set<string>>(new Set())
+  const primedMine = useRef(false)
   const plataforma = getPlataforma()
-  const mapsLabel = mapsAppLabel()
 
   const lastPush = useRef(0)
   const { coords, status: locStatus, error: locError, startWatch } = useDeviceLocation({
     auto: Boolean(driver),
     watch: Boolean(driver),
     enableHighAccuracy: true,
+    maximumAge: 20000,
     onUpdate: (c) => {
       const now = Date.now()
-      if (now - lastPush.current < 8000) return
+      if (now - lastPush.current < 20_000) return
       lastPush.current = now
       void apiDriverLocation(c.lat, c.lng)
     },
@@ -84,8 +117,8 @@ export function ConductorApp() {
     setApiToken(null, 'driver')
     setDriver(null)
     setMine([])
-    setAvailable([])
     setRouteUrl(null)
+    setWazeUrl(null)
     setLogoutOpen(false)
   }
 
@@ -95,35 +128,36 @@ export function ConductorApp() {
     setErr(null)
     try {
       const [orders, route] = await Promise.all([apiDriverMyOrders(), apiDriverRoute()])
-      const avail = orders.available || []
-      setMine(orders.mine || [])
-      setAvailable(avail)
+      const assigned = orders.mine || []
+      setMine(assigned)
+      const activeNav = assigned.filter((o) => o.status !== 'entregado')
       const origin = {
         lat: route.origin?.lat,
         lng: route.origin?.lng,
         address: route.origin?.address,
       }
-      const stops = (orders.mine || []).map((o) => ({
+      const stops = activeNav.map((o) => ({
         lat: o.addressLat,
         lng: o.addressLng,
         address: o.address,
       }))
       setRouteUrl(buildMultiStopUrl(origin, stops) || route.googleMapsUrl)
+      setWazeUrl(buildWazeForStops(stops))
 
-      const ids = new Set(avail.map((o) => o.id))
-      if (!primedAvail.current) {
-        knownAvailable.current = ids
-        primedAvail.current = true
+      const ids = new Set(assigned.map((o) => o.id))
+      if (!primedMine.current) {
+        knownMine.current = ids
+        primedMine.current = true
       } else {
-        for (const o of avail) {
-          if (!knownAvailable.current.has(o.id)) {
-            notifyWeb('Nueva entrega', `Pedido ${padOrder(o.number)} · ${o.customerName || 'cliente'}`, {
-              tag: `driver-avail-${o.id}`,
+        for (const o of assigned) {
+          if (!knownMine.current.has(o.id)) {
+            notifyWeb('Pedido asignado', `${padOrder(o.number)} · ${o.customerName || 'cliente'}`, {
+              tag: `driver-mine-${o.id}`,
             })
             break
           }
         }
-        knownAvailable.current = ids
+        knownMine.current = ids
       }
     } catch (e) {
       setErr((e as Error).message)
@@ -141,7 +175,8 @@ export function ConductorApp() {
         event === 'order:created' ||
         event === 'order:status' ||
         event === 'order:driver' ||
-        event === 'order:updated'
+        event === 'order:updated' ||
+        event === 'order:paid'
       ) {
         void refresh()
       }
@@ -166,26 +201,39 @@ export function ConductorApp() {
   const enableNotify = async () => {
     const ok = await ensureWebNotifications()
     setNotifyOn(ok)
-    if (ok) notifyWeb('Conductor listo', 'Te avisamos cuando haya entregas nuevas')
+    if (ok) notifyWeb('Conductor listo', 'Te avisamos cuando el mozo te asigne una entrega')
+  }
+
+  const runBusy = async (orderId: string, fn: () => Promise<void>) => {
+    setBusyId(orderId)
+    try {
+      await fn()
+      await refresh()
+    } catch (e) {
+      alert((e as Error).message)
+    } finally {
+      setBusyId(null)
+    }
   }
 
   if (!driver) {
     return (
-      <div className="min-h-dvh bg-[#0b1f17] px-4 py-10 text-white">
+      <div className="min-h-dvh bg-cream px-4 py-10 text-ink">
         <div className="mx-auto max-w-md">
           <div className="mb-8 text-center">
-            <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-teal-600/30">
-              <Bike size={32} className="text-teal-300" />
+            <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-ink text-cream">
+              <Bike size={32} />
             </div>
-            <h1 className="mt-4 text-3xl font-black tracking-tight">App Conductor</h1>
-            <p className="mt-2 text-sm text-teal-100/70">
-              Entra con tu celular · GPS en vivo · abre {mapsLabel} · el cliente ve tu ubicación.
+            <p className="mt-4 text-[11px] font-bold tracking-[0.18em] text-ember uppercase">Repartidor</p>
+            <h1 className="mt-1 font-display text-3xl tracking-tight">App Conductor</h1>
+            <p className="mt-2 text-sm text-ink/50">
+              En camino → Ubicado → Entregado (foto) → Liquidar cobro en base.
             </p>
-            <p className="mt-2 font-mono text-xs text-teal-200/50">
-              /polleria/conductor · detectado: {platformLabel(plataforma)}
+            <p className="mt-2 font-mono text-xs text-ink/35">
+              /polleria/conductor · {platformLabel(plataforma)}
             </p>
           </div>
-          <div className="rounded-3xl bg-white p-5 text-gray-900 shadow-xl">
+          <div className="card p-5">
             <PhoneOtpLogin
               accountType="driver"
               purpose="login"
@@ -205,20 +253,20 @@ export function ConductorApp() {
                 setDriver(session)
               }}
             />
-            <p className="mt-4 text-center text-sm text-gray-500">
-              <Link to="/login" className="font-semibold text-teal-800 hover:underline">
+            <p className="mt-4 text-center text-sm text-ink/45">
+              <Link to="/login" className="font-semibold text-ember hover:underline">
                 Volver al sistema del local
               </Link>
             </p>
           </div>
-          <p className="mt-6 text-center text-[10px] text-teal-100/40">v{APP_VERSION}</p>
+          <p className="mt-6 text-center text-[10px] text-ink/30">v{APP_VERSION}</p>
         </div>
       </div>
     )
   }
 
   return (
-    <div className="min-h-dvh bg-[#f3f6f4]">
+    <div className="min-h-dvh bg-cream text-ink">
       <ConfirmLogout
         open={logoutOpen}
         name={driver.name}
@@ -229,31 +277,33 @@ export function ConductorApp() {
         onCancel={() => setLogoutOpen(false)}
         onConfirm={logout}
       />
-      <header className="sticky top-0 z-20 border-b border-black/5 bg-[#0b1f17] px-4 py-3 text-white">
+      <header className="surface-header sticky top-0 z-20 px-4 py-3">
         <div className="mx-auto flex max-w-lg items-center justify-between gap-3">
           <div className="flex min-w-0 items-center gap-3">
             <img
               src={driver.photoUrl || defaultAvatarUrl(driver.name, 'driver')}
               alt={driver.name}
-              className="h-11 w-11 shrink-0 rounded-full object-cover ring-2 ring-teal-400/40"
+              className="h-11 w-11 shrink-0 rounded-full object-cover ring-2 ring-ink/10"
             />
             <div className="min-w-0">
               <p className="truncate font-bold">{driver.name}</p>
-              <p className="truncate font-mono text-[10px] tracking-wider text-teal-100/60">
+              <p className="truncate font-mono text-[10px] tracking-wider text-ink/40">
                 ID · {shortAccountId(driver.id)} · {driver.phone}
               </p>
             </div>
           </div>
           <div className="flex items-center gap-1">
             <button
-              className="rounded-xl p-2 text-teal-100/80 hover:bg-white/10"
+              type="button"
+              className="tap rounded-xl p-2 text-ink/60 hover:bg-ink/5"
               onClick={() => void refresh()}
               aria-label="Actualizar"
             >
               <RefreshCw size={18} className={loading ? 'animate-spin' : ''} />
             </button>
             <button
-              className="rounded-xl p-2 text-teal-100/80 hover:bg-white/10"
+              type="button"
+              className="tap rounded-xl p-2 text-ink/60 hover:bg-ink/5"
               onClick={() => setLogoutOpen(true)}
             >
               <LogOut size={18} />
@@ -263,15 +313,15 @@ export function ConductorApp() {
       </header>
 
       <main className="mx-auto max-w-lg space-y-5 px-4 py-5 pb-28">
+        <PageTitle
+          kicker="Entregas"
+          title="Mis pedidos"
+          hint="Secuencia obligatoria: En camino → Ubicado → Entregado con foto → Liquidar en base."
+        />
+
         <div className="flex flex-wrap gap-2">
-          <span className="rounded-full bg-white px-3 py-1 text-[11px] font-bold text-teal-900 ring-1 ring-teal-200">
-            {platformLabel(plataforma)}
-          </span>
-          <span
-            className={`rounded-full px-3 py-1 text-[11px] font-bold ${
-              locOk ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-900'
-            }`}
-          >
+          <span className="chip chip-off">{platformLabel(plataforma)}</span>
+          <span className={`chip ${locOk ? 'chip-on' : 'chip-off'}`}>
             {locOk
               ? `GPS OK · ${coords!.lat.toFixed(4)}, ${coords!.lng.toFixed(4)}`
               : locStatus === 'prompting'
@@ -279,155 +329,99 @@ export function ConductorApp() {
                 : 'GPS pendiente'}
           </span>
           {!locOk ? (
-            <button
-              type="button"
-              onClick={() => startWatch()}
-              className="rounded-full bg-amber-500 px-3 py-1 text-[11px] font-bold text-white"
-            >
+            <button type="button" onClick={() => startWatch()} className="chip chip-on">
               Activar ubicación
             </button>
           ) : null}
           {!notifyOn ? (
-            <button
-              type="button"
-              onClick={() => void enableNotify()}
-              className="rounded-full bg-ink px-3 py-1 text-[11px] font-bold text-cream"
-            >
-              Activar avisos web
+            <button type="button" onClick={() => void enableNotify()} className="chip chip-off">
+              Activar avisos
             </button>
           ) : (
-            <span className="rounded-full bg-teal-100 px-3 py-1 text-[11px] font-bold text-teal-800">
-              Avisos ON
-            </span>
+            <span className="chip chip-on">Avisos ON</span>
           )}
         </div>
-        {locError ? <p className="text-xs text-amber-700">{locError}</p> : null}
+        {locError ? <p className="text-xs text-ember">{locError}</p> : null}
 
         {err ? (
-          <div className="rounded-2xl bg-red-50 px-4 py-3 text-sm font-medium text-red-700">{err}</div>
+          <div className="rounded-2xl bg-ember/10 px-4 py-3 text-sm font-medium text-ember">{err}</div>
         ) : null}
 
-        {mine.length > 0 && routeUrl ? (
-          <a
-            href={routeUrl}
-            target="_blank"
-            rel="noreferrer"
-            className="flex min-h-14 items-center justify-center gap-2 rounded-2xl bg-teal-700 px-4 py-3 font-bold text-white shadow-lg shadow-teal-700/25"
-          >
-            <Navigation size={20} />
-            Abrir ruta en {mapsLabel} ({mine.length})
-          </a>
+        {mine.filter((o) => o.status !== 'entregado').length > 0 && (routeUrl || wazeUrl) ? (
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+            {routeUrl ? (
+              <a
+                href={routeUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="btn-primary gap-2"
+              >
+                <Navigation size={18} />
+                Google Maps
+              </a>
+            ) : null}
+            {wazeUrl ? (
+              <a
+                href={wazeUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex min-h-12 items-center justify-center gap-2 rounded-2xl bg-ink px-4 font-bold text-cream"
+              >
+                <Navigation size={18} />
+                Waze
+              </a>
+            ) : null}
+          </div>
         ) : null}
 
-        <section>
-          <div className="mb-3 flex items-center gap-2">
-            <Package size={18} className="text-teal-800" />
-            <h2 className="font-bold text-gray-900">Mis entregas</h2>
-            <span className="rounded-full bg-teal-100 px-2 py-0.5 text-xs font-bold text-teal-800">
-              {mine.length}
-            </span>
+        {mine.length === 0 ? (
+          <Empty
+            title="No hay entregas asignadas"
+            hint="El mozo o caja te asigna el delivery desde Ver pedidos."
+          />
+        ) : (
+          <div className="space-y-3">
+            {mine.map((o, idx) => (
+              <DeliveryCard
+                key={o.id}
+                order={o}
+                badge={`#${idx + 1}`}
+                busy={busyId === o.id}
+                onGoogle={() => {
+                  openInApp(
+                    'google',
+                    { lat: o.addressLat, lng: o.addressLng, address: o.address },
+                    {
+                      origin: coords ? { lat: coords.lat, lng: coords.lng } : undefined,
+                    },
+                  )
+                }}
+                onWaze={() => {
+                  openInApp('waze', {
+                    lat: o.addressLat,
+                    lng: o.addressLng,
+                    address: o.address,
+                  })
+                }}
+                onArrived={() =>
+                  runBusy(o.id, async () => {
+                    await apiDriverArrived(o.id)
+                  })
+                }
+                onDelivered={(photoUrl) =>
+                  runBusy(o.id, async () => {
+                    await apiDriverDelivered(o.id, photoUrl)
+                  })
+                }
+                onSettle={(method, amount) =>
+                  runBusy(o.id, async () => {
+                    await apiDriverSettle(o.id, { method, amount })
+                  })
+                }
+              />
+            ))}
           </div>
-          {mine.length === 0 ? (
-            <p className="rounded-2xl bg-white p-4 text-sm text-gray-500 shadow-sm">
-              Aún no tienes pedidos. Cuando cocina marque listo, aparecen abajo para tomar.
-            </p>
-          ) : (
-            <div className="space-y-3">
-              {mine.map((o, idx) => (
-                <DeliveryCard
-                  key={o.id}
-                  order={o}
-                  badge={`#${idx + 1}`}
-                  busy={busyId === o.id}
-                  onNavigate={() => {
-                    openNavigation(
-                      { lat: o.addressLat, lng: o.addressLng, address: o.address },
-                      {
-                        origin: coords
-                          ? { lat: coords.lat, lng: coords.lng }
-                          : undefined,
-                        label: `Pedido ${padOrder(o.number)}`,
-                      },
-                    )
-                  }}
-                  navLabel={mapsLabel}
-                  onRelease={async () => {
-                    setBusyId(o.id)
-                    try {
-                      await apiDriverRelease(o.id)
-                      await refresh()
-                    } catch (e) {
-                      alert((e as Error).message)
-                    } finally {
-                      setBusyId(null)
-                    }
-                  }}
-                  onDelivered={async () => {
-                    setBusyId(o.id)
-                    try {
-                      await apiDriverDelivered(o.id)
-                      await refresh()
-                    } catch (e) {
-                      alert((e as Error).message)
-                    } finally {
-                      setBusyId(null)
-                    }
-                  }}
-                />
-              ))}
-            </div>
-          )}
-        </section>
-
-        <section>
-          <div className="mb-3 flex items-center gap-2">
-            <MapPinned size={18} className="text-amber-700" />
-            <h2 className="font-bold text-gray-900">Disponibles para tomar</h2>
-            <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-bold text-amber-800">
-              {available.length}
-            </span>
-          </div>
-          {available.length === 0 ? (
-            <p className="rounded-2xl bg-white p-4 text-sm text-gray-500 shadow-sm">
-              No hay encomiendas libres ahora.
-            </p>
-          ) : (
-            <div className="space-y-3">
-              {available.map((o) => (
-                <article key={o.id} className="rounded-2xl bg-white p-4 shadow-sm">
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <p className="font-display text-xl text-gray-900">{padOrder(o.number)}</p>
-                      <p className="font-semibold">{o.customerName}</p>
-                      <p className="mt-1 text-sm text-gray-500">{o.address}</p>
-                      <p className="mt-1 text-xs text-gray-400">
-                        {o.status === 'listo' ? 'Listo para salir' : 'En cocina'} · {soles(o.total)}
-                        {o.paid ? '' : ' · cobrar'}
-                      </p>
-                    </div>
-                    <button
-                      disabled={busyId === o.id}
-                      className="shrink-0 rounded-xl bg-amber-500 px-3 py-2 text-sm font-bold text-white disabled:opacity-50"
-                      onClick={async () => {
-                        setBusyId(o.id)
-                        try {
-                          await apiDriverClaim(o.id)
-                          await refresh()
-                        } catch (e) {
-                          alert((e as Error).message)
-                        } finally {
-                          setBusyId(null)
-                        }
-                      }}
-                    >
-                      Tomar
-                    </button>
-                  </div>
-                </article>
-              ))}
-            </div>
-          )}
-        </section>
+        )}
       </main>
     </div>
   )
@@ -437,70 +431,272 @@ function DeliveryCard({
   order,
   badge,
   busy,
-  onNavigate,
-  onRelease,
+  onGoogle,
+  onWaze,
+  onArrived,
   onDelivered,
-  navLabel = 'Maps',
+  onSettle,
 }: {
   order: DriverDeliveryOrder
   badge: string
   busy: boolean
-  onNavigate: () => void
-  onRelease: () => void
-  onDelivered: () => void
-  navLabel?: string
+  onGoogle: () => void
+  onWaze: () => void
+  onArrived: () => void
+  onDelivered: (photoUrl: string) => void
+  onSettle: (method: 'efectivo' | 'yape' | 'plin' | 'ya_pagado', amount?: number) => void
 }) {
+  const action = driverAction(order)
+  const fileRef = useRef<HTMLInputElement>(null)
+  const [uploading, setUploading] = useState(false)
+  const [preview, setPreview] = useState<string | null>(order.deliveryPhotoUrl || null)
+  const [settleMethod, setSettleMethod] = useState<'efectivo' | 'yape' | 'plin'>(
+    order.codPaymentMethod === 'yape' || order.codPaymentMethod === 'plin'
+      ? (order.codPaymentMethod as 'yape' | 'plin')
+      : 'efectivo',
+  )
+  const canNav = Boolean(
+    (order.addressLat != null && order.addressLng != null) || order.address?.trim(),
+  )
+
+  // Pasos: 0=En camino, 1=Ubicado, 2=Entregado, 3=Liquidar
+  // action='ubicado' → en camino hacia cliente
+  // action='entregado' → llegó, pendiente tomar foto
+  // action='liquidar' → entregado, pendiente cobrar
+  // action='listo' → todo completado
+  const doneCount =
+    action === 'ubicado' ? 0 :      // nada completado, en camino
+    action === 'entregado' ? 2 :    // En camino + Ubicado completados
+    action === 'liquidar' ? 3 :     // + Entregado completado
+    4                               // todo
+  const activeIdx =
+    action === 'ubicado' ? 0 :      // "En camino" activo → botón: Ubicado
+    action === 'entregado' ? 2 :    // "Entregado" activo → botón: foto
+    action === 'liquidar' ? 3 :     // "Liquidar" activo → botón: cobrar
+    -1                              // ninguno
+
+  const pickPhoto = async (file: File | null) => {
+    if (!file) return
+    if (!file.type.startsWith('image/')) {
+      alert('Solo imágenes')
+      return
+    }
+    setUploading(true)
+    try {
+      const url = await uploadDeliveryPhoto(file)
+      setPreview(url)
+      onDelivered(url)
+    } catch (e) {
+      alert((e as Error).message)
+    } finally {
+      setUploading(false)
+    }
+  }
+
   return (
-    <article className="rounded-2xl bg-white p-4 shadow-sm ring-1 ring-teal-100">
+    <article className="card p-4">
       <div className="flex items-start justify-between gap-2">
         <div>
           <div className="flex items-center gap-2">
-            <span className="rounded-full bg-teal-700 px-2 py-0.5 text-[11px] font-bold text-white">
+            <span className="rounded-full bg-ink px-2 py-0.5 text-[11px] font-bold text-cream">
               {badge}
             </span>
             <p className="font-display text-xl">{padOrder(order.number)}</p>
           </div>
           <p className="mt-1 font-semibold">{order.customerName}</p>
-          <p className="mt-1 text-sm text-gray-500">{order.address}</p>
-          <p className="mt-1 text-xs text-gray-400">
-            {soles(order.total)}
-            {order.paid ? ' · pagado' : ' · cobrar en puerta'}
-            {order.codPaymentMethod ? ` · ${order.codPaymentMethod}` : ''}
-          </p>
+          <p className="mt-1 text-sm text-ink/45">{order.address}</p>
+          <div className="mt-2 flex flex-wrap items-center gap-1.5">
+            <span className="font-extrabold text-ember">{soles(order.total)}</span>
+            {order.paid ? (
+              <span className="rounded-full bg-sage/15 px-2.5 py-0.5 text-[11px] font-bold uppercase tracking-wide text-sage">
+                Pagado
+                {order.codPaymentMethod ? ` · ${order.codPaymentMethod}` : ''}
+              </span>
+            ) : (
+              <span className="rounded-full bg-gold/20 px-2.5 py-0.5 text-[11px] font-bold uppercase tracking-wide text-ink">
+                Pendiente · cobrar
+                {order.codPaymentMethod ? ` · ${order.codPaymentMethod}` : ''}
+              </span>
+            )}
+          </div>
         </div>
         {order.customerPhone ? (
           <a
-            href={`tel:${order.customerPhone}`}
-            className="rounded-xl bg-gray-100 p-2 text-gray-700"
+            href={`tel:${digitsPhone(order.customerPhone)}`}
+            className="rounded-xl bg-cream-dark p-2 text-ink sm:hidden"
             aria-label="Llamar"
           >
             <Phone size={18} />
           </a>
         ) : null}
       </div>
-      <div className="mt-3 grid grid-cols-2 gap-2">
+
+      <ol className="mt-3 grid grid-cols-4 gap-1">
+        {FLOW_STEPS.map((s, i) => {
+          const filled = i < doneCount || (action === 'listo' && i <= 3)
+          const active = i === activeIdx
+          return (
+            <li
+              key={s.key}
+              className={`rounded-xl px-1 py-1.5 text-center text-[10px] font-bold leading-tight ${
+                filled
+                  ? 'bg-sage/15 text-sage'
+                  : active
+                    ? 'bg-ink text-cream'
+                    : 'bg-cream-dark text-ink/35'
+              }`}
+            >
+              {s.label}
+            </li>
+          )
+        })}
+      </ol>
+
+      {order.customerPhone ? (
+        <div className="mt-2 flex gap-1.5 overflow-x-auto pb-0.5">
+          <a
+            href={`tel:${digitsPhone(order.customerPhone)}`}
+            className="inline-flex min-h-9 shrink-0 items-center gap-1 rounded-full bg-ink px-3 text-xs font-bold text-cream"
+          >
+            <Phone size={13} /> Llamar
+          </a>
+          <a
+            href={`sms:${digitsPhone(order.customerPhone)}`}
+            className="chip chip-off gap-1"
+          >
+            <MessageSquare size={13} /> SMS
+          </a>
+          <a
+            href={`https://wa.me/${whatsappPhone(order.customerPhone)}?text=${encodeURIComponent(
+              `Hola ${order.customerName || ''}, soy el repartidor de Chifa-Pollería Lopez con tu pedido ${padOrder(order.number)}.`,
+            )}`}
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex min-h-9 shrink-0 items-center gap-1 rounded-full bg-sage px-3 text-xs font-bold text-white"
+          >
+            <MessageCircle size={13} /> Wsp
+          </a>
+        </div>
+      ) : null}
+
+      {action !== 'liquidar' && action !== 'listo' && canNav ? (
+        <div className="mt-3 grid grid-cols-2 gap-2">
+          <button
+            type="button"
+            disabled={busy}
+            onClick={onGoogle}
+            className="inline-flex min-h-11 items-center justify-center gap-1 rounded-xl bg-ink text-sm font-semibold text-cream disabled:opacity-50"
+          >
+            <Navigation size={16} /> Google Maps
+          </button>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={onWaze}
+            className="inline-flex min-h-11 items-center justify-center gap-1 rounded-xl bg-cream-dark text-sm font-semibold text-ink disabled:opacity-50"
+          >
+            <Navigation size={16} /> Waze
+          </button>
+        </div>
+      ) : null}
+
+      {action === 'ubicado' ? (
         <button
+          type="button"
           disabled={busy}
-          onClick={onNavigate}
-          className="inline-flex min-h-11 items-center justify-center gap-1 rounded-xl bg-teal-700 text-sm font-semibold text-white disabled:opacity-50"
+          onClick={onArrived}
+          className="btn-primary mt-2 w-full gap-2"
         >
-          <Navigation size={16} /> {navLabel}
+          <MapPin size={18} /> Ubicado en domicilio
         </button>
-        <button
-          disabled={busy}
-          onClick={onDelivered}
-          className="inline-flex min-h-11 items-center justify-center gap-1 rounded-xl bg-ink text-sm font-semibold text-cream disabled:opacity-50"
-        >
-          <CheckCircle2 size={16} /> Entregado
-        </button>
-      </div>
-      <button
-        disabled={busy}
-        onClick={onRelease}
-        className="mt-2 w-full text-center text-xs font-medium text-gray-400 hover:text-red-600"
-      >
-        Soltar pedido
-      </button>
+      ) : null}
+
+      {action === 'entregado' ? (
+        <div className="mt-2 space-y-2">
+          <p className="text-xs font-medium text-ink/55">
+            Ya estás ubicado. Toma la foto de entrega para marcar Entregado.
+          </p>
+          {preview ? (
+            <img src={preview} alt="Entrega" className="h-28 w-full rounded-xl object-cover" />
+          ) : null}
+          <input
+            ref={fileRef}
+            type="file"
+            accept="image/*"
+            capture="environment"
+            className="hidden"
+            onChange={(e) => void pickPhoto(e.target.files?.[0] || null)}
+          />
+          <button
+            type="button"
+            disabled={busy || uploading}
+            onClick={() => fileRef.current?.click()}
+            className="btn-primary w-full gap-2 disabled:opacity-50"
+          >
+            <Camera size={18} />
+            {uploading ? 'Subiendo foto…' : 'Entregado · tomar foto'}
+          </button>
+        </div>
+      ) : null}
+
+      {action === 'liquidar' || action === 'listo' ? (
+        <div className="mt-2 space-y-2 rounded-2xl border border-dashed border-ink/12 bg-cream px-3 py-3">
+          {action === 'listo' ? (
+            <p className="flex items-center gap-2 text-sm font-semibold text-sage">
+              <CheckCircle2 size={16} /> Liquidado
+              {order.driverCollectedMethod ? ` · ${order.driverCollectedMethod}` : ''}
+            </p>
+          ) : (
+            <>
+              <p className="flex items-center gap-1 text-xs font-bold uppercase tracking-wide text-ink/60">
+                <Wallet size={14} /> En base · reportar cobro del cliente
+              </p>
+              {order.deliveryPhotoUrl ? (
+                <img
+                  src={order.deliveryPhotoUrl}
+                  alt="Foto entrega"
+                  className="h-20 w-full rounded-xl object-cover"
+                />
+              ) : null}
+              {order.paid ? (
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => onSettle('ya_pagado')}
+                  className="btn-primary w-full disabled:opacity-50"
+                >
+                  Confirmar liquidación (ya pagado)
+                </button>
+              ) : (
+                <>
+                  <div className="seg w-full">
+                    {(['efectivo', 'yape', 'plin'] as const).map((m) => (
+                      <button
+                        key={m}
+                        type="button"
+                        onClick={() => setSettleMethod(m)}
+                        className={`seg-btn flex-1 capitalize ${
+                          settleMethod === m ? 'seg-btn-on' : ''
+                        }`}
+                      >
+                        {m}
+                      </button>
+                    ))}
+                  </div>
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => onSettle(settleMethod, order.total)}
+                    className="btn-primary w-full disabled:opacity-50"
+                  >
+                    Liquidar {soles(order.total)} · {settleMethod}
+                  </button>
+                </>
+              )}
+            </>
+          )}
+        </div>
+      ) : null}
     </article>
   )
 }

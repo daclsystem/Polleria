@@ -72,7 +72,7 @@ export function Clientes() {
         />
         <button
           className="rounded-xl bg-ember px-4 py-2 text-sm font-semibold text-white"
-          onClick={() => setEditing({ name: '', phone: '937493214', address: '', email: '' })}
+          onClick={() => setEditing({ name: '', phone: '', address: '', email: '' })}
         >
           Nuevo cliente
         </button>

@@ -274,6 +274,9 @@ crudRouter.put('/settings', authRequired, requireRoles('admin'), async (req, res
     ruc?: string
     igvRate?: number
     hours?: string
+    deliveryFee?: number
+    originLat?: number
+    originLng?: number
   }
   const pool = await getPool()
   await pool
@@ -285,10 +288,14 @@ crudRouter.put('/settings', authRequired, requireRoles('admin'), async (req, res
     .input('ruc', sql.NVarChar, s.ruc || '')
     .input('igv', sql.Decimal(5, 4), Number(s.igvRate ?? 0.18))
     .input('hours', sql.NVarChar, s.hours || '')
+    .input('deliveryFee', sql.Decimal(10, 2), Number(s.deliveryFee ?? 5))
+    .input('originLat', sql.Decimal(10, 7), s.originLat != null ? s.originLat : null)
+    .input('originLng', sql.Decimal(10, 7), s.originLng != null ? s.originLng : null)
     .query(`
       UPDATE dbo.Settings SET
         Name=@name, Slogan=@slogan, Address=@address, Phone=@phone,
-        Ruc=@ruc, IgvRate=@igv, Hours=@hours, UpdatedAt=SYSUTCDATETIME()
+        Ruc=@ruc, IgvRate=@igv, Hours=@hours, DeliveryFee=@deliveryFee,
+        OriginLat=@originLat, OriginLng=@originLng, UpdatedAt=SYSUTCDATETIME()
       WHERE Id=1
     `)
   res.json({ ok: true })

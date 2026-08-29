@@ -29,6 +29,8 @@ import {
   apiSaveSettings,
   apiSaveUser,
   apiUpdateOrderStatus,
+  apiStockRetorno,
+  apiStockSacar,
   apiUpdateReservationStatus,
   apiUpdateTable,
   getApiToken,
@@ -38,6 +40,7 @@ import {
   connectRealtime,
   disconnectRealtime,
   onRealtimeEvent,
+  onRealtimeReconnect,
   onRealtimeStatus,
   orderBelongsToStaff,
   orderLabel,
@@ -98,6 +101,82 @@ function isGuid(id?: string) {
   return Boolean(id && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id))
 }
 
+const KITCHEN_WAVE_RANK: Record<string, number> = { pendiente: 1, en_cocina: 2, listo: 3 }
+const KITCHEN_WAVE_KEY = 'polleria-kitchen-waves'
+
+function readKitchenWaveOverrides(): Record<string, string> {
+  try {
+    return JSON.parse(sessionStorage.getItem(KITCHEN_WAVE_KEY) || '{}') as Record<string, string>
+  } catch {
+    return {}
+  }
+}
+
+function writeKitchenWaveOverrides(map: Record<string, string>) {
+  try {
+    sessionStorage.setItem(KITCHEN_WAVE_KEY, JSON.stringify(map))
+  } catch {
+    /* ignore */
+  }
+}
+
+function rememberKitchenWave(itemId: string | undefined, wave: 'pendiente' | 'en_cocina' | 'listo') {
+  if (!itemId) return
+  const map = readKitchenWaveOverrides()
+  const prev = map[itemId]
+  if (!prev || (KITCHEN_WAVE_RANK[wave] || 0) >= (KITCHEN_WAVE_RANK[prev] || 0)) {
+    map[itemId] = wave
+    writeKitchenWaveOverrides(map)
+  }
+}
+
+function clearKitchenWavesForOrder(items: OrderItem[]) {
+  const map = readKitchenWaveOverrides()
+  let changed = false
+  for (const it of items) {
+    if (it.id && map[it.id]) {
+      delete map[it.id]
+      changed = true
+    }
+  }
+  if (changed) writeKitchenWaveOverrides(map)
+}
+
+/** No regresar una ronda de cocina ya avanzada (API viejo / sync lento). */
+function mergeKitchenStatus(
+  api: OrderItem['kitchenStatus'],
+  local: OrderItem['kitchenStatus'],
+  override?: string,
+): OrderItem['kitchenStatus'] {
+  const candidates = [api, local, override].filter(Boolean) as string[]
+  if (!candidates.length) return api
+  let best = candidates[0]
+  for (const c of candidates) {
+    if ((KITCHEN_WAVE_RANK[c] || 0) > (KITCHEN_WAVE_RANK[best] || 0)) best = c
+  }
+  if (best === 'pendiente' || best === 'en_cocina' || best === 'listo') return best
+  return api
+}
+
+function mergeOrdersKitchenWaves(apiOrders: Order[], prevOrders: Order[]): Order[] {
+  const localByItem = new Map<string, OrderItem['kitchenStatus']>()
+  for (const o of prevOrders) {
+    for (const it of o.items) {
+      if (it.id && it.kitchenStatus) localByItem.set(it.id, it.kitchenStatus)
+    }
+  }
+  const overrides = readKitchenWaveOverrides()
+  return apiOrders.map((o) => ({
+    ...o,
+    items: o.items.map((it) => {
+      if (!it.id) return it
+      const merged = mergeKitchenStatus(it.kitchenStatus, localByItem.get(it.id), overrides[it.id])
+      if (merged === it.kitchenStatus) return it
+      return { ...it, kitchenStatus: merged }
+    }),
+  }))
+}
+
 export type LiveNotice = { id: string; text: string; tone: 'info' | 'ok' | 'warn' }
 
 interface NewOrderInput {
@@ -132,6 +211,10 @@ interface StoreApi {
   reloadFromApi: () => Promise<void>
   createOrder: (input: NewOrderInput) => Promise<Order>
   updateOrderStatus: (id: string, status: OrderStatus, kitchenFrom?: 'pendiente' | 'en_cocina') => void
+  /** Cocina: sacar del almacén (antes o durante prep) */
+  stockSacar: (id: string, itemIds?: string[]) => Promise<void>
+  /** Retorno a almacén */
+  stockRetorno: (id: string, itemIds?: string[]) => Promise<void>
   addItemsToOrder: (id: string, newItems: OrderItem[], createdBy: string) => void
   payOrder: (id: string, method: PaymentMethod) => void
   cancelOrder: (id: string) => void
@@ -220,18 +303,18 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     setApiError(null)
     try {
       const data = await apiBootstrap()
-      setState({
+      setState((prev) => ({
         users: data.users as User[],
         products: data.products as Product[],
         tables: data.tables as Table[],
         inventory: data.inventory as InventoryItem[],
         settings: data.settings as Settings,
-        orders: data.orders as Order[],
+        orders: mergeOrdersKitchenWaves(data.orders as Order[], prev.orders),
         customers: data.customers as Customer[],
         reservations: data.reservations as Reservation[],
         branches: data.branches as AppState['branches'],
         nextOrderNumber: data.nextOrderNumber,
-      })
+      }))
     } catch (e) {
       setApiError((e as Error).message)
     } finally {
@@ -250,7 +333,34 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       const role = readStaffRole()
       connectRealtime(roomsForStaffRole(role))
       const offStatus = onRealtimeStatus(setLive)
+      const offReconnect = onRealtimeReconnect(() => scheduleReload())
+      const onVisible = () => {
+        if (document.visibilityState === 'visible') scheduleReload()
+      }
+      document.addEventListener('visibilitychange', onVisible)
+      window.addEventListener('focus', onVisible)
       const offEvent = onRealtimeEvent((event: RealtimeEvent, payload) => {
+        if (event === 'inventory:updated') {
+          const data = payload as {
+            inventory?: InventoryItem[]
+            lowStock?: Array<{ name: string; stock: number; minStock: number }>
+          }
+          if (Array.isArray(data.inventory)) {
+            setState((prev) => ({ ...prev, inventory: data.inventory as InventoryItem[] }))
+          } else {
+            scheduleReload()
+          }
+          const low = data.lowStock || []
+          if (low.length && shouldNotifyRole(readStaffRole(), event)) {
+            const names = low
+              .slice(0, 3)
+              .map((x) => x.name)
+              .join(', ')
+            pushNotice(`Stock bajo: ${names}${low.length > 3 ? '…' : ''}`, 'warn')
+          }
+          return
+        }
+
         scheduleReload()
         const { n, name, status, createdByUserId, createdBy } = orderLabel(payload)
         const currentRole = readStaffRole()
@@ -299,6 +409,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         clearInterval(t)
         offStatus()
         offEvent()
+        offReconnect()
+        document.removeEventListener('visibilitychange', onVisible)
+        window.removeEventListener('focus', onVisible)
         disconnectRealtime()
         setLive(false)
       }
@@ -340,6 +453,13 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             ? input.paymentMethod
             : 'yape'
           : undefined)
+      // Web/delivery: siempre pendiente de liquidación (repartidor o caja cobran después)
+      const isCod = input.source === 'web' || input.type === 'delivery'
+      const paid = isCod ? false : input.paid
+      const paymentMethod = isCod ? ('pendiente' as const) : input.paymentMethod
+      const codCashAmount =
+        input.codCashAmount ??
+        (codMethod === 'efectivo' ? money.total : undefined)
 
       try {
         const res = await apiCreateOrder({
@@ -363,7 +483,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           total: money.total,
           createdByUserId: guid(input.createdByUserId) || guid(input.createdBy),
           codPaymentMethod: codMethod,
-          codCashAmount: input.codCashAmount,
+          codCashAmount,
           items: input.items.map((i) => ({
             productId: guid(i.productId),
             name: i.name,
@@ -397,8 +517,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           items: input.items,
           discount: input.discount ?? 0,
           ...money,
-          paymentMethod: input.paymentMethod,
-          paid: input.paid,
+          paymentMethod,
+          paid,
+          codPaymentMethod: codMethod,
+          codCashAmount,
           createdAt: new Date().toISOString(),
           updatedAt: new Date().toISOString(),
           createdBy: input.createdBy,
@@ -437,13 +559,18 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             if (!from) return it
             const wave = it.kitchenStatus || (filterKitchenItems([it], prev.products).length ? 'pendiente' : null)
             if (status === 'en_cocina' && from === 'pendiente' && wave === 'pendiente') {
+              rememberKitchenWave(it.id, 'en_cocina')
               return { ...it, kitchenStatus: 'en_cocina' as const }
             }
             if (status === 'listo' && from === 'en_cocina' && wave === 'en_cocina') {
+              rememberKitchenWave(it.id, 'listo')
               return { ...it, kitchenStatus: 'listo' as const }
             }
             return it
           })
+          if (status === 'entregado' || status === 'cancelado') {
+            clearKitchenWavesForOrder(o.items)
+          }
           return { ...o, status, items, updatedAt: new Date().toISOString() }
         })
         const order = orders.find((o) => o.id === id)
@@ -460,11 +587,80 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       })
       void apiUpdateOrderStatus(id, status, kitchenFrom)
         .then(() => {
+          // No forzar reload inmediato en rondas de cocina: el API remoto aún puede
+          // no persistir KitchenStatus y borraría “En fuego”. El sync periódico / merge lo cuida.
+          if (kitchenFrom) return
           void reloadFromApi()
         })
         .catch((e) => setApiError((e as Error).message))
     },
     [patchLocal, reloadFromApi],
+  )
+
+  const stockSacar = useCallback(
+    async (id: string, itemIds?: string[]) => {
+      requireApi()
+      try {
+        const res = await apiStockSacar(id, itemIds)
+        const ids = new Set(res.itemIds || [])
+        patchLocal((prev) => ({
+          ...prev,
+          orders: prev.orders.map((o) =>
+            o.id !== id
+              ? o
+              : {
+                  ...o,
+                  items: o.items.map((it) =>
+                    it.id && ids.has(it.id) ? { ...it, stockDeducted: true } : it,
+                  ),
+                },
+          ),
+        }))
+        if (res.lowStock?.length) {
+          const names = (res.lowStock as Array<{ name: string }>)
+            .slice(0, 3)
+            .map((x) => x.name)
+            .join(', ')
+          pushNotice(`Stock bajo tras sacar: ${names}`, 'warn')
+        } else {
+          pushNotice('Insumos sacados del almacén', 'ok')
+        }
+        void reloadFromApi()
+      } catch (e) {
+        setApiError((e as Error).message)
+        throw e
+      }
+    },
+    [patchLocal, pushNotice, reloadFromApi],
+  )
+
+  const stockRetorno = useCallback(
+    async (id: string, itemIds?: string[]) => {
+      requireApi()
+      try {
+        const res = await apiStockRetorno(id, itemIds)
+        const ids = new Set(res.itemIds || [])
+        patchLocal((prev) => ({
+          ...prev,
+          orders: prev.orders.map((o) =>
+            o.id !== id
+              ? o
+              : {
+                  ...o,
+                  items: o.items.map((it) =>
+                    it.id && ids.has(it.id) ? { ...it, stockDeducted: false } : it,
+                  ),
+                },
+          ),
+        }))
+        pushNotice('Retorno a almacén registrado', 'ok')
+        void reloadFromApi()
+      } catch (e) {
+        setApiError((e as Error).message)
+        throw e
+      }
+    },
+    [patchLocal, pushNotice, reloadFromApi],
   )
 
   const addItemsToOrder = useCallback(
@@ -794,6 +990,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       reloadFromApi,
       createOrder,
       updateOrderStatus,
+      stockSacar,
+      stockRetorno,
       addItemsToOrder,
       payOrder,
       cancelOrder,
@@ -826,6 +1024,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       reloadFromApi,
       createOrder,
       updateOrderStatus,
+      stockSacar,
+      stockRetorno,
       addItemsToOrder,
       payOrder,
       cancelOrder,

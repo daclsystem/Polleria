@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Printer, Usb, Wifi, Monitor, TestTube2 } from 'lucide-react'
+import { MapPin, Printer, Usb, Wifi, Monitor, TestTube2 } from 'lucide-react'
 import { useStore } from '../store/StoreContext'
 import type { PrinterConfig, PrinterDriver, PrinterSetup, Settings } from '../types'
 import { DEFAULT_PRINTER } from '../types'
@@ -214,10 +214,30 @@ export function Configuracion() {
   const { state, saveSettings, resetDemo } = useStore()
   const [form, setForm] = useState<Settings>(state.settings)
   const [printerSaved, setPrinterSaved] = useState(false)
+  const [detectingLoc, setDetectingLoc] = useState(false)
 
   const printers = form.printers ?? defaultSetup()
 
-  const set = (k: keyof Settings, v: string | number) => setForm({ ...form, [k]: v })
+  const set = (k: keyof Settings, v: string | number | undefined) => setForm({ ...form, [k]: v })
+
+  const detectLocation = () => {
+    if (!navigator.geolocation) {
+      alert('Tu navegador no soporta geolocalización')
+      return
+    }
+    setDetectingLoc(true)
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        setForm({ ...form, originLat: pos.coords.latitude, originLng: pos.coords.longitude })
+        setDetectingLoc(false)
+      },
+      (err) => {
+        alert(`Error al obtener ubicación: ${err.message}`)
+        setDetectingLoc(false)
+      },
+      { enableHighAccuracy: true, timeout: 15000 },
+    )
+  }
 
   const setPrinter = (which: keyof PrinterSetup, config: PrinterConfig) => {
     setForm({ ...form, printers: { ...printers, [which]: config } })
@@ -279,6 +299,57 @@ export function Configuracion() {
             />
           </Field>
         </div>
+
+        <div className="rounded-xl border border-ink/10 bg-cream/50 p-3 space-y-2">
+          <div className="flex items-center gap-2">
+            <MapPin size={16} className="text-ember" />
+            <span className="font-semibold text-sm">Ubicación del local (origen delivery)</span>
+          </div>
+          <p className="text-xs text-ink/50">
+            Esta ubicación se usa para calcular rutas de delivery y mostrar el local en el mapa.
+          </p>
+          <div className="grid grid-cols-2 gap-2">
+            <Field label="Latitud">
+              <input
+                type="number"
+                step="0.0000001"
+                className={inputClass}
+                value={form.originLat ?? ''}
+                onChange={(e) => set('originLat', e.target.value ? Number(e.target.value) : undefined)}
+                placeholder="-13.1083"
+              />
+            </Field>
+            <Field label="Longitud">
+              <input
+                type="number"
+                step="0.0000001"
+                className={inputClass}
+                value={form.originLng ?? ''}
+                onChange={(e) => set('originLng', e.target.value ? Number(e.target.value) : undefined)}
+                placeholder="-76.0114"
+              />
+            </Field>
+          </div>
+          <button
+            type="button"
+            onClick={detectLocation}
+            disabled={detectingLoc}
+            className="w-full rounded-lg bg-ink py-2 text-sm font-semibold text-cream disabled:opacity-50"
+          >
+            {detectingLoc ? 'Detectando…' : 'Detectar mi ubicación actual'}
+          </button>
+          {form.originLat && form.originLng ? (
+            <a
+              href={`https://www.google.com/maps?q=${form.originLat},${form.originLng}`}
+              target="_blank"
+              rel="noreferrer"
+              className="block text-center text-xs text-ember hover:underline"
+            >
+              Ver en Google Maps
+            </a>
+          ) : null}
+        </div>
+
         <button className="w-full rounded-xl bg-ember py-3 font-semibold text-white">Guardar local</button>
       </form>
 

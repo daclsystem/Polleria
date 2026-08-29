@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Printer, Volume2 } from 'lucide-react'
+import { Bike, Clock, Printer, Volume2 } from 'lucide-react'
 import { elapsedMinutes, padOrder } from '../lib/format'
 import { printTicket } from '../lib/print'
 import { playSound, unlockSounds } from '../lib/sounds'
@@ -15,7 +15,7 @@ import { PageTitle } from '../components/ui'
 const COLS: { id: KitchenWave; title: string; hint: string; advanceTo: OrderStatus }[] = [
   { id: 'pendiente', title: 'Recibidos', hint: 'Nuevos y adicionales', advanceTo: 'en_cocina' },
   { id: 'en_cocina', title: 'En fuego', hint: 'Preparando', advanceTo: 'listo' },
-  { id: 'listo', title: 'Listos', hint: 'Para entregar', advanceTo: 'entregado' },
+  { id: 'listo', title: 'Listos', hint: 'Para entregar / repartir', advanceTo: 'entregado' },
 ]
 
 type KitchenTicket = {
@@ -26,8 +26,18 @@ type KitchenTicket = {
   isAdditional: boolean
 }
 
+function typeBadge(order: Order) {
+  if (order.type === 'delivery' || order.type === 'web') {
+    return { label: 'Delivery', className: 'bg-teal-600 text-white' }
+  }
+  if (order.type === 'llevar') {
+    return { label: 'Recojo', className: 'bg-amber-500 text-white' }
+  }
+  return { label: order.tableNumber ? `Mesa ${order.tableNumber}` : 'Salón', className: 'bg-ink/80 text-cream' }
+}
+
 export function Cocina() {
-  const { state, updateOrderStatus } = useStore()
+  const { state, updateOrderStatus, stockSacar, stockRetorno } = useStore()
   const products = state.products
 
   const tickets = useMemo(() => {
@@ -40,7 +50,6 @@ export function Cocina() {
       const pendiente = filterKitchenWave(o.items, products, 'pendiente')
       const enFuego = filterKitchenWave(o.items, products, 'en_cocina')
       const listos = filterKitchenWave(o.items, products, 'listo')
-      const wavesActive = [pendiente.length > 0, enFuego.length > 0, listos.length > 0].filter(Boolean).length
 
       if (pendiente.length) {
         list.push({
@@ -48,7 +57,7 @@ export function Cocina() {
           order: o,
           wave: 'pendiente',
           items: pendiente,
-          isAdditional: wavesActive > 1 || o.status === 'en_cocina' || enFuego.length > 0 || listos.length > 0,
+          isAdditional: enFuego.length > 0 || listos.length > 0,
         })
       }
       if (enFuego.length) {
@@ -60,7 +69,10 @@ export function Cocina() {
           isAdditional: false,
         })
       }
-      if (listos.length && o.status !== 'entregado') {
+      // Delivery con repartidor asignado: sale de cocina, lo lleva el repartidor
+      const isDeliveryWithDriver =
+        (o.type === 'delivery' || o.type === 'web') && Boolean(o.driverId)
+      if (listos.length && o.status !== 'entregado' && !isDeliveryWithDriver) {
         list.push({
           key: `${o.id}:listo`,
           order: o,
@@ -76,6 +88,12 @@ export function Cocina() {
   const knownPendientes = useRef<Set<string>>(new Set())
   const primed = useRef(false)
   const [soundOn, setSoundOn] = useState(false)
+  const [now, setNow] = useState(() => new Date())
+
+  useEffect(() => {
+    const id = window.setInterval(() => setNow(new Date()), 30_000)
+    return () => window.clearInterval(id)
+  }, [])
 
   useEffect(() => {
     const ids = new Set(tickets.filter((t) => t.wave === 'pendiente').map((t) => t.key))
@@ -99,8 +117,8 @@ export function Cocina() {
   }
 
   return (
-    <div>
-      <div className="mb-5 flex flex-wrap items-end justify-between gap-3">
+    <div className="flex h-[calc(100dvh-9.5rem)] flex-col gap-3 overflow-hidden sm:h-[calc(100dvh-8rem)] lg:h-[calc(100dvh-6.5rem)]">
+      <div className="flex shrink-0 flex-wrap items-end justify-between gap-3">
         <PageTitle title="Pantalla de cocina" hint={`${tickets.length} tickets activos`} />
         <div className="flex items-center gap-2">
           {!soundOn ? (
@@ -112,14 +130,17 @@ export function Cocina() {
               <Volume2 size={16} /> Activar sonido
             </button>
           ) : (
-            <span className="rounded-full bg-white/10 px-3 py-1.5 text-xs text-cream/70">Sonido ON</span>
+            <span className="rounded-full bg-ink/10 px-3 py-1.5 text-xs font-semibold text-ink/60">Sonido ON</span>
           )}
-          <div className="rounded-full bg-ink px-4 py-2 font-display text-xl text-gold">
-            {new Date().toLocaleTimeString('es-PE', { hour: '2-digit', minute: '2-digit' })}
+          <div className="inline-flex items-center gap-1.5 rounded-full bg-ink px-3.5 py-2 font-display text-lg text-gold tabular-nums sm:text-xl">
+            <Clock size={14} className="opacity-70" />
+            {now.toLocaleTimeString('es-PE', { hour: '2-digit', minute: '2-digit' })}
           </div>
         </div>
       </div>
-      <div className="flex gap-4 overflow-x-auto pb-2 lg:grid lg:grid-cols-3 lg:overflow-visible">
+      <p className="shrink-0 text-[11px] font-medium text-ink/45">Desliza horizontal ← → para ver Recibidos · En fuego · Listos</p>
+
+      <div className="-mx-1 flex min-h-0 flex-1 gap-3 overflow-x-auto overflow-y-hidden px-1 pb-2 [scrollbar-gutter:stable] snap-x snap-mandatory">
         {COLS.map((col) => {
           const colTickets = tickets
             .filter((t) => t.wave === col.id)
@@ -127,14 +148,27 @@ export function Cocina() {
           return (
             <section
               key={col.id}
-              className="w-[min(86vw,22rem)] shrink-0 rounded-3xl bg-ink p-4 text-cream lg:w-auto"
+              className="card flex h-full w-[min(85vw,20rem)] shrink-0 snap-start flex-col overflow-hidden sm:w-[22rem]"
             >
-              <div className="mb-3 flex items-baseline justify-between">
-                <h2 className="font-display text-2xl text-gold">{col.title}</h2>
-                <span className="text-sm text-cream/40">{colTickets.length}</span>
+              <div className="shrink-0 border-b border-ink/10 px-4 py-3">
+                <div className="flex items-baseline justify-between gap-2">
+                  <h2 className="font-display text-xl text-ember sm:text-2xl">{col.title}</h2>
+                  <span
+                    className={`rounded-full px-2.5 py-0.5 text-xs font-bold tabular-nums ${
+                      colTickets.length > 0 ? 'bg-ember text-white' : 'bg-ink/10 text-ink/40'
+                    }`}
+                  >
+                    {colTickets.length}
+                  </span>
+                </div>
+                <p className="mt-1 text-[11px] leading-snug text-ink/45">
+                  {col.id === 'pendiente'
+                    ? 'Nuevos; si la mesa ya cocina, sale como adicional'
+                    : col.hint}
+                </p>
               </div>
-              <p className="mb-4 text-xs text-cream/40">{col.hint}</p>
-              <div className="space-y-3">
+
+              <div className="min-h-0 flex-1 space-y-2.5 overflow-y-auto overscroll-contain bg-cream/50 p-3 [-webkit-overflow-scrolling:touch]">
                 {colTickets.map((t) => (
                   <KitchenCard
                     key={t.key}
@@ -150,6 +184,7 @@ export function Cocina() {
                           notes: [
                             t.isAdditional ? 'ADICIONAL' : '',
                             t.order.source === 'web' ? 'WEB / APP' : '',
+                            t.order.type === 'delivery' || t.order.type === 'web' ? 'DELIVERY' : '',
                             t.order.notes || '',
                           ]
                             .filter(Boolean)
@@ -160,15 +195,34 @@ export function Cocina() {
                       )
                     }
                     onAdvance={() => {
+                      // Delivery: cocina no marca “entregado”; eso lo hace el repartidor
+                      if (
+                        col.advanceTo === 'entregado' &&
+                        (t.order.type === 'delivery' || t.order.type === 'web')
+                      ) {
+                        return
+                      }
                       if (col.advanceTo === 'listo') playSound('listo')
                       updateOrderStatus(t.order.id, col.advanceTo, t.wave === 'listo' ? undefined : t.wave)
+                    }}
+                    hideAdvance={
+                      col.id === 'listo' &&
+                      (t.order.type === 'delivery' || t.order.type === 'web')
+                    }
+                    onSacar={() => {
+                      const ids = t.items.map((i) => i.id).filter(Boolean) as string[]
+                      void stockSacar(t.order.id, ids.length ? ids : undefined)
+                    }}
+                    onRetorno={() => {
+                      const ids = t.items.map((i) => i.id).filter(Boolean) as string[]
+                      void stockRetorno(t.order.id, ids.length ? ids : undefined)
                     }}
                   />
                 ))}
                 {colTickets.length === 0 ? (
-                  <p className="rounded-xl border border-dashed border-white/10 p-6 text-center text-sm text-cream/30">
-                    Vacío
-                  </p>
+                  <div className="flex min-h-[8rem] items-center justify-center rounded-xl border border-dashed border-ink/12 px-4 py-8 text-center">
+                    <p className="text-sm text-ink/30">Vacío</p>
+                  </div>
                 ) : null}
               </div>
             </section>
@@ -186,6 +240,9 @@ function KitchenCard({
   isAdditional,
   onAdvance,
   onPrint,
+  onSacar,
+  onRetorno,
+  hideAdvance,
 }: {
   order: Order
   kitchenItems: Order['items']
@@ -193,44 +250,113 @@ function KitchenCard({
   isAdditional: boolean
   onAdvance: () => void
   onPrint: () => void
+  onSacar: () => void
+  onRetorno: () => void
+  hideAdvance?: boolean
 }) {
   const mins = elapsedMinutes(order.updatedAt || order.createdAt)
   const late = mins >= 15 && wave !== 'listo'
+  const isDelivery = order.type === 'delivery' || order.type === 'web'
   const btn =
-    wave === 'pendiente' ? 'Empezar' : wave === 'en_cocina' ? 'Marcar listo' : 'Entregar'
+    wave === 'pendiente'
+      ? 'Empezar'
+      : wave === 'en_cocina'
+        ? 'Marcar listo'
+        : isDelivery
+          ? 'Listo p/ repartir'
+          : 'Entregar'
+  const badge = typeBadge(order)
+  const who =
+    isDelivery
+      ? order.customerName || 'Cliente'
+      : order.tableNumber
+        ? `Mesa ${order.tableNumber}`
+        : order.customerName || 'Cliente'
+
+  const canSacar = kitchenItems.some((i) => !i.stockDeducted)
+  const canRetorno = kitchenItems.some((i) => i.stockDeducted)
+
   return (
-    <article className={`rounded-2xl bg-cream p-4 text-ink ${late ? 'ring-2 ring-ember' : ''} ${isAdditional ? 'ring-2 ring-amber-400' : ''}`}>
-      <div className="flex items-start justify-between">
-        <div>
-          <p className="font-display text-2xl">{padOrder(order.number)}</p>
-          <p className="text-xs text-ink/50">
-            {order.tableNumber ? `Mesa ${order.tableNumber}` : order.customerName} · {order.type}
-            {order.source === 'web' ? ' · APP' : ''}
+    <article
+      className={`card rounded-xl p-3.5 text-ink ${late ? 'ring-2 ring-ember' : ''} ${isAdditional ? 'ring-2 ring-amber-400' : ''}`}
+    >
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-1.5">
+            <p className="font-display text-xl leading-none sm:text-2xl">{padOrder(order.number)}</p>
+            <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${badge.className}`}>
+              {badge.label}
+            </span>
+            {order.source === 'web' ? (
+              <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-bold text-emerald-800">APP</span>
+            ) : null}
+          </div>
+          <p className="mt-1 truncate text-xs text-ink/55">
+            {who}
+            {isDelivery && order.driverId ? (
+              <span className="ml-1 inline-flex items-center gap-0.5 font-semibold text-teal-700">
+                · <Bike size={11} /> asignado
+              </span>
+            ) : null}
           </p>
           {isAdditional ? (
-            <p className="mt-1 text-[11px] font-bold tracking-wide text-amber-700 uppercase">
-              Adicional · misma mesa
-            </p>
+            <p className="mt-1 text-[11px] font-bold tracking-wide text-amber-700 uppercase">Adicional · lo nuevo</p>
           ) : null}
         </div>
-        <span className={`rounded-full px-2 py-0.5 text-xs font-bold ${late ? 'bg-ember text-white' : 'bg-ink/10'}`}>
+        <span className={`shrink-0 rounded-full px-2 py-0.5 text-xs font-bold tabular-nums ${late ? 'bg-ember text-white' : 'bg-ink/10'}`}>
           {mins} min
         </span>
       </div>
-      <ul className="mt-3 space-y-1.5">
+      <ul className="mt-2.5 space-y-1">
         {kitchenItems.map((i, idx) => (
-          <li key={i.id || idx} className="text-sm">
+          <li key={i.id || idx} className="text-sm leading-snug">
             <span className="font-bold">{i.qty}×</span> {i.name}
+            {i.stockDeducted ? (
+              <span className="ml-1.5 rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] font-bold text-emerald-800">
+                sacado
+              </span>
+            ) : null}
             {i.notes ? <span className="block text-xs text-ember">{i.notes}</span> : null}
           </li>
         ))}
       </ul>
-      {order.notes ? <p className="mt-2 text-xs italic text-ink/50">{order.notes}</p> : null}
-      <div className="mt-4 grid grid-cols-[1fr_auto] gap-2">
-        <button onClick={onAdvance} className="min-h-11 rounded-xl bg-ember py-2 text-sm font-semibold text-white">
-          {btn}
-        </button>
-        <button onClick={onPrint} className="tap rounded-xl bg-white px-3" aria-label="Imprimir comanda">
+      {order.notes && !isAdditional ? <p className="mt-2 text-xs italic text-ink/50">{order.notes}</p> : null}
+      {isAdditional ? (
+        <p className="mt-2 text-[11px] text-amber-800/80">
+          Esta mesa ya tiene platos en fuego. Solo prepara lo de esta tarjeta.
+        </p>
+      ) : null}
+      {(canSacar || canRetorno) && wave !== 'listo' ? (
+        <div className="mt-2.5 grid grid-cols-2 gap-1.5">
+          <button
+            type="button"
+            disabled={!canSacar}
+            onClick={onSacar}
+            className="min-h-9 rounded-lg bg-ink/90 text-xs font-semibold text-cream disabled:opacity-35"
+          >
+            Sacar almacén
+          </button>
+          <button
+            type="button"
+            disabled={!canRetorno}
+            onClick={onRetorno}
+            className="min-h-9 rounded-lg bg-white text-xs font-semibold text-ink ring-1 ring-ink/15 disabled:opacity-35"
+          >
+            Retorno
+          </button>
+        </div>
+      ) : null}
+      <div className="mt-3 grid grid-cols-[1fr_auto] gap-2">
+        {hideAdvance ? (
+          <p className="flex min-h-11 items-center rounded-xl bg-white/90 px-3 text-xs font-semibold text-ink/70 ring-1 ring-ink/10">
+            {order.driverId ? 'Listo · con repartidor' : 'Listo · asigna repartidor en Caja'}
+          </p>
+        ) : (
+          <button onClick={onAdvance} className="min-h-11 rounded-xl bg-ember py-2 text-sm font-semibold text-white">
+            {btn}
+          </button>
+        )}
+        <button onClick={onPrint} className="tap rounded-xl bg-white px-3 ring-1 ring-ink/10" aria-label="Imprimir comanda">
           <Printer size={16} />
         </button>
       </div>

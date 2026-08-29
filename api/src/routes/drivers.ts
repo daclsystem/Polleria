@@ -56,9 +56,38 @@ function mapDeliveryOrder(o: Record<string, unknown>) {
     driverAssignedAt: o.DriverAssignedAt
       ? new Date(o.DriverAssignedAt as string).toISOString()
       : undefined,
+    driverArrivedAt: o.DriverArrivedAt
+      ? new Date(o.DriverArrivedAt as string).toISOString()
+      : undefined,
+    deliveryPhotoUrl: o.DeliveryPhotoUrl ? String(o.DeliveryPhotoUrl) : undefined,
+    driverCollectedMethod: o.DriverCollectedMethod ? String(o.DriverCollectedMethod) : undefined,
+    driverCollectedAmount:
+      o.DriverCollectedAmount != null ? Number(o.DriverCollectedAmount) : undefined,
+    driverSettledAt: o.DriverSettledAt
+      ? new Date(o.DriverSettledAt as string).toISOString()
+      : undefined,
     createdAt: new Date(o.CreatedAt as string).toISOString(),
     notes: o.Notes ? String(o.Notes) : undefined,
     codPaymentMethod: o.CodPaymentMethod ? String(o.CodPaymentMethod) : undefined,
+  }
+}
+
+async function ensureDriverFlowColumns(pool: Awaited<ReturnType<typeof getPool>>) {
+  try {
+    await pool.request().query(`
+      IF COL_LENGTH('dbo.Orders', 'DriverArrivedAt') IS NULL
+        ALTER TABLE dbo.Orders ADD DriverArrivedAt DATETIME2(0) NULL;
+      IF COL_LENGTH('dbo.Orders', 'DeliveryPhotoUrl') IS NULL
+        ALTER TABLE dbo.Orders ADD DeliveryPhotoUrl NVARCHAR(500) NULL;
+      IF COL_LENGTH('dbo.Orders', 'DriverCollectedMethod') IS NULL
+        ALTER TABLE dbo.Orders ADD DriverCollectedMethod NVARCHAR(20) NULL;
+      IF COL_LENGTH('dbo.Orders', 'DriverCollectedAmount') IS NULL
+        ALTER TABLE dbo.Orders ADD DriverCollectedAmount DECIMAL(10,2) NULL;
+      IF COL_LENGTH('dbo.Orders', 'DriverSettledAt') IS NULL
+        ALTER TABLE dbo.Orders ADD DriverSettledAt DATETIME2(0) NULL;
+    `)
+  } catch {
+    /* ignore */
   }
 }
 
@@ -262,11 +291,12 @@ driversRouter.post('/assign', authRequired, requireRoles('admin', 'cajero', 'moz
   }
 })
 
-/** Conductor: mis pedidos + disponibles para tomar */
+/** Conductor: mis entregas activas + pendientes de liquidar en base */
 driversRouter.get('/me/orders', authRequired, async (req, res) => {
   if (!isDriver(req)) return res.status(403).json({ error: 'Solo conductores' })
   try {
     const pool = await getPool()
+    await ensureDriverFlowColumns(pool)
     const driverId = req.user!.id
     const r = await pool
       .request()
@@ -274,101 +304,51 @@ driversRouter.get('/me/orders', authRequired, async (req, res) => {
       .query(`
         SELECT TOP 80 Id, Number, Type, Status, CustomerName, CustomerPhone, Address,
                AddressLat, AddressLng, Total, Paid, DeliveryFee, DeliveryDistanceKm,
-               DriverId, DriverLat, DriverLng, DriverAssignedAt, CreatedAt, UpdatedAt, Notes, CodPaymentMethod
+               DriverId, DriverLat, DriverLng, DriverAssignedAt, CreatedAt, UpdatedAt, Notes, CodPaymentMethod,
+               DriverArrivedAt, DeliveryPhotoUrl, DriverCollectedMethod, DriverCollectedAmount, DriverSettledAt
         FROM dbo.Orders
         WHERE Type IN (N'delivery', N'web')
-          AND Status IN (N'nuevo', N'en_cocina', N'listo')
-          AND (Address IS NOT NULL AND Address <> N'')
+          AND DriverId = @driverId
           AND (
-            DriverId = @driverId
-            OR DriverId IS NULL
+            Status IN (N'en_cocina', N'listo')
+            OR (Status = N'entregado' AND Paid = 0 AND DriverSettledAt IS NULL)
           )
         ORDER BY
-          CASE WHEN DriverId = @driverId THEN 0 ELSE 1 END,
-          CASE Status WHEN N'listo' THEN 0 WHEN N'en_cocina' THEN 1 ELSE 2 END,
-          CreatedAt ASC
+          CASE Status WHEN N'listo' THEN 0 WHEN N'en_cocina' THEN 1 WHEN N'entregado' THEN 2 ELSE 3 END,
+          DriverAssignedAt ASC, CreatedAt ASC
       `)
 
-    const all = r.recordset.map(mapDeliveryOrder)
-    const mine = all.filter((o) => o.driverId === driverId)
-    const available = all.filter((o) => !o.driverId && (o.status === 'listo' || o.status === 'en_cocina'))
+    const mine = r.recordset.map(mapDeliveryOrder)
     const origin = await getStoreOrigin()
 
-    res.json({ mine, available, orders: [...mine, ...available], origin })
+    res.json({ mine, available: [], orders: mine, origin })
   } catch (e) {
     res.status(500).json({ error: (e as Error).message })
   }
 })
 
-/** Conductor: tomar / reclamar un pedido libre */
-driversRouter.post('/me/claim', authRequired, async (req, res) => {
-  if (!isDriver(req)) return res.status(403).json({ error: 'Solo conductores' })
-  try {
-    const orderId = String(req.body?.orderId || '')
-    if (!isGuid(orderId)) return res.status(400).json({ error: 'orderId inválido' })
-    const pool = await getPool()
-    const driverId = req.user!.id
-
-    const result = await pool
-      .request()
-      .input('id', sql.UniqueIdentifier, orderId)
-      .input('driverId', sql.UniqueIdentifier, driverId)
-      .query(`
-        UPDATE dbo.Orders
-        SET DriverId=@driverId, DriverAssignedAt=SYSUTCDATETIME(), UpdatedAt=SYSUTCDATETIME()
-        WHERE Id=@id
-          AND Type IN (N'delivery', N'web')
-          AND Status IN (N'en_cocina', N'listo')
-          AND DriverId IS NULL
-          AND Address IS NOT NULL AND Address <> N''
-      `)
-
-    if (!result.rowsAffected[0]) {
-      return res.status(409).json({ error: 'Pedido no disponible (ya asignado o no listo)' })
-    }
-
-    const updated = await pool
-      .request()
-      .input('id', sql.UniqueIdentifier, orderId)
-      .query(`SELECT * FROM dbo.Orders WHERE Id=@id`)
-    const mapped = mapDeliveryOrder(updated.recordset[0])
-    emitEvent('order:driver', mapped, ['ops', 'caja', 'delivery'])
-    res.json({ ok: true, order: mapped })
-  } catch (e) {
-    res.status(500).json({ error: (e as Error).message })
-  }
+/** Conductor: ya no se auto-asigna. Solo mozo/caja con POST /assign. */
+driversRouter.post('/me/claim', authRequired, async (_req, res) => {
+  return res.status(403).json({
+    error: 'El repartidor no puede tomar pedidos. El mozo o caja debe asignarlo.',
+  })
 })
 
-/** Conductor: soltar pedido */
-driversRouter.post('/me/release', authRequired, async (req, res) => {
-  if (!isDriver(req)) return res.status(403).json({ error: 'Solo conductores' })
-  try {
-    const orderId = String(req.body?.orderId || '')
-    if (!isGuid(orderId)) return res.status(400).json({ error: 'orderId inválido' })
-    const pool = await getPool()
-    const result = await pool
-      .request()
-      .input('id', sql.UniqueIdentifier, orderId)
-      .input('driverId', sql.UniqueIdentifier, req.user!.id)
-      .query(`
-        UPDATE dbo.Orders
-        SET DriverId=NULL, DriverAssignedAt=NULL, UpdatedAt=SYSUTCDATETIME()
-        WHERE Id=@id AND DriverId=@driverId AND Status <> N'entregado'
-      `)
-    if (!result.rowsAffected[0]) return res.status(409).json({ error: 'No puedes soltar este pedido' })
-    res.json({ ok: true })
-  } catch (e) {
-    res.status(500).json({ error: (e as Error).message })
-  }
+/** Conductor: ya no suelta solo. Reasignación desde caja/mozo. */
+driversRouter.post('/me/release', authRequired, async (_req, res) => {
+  return res.status(403).json({
+    error: 'Para quitar o cambiar repartidor, hazlo desde Ver pedidos (mozo/caja).',
+  })
 })
 
-/** Conductor: marcar entregado */
-driversRouter.post('/me/delivered', authRequired, async (req, res) => {
+/** 1) Ubicado en el domicilio del cliente */
+driversRouter.post('/me/arrived', authRequired, async (req, res) => {
   if (!isDriver(req)) return res.status(403).json({ error: 'Solo conductores' })
   try {
     const orderId = String(req.body?.orderId || '')
     if (!isGuid(orderId)) return res.status(400).json({ error: 'orderId inválido' })
     const pool = await getPool()
+    await ensureDriverFlowColumns(pool)
     const existing = await pool
       .request()
       .input('id', sql.UniqueIdentifier, orderId)
@@ -376,16 +356,77 @@ driversRouter.post('/me/delivered', authRequired, async (req, res) => {
       .query(`SELECT TOP 1 * FROM dbo.Orders WHERE Id=@id AND DriverId=@driverId`)
     const row = existing.recordset[0]
     if (!row) return res.status(404).json({ error: 'Pedido no asignado a ti' })
-    if (row.Status === 'entregado') return res.json({ ok: true })
     if (row.Status === 'cancelado') return res.status(400).json({ error: 'Pedido cancelado' })
+    if (row.Status === 'entregado') return res.json({ ok: true, order: mapDeliveryOrder(row) })
 
     await pool
       .request()
       .input('id', sql.UniqueIdentifier, orderId)
-      .query(`UPDATE dbo.Orders SET Status=N'entregado', UpdatedAt=SYSUTCDATETIME() WHERE Id=@id`)
+      .query(`
+        UPDATE dbo.Orders
+        SET DriverArrivedAt = ISNULL(DriverArrivedAt, SYSUTCDATETIME()),
+            UpdatedAt = SYSUTCDATETIME()
+        WHERE Id=@id
+      `)
 
-    const order = { ...row, Status: 'entregado' }
-    emitEvent('order:status', order, roomsForOrderStatus('entregado'))
+    const updated = await pool
+      .request()
+      .input('id', sql.UniqueIdentifier, orderId)
+      .query(`SELECT TOP 1 * FROM dbo.Orders WHERE Id=@id`)
+    const mapped = mapDeliveryOrder(updated.recordset[0])
+    emitEvent('order:updated', mapped, ['ops', 'caja', 'delivery', 'cocina'])
+    res.json({ ok: true, order: mapped })
+  } catch (e) {
+    res.status(500).json({ error: (e as Error).message })
+  }
+})
+
+/** 2) Entregado — requiere haber marcado ubicado + foto de entrega */
+driversRouter.post('/me/delivered', authRequired, async (req, res) => {
+  if (!isDriver(req)) return res.status(403).json({ error: 'Solo conductores' })
+  try {
+    const orderId = String(req.body?.orderId || '')
+    const photoUrl = String(req.body?.photoUrl || '').trim()
+    if (!isGuid(orderId)) return res.status(400).json({ error: 'orderId inválido' })
+    if (!photoUrl || photoUrl.length < 8) {
+      return res.status(400).json({ error: 'Debes tomar/subir la foto de entrega' })
+    }
+    const pool = await getPool()
+    await ensureDriverFlowColumns(pool)
+    const existing = await pool
+      .request()
+      .input('id', sql.UniqueIdentifier, orderId)
+      .input('driverId', sql.UniqueIdentifier, req.user!.id)
+      .query(`SELECT TOP 1 * FROM dbo.Orders WHERE Id=@id AND DriverId=@driverId`)
+    const row = existing.recordset[0]
+    if (!row) return res.status(404).json({ error: 'Pedido no asignado a ti' })
+    if (row.Status === 'entregado') {
+      return res.json({ ok: true, order: mapDeliveryOrder(row) })
+    }
+    if (row.Status === 'cancelado') return res.status(400).json({ error: 'Pedido cancelado' })
+    if (!row.DriverArrivedAt) {
+      return res.status(400).json({ error: 'Primero marca Ubicado en el domicilio' })
+    }
+
+    await pool
+      .request()
+      .input('id', sql.UniqueIdentifier, orderId)
+      .input('photo', sql.NVarChar, photoUrl.slice(0, 500))
+      .query(`
+        UPDATE dbo.Orders
+        SET Status = N'entregado',
+            DeliveryPhotoUrl = @photo,
+            UpdatedAt = SYSUTCDATETIME()
+        WHERE Id = @id
+      `)
+
+    const updated = await pool
+      .request()
+      .input('id', sql.UniqueIdentifier, orderId)
+      .query(`SELECT TOP 1 * FROM dbo.Orders WHERE Id=@id`)
+    const order = updated.recordset[0]
+    const mapped = mapDeliveryOrder(order)
+    emitEvent('order:status', mapped, roomsForOrderStatus('entregado'))
     notifyOrderStatusServer(
       {
         Id: order.Id,
@@ -400,7 +441,100 @@ driversRouter.post('/me/delivered', authRequired, async (req, res) => {
       'entregado',
     ).catch((e) => console.warn('[whatsapp] driver delivered', (e as Error).message))
 
-    res.json({ ok: true })
+    res.json({ ok: true, order: mapped })
+  } catch (e) {
+    res.status(500).json({ error: (e as Error).message })
+  }
+})
+
+/**
+ * 3) En base: reportar cobro del cliente (liquidación).
+ * Si ya estaba pagado online, solo confirma liquidación.
+ */
+driversRouter.post('/me/settle', authRequired, async (req, res) => {
+  if (!isDriver(req)) return res.status(403).json({ error: 'Solo conductores' })
+  try {
+    const orderId = String(req.body?.orderId || '')
+    const method = String(req.body?.method || '').toLowerCase()
+    const amount = Number(req.body?.amount)
+    if (!isGuid(orderId)) return res.status(400).json({ error: 'orderId inválido' })
+    if (!['efectivo', 'yape', 'plin', 'ya_pagado'].includes(method)) {
+      return res.status(400).json({ error: 'method: efectivo | yape | plin | ya_pagado' })
+    }
+    const pool = await getPool()
+    await ensureDriverFlowColumns(pool)
+    const existing = await pool
+      .request()
+      .input('id', sql.UniqueIdentifier, orderId)
+      .input('driverId', sql.UniqueIdentifier, req.user!.id)
+      .query(`SELECT TOP 1 * FROM dbo.Orders WHERE Id=@id AND DriverId=@driverId`)
+    const row = existing.recordset[0]
+    if (!row) return res.status(404).json({ error: 'Pedido no asignado a ti' })
+    if (row.Status !== 'entregado') {
+      return res.status(400).json({ error: 'Solo se liquida después de Entregado' })
+    }
+    if (row.DriverSettledAt) {
+      return res.json({ ok: true, order: mapDeliveryOrder(row) })
+    }
+
+    const paidAlready = Boolean(row.Paid)
+    const finalMethod = paidAlready ? 'ya_pagado' : method
+    const finalAmount =
+      paidAlready || method === 'ya_pagado'
+        ? Number(row.Total)
+        : Number.isFinite(amount) && amount > 0
+          ? amount
+          : Number(row.Total)
+
+    if (!paidAlready && method === 'ya_pagado') {
+      return res.status(400).json({ error: 'Este pedido no figuraba pagado: indica efectivo/yape/plin' })
+    }
+
+    await pool
+      .request()
+      .input('id', sql.UniqueIdentifier, orderId)
+      .input('method', sql.NVarChar, finalMethod)
+      .input('amount', sql.Decimal(10, 2), finalAmount)
+      .input('markPaid', sql.Bit, paidAlready ? 1 : 1)
+      .query(`
+        UPDATE dbo.Orders
+        SET DriverCollectedMethod = @method,
+            DriverCollectedAmount = @amount,
+            DriverSettledAt = SYSUTCDATETIME(),
+            Paid = CASE WHEN @markPaid = 1 THEN 1 ELSE Paid END,
+            UpdatedAt = SYSUTCDATETIME()
+        WHERE Id = @id
+      `)
+
+    // Registrar pago en caja si cobró en puerta
+    if (!paidAlready && finalMethod !== 'ya_pagado') {
+      try {
+        const { v4: uuid } = await import('uuid')
+        await pool
+          .request()
+          .input('id', sql.UniqueIdentifier, uuid())
+          .input('orderId', sql.UniqueIdentifier, orderId)
+          .input('method', sql.NVarChar, finalMethod === 'plin' ? 'yape' : finalMethod)
+          .input('amount', sql.Decimal(10, 2), finalAmount)
+          .input('userId', sql.UniqueIdentifier, req.user!.id)
+          .query(`
+            IF OBJECT_ID(N'dbo.OrderPayments', N'U') IS NOT NULL
+            INSERT INTO dbo.OrderPayments (Id, OrderId, Method, Amount, CreatedByUserId)
+            VALUES (@id, @orderId, @method, @amount, @userId)
+          `)
+      } catch {
+        /* ignore if payments schema differs */
+      }
+    }
+
+    const updated = await pool
+      .request()
+      .input('id', sql.UniqueIdentifier, orderId)
+      .query(`SELECT TOP 1 * FROM dbo.Orders WHERE Id=@id`)
+    const mapped = mapDeliveryOrder(updated.recordset[0])
+    emitEvent('order:paid', mapped, ['ops', 'caja', 'delivery'])
+    emitEvent('order:updated', mapped, ['ops', 'caja', 'delivery'])
+    res.json({ ok: true, order: mapped })
   } catch (e) {
     res.status(500).json({ error: (e as Error).message })
   }

@@ -4,7 +4,7 @@ import { PhoneOtpLogin } from '../components/PhoneOtpLogin'
 import { ROLE_HOME, type Role } from '../types'
 import { APP_VERSION } from '../lib/version'
 import { setApiToken } from '../lib/apiClient'
-import { DEFAULT_OTP_FALLBACK, DEFAULT_PHONE } from '../lib/authDefaults'
+import { DEFAULT_OTP_FALLBACK } from '../lib/authDefaults'
 
 export function Login() {
   const { user, loginWithSession } = useAuth()
@@ -24,9 +24,6 @@ export function Login() {
           <img src="/polleria/logo-lopez.png" alt="Chifa Pollería Lopez" className="mx-auto h-36 w-auto rounded-2xl shadow-2xl" />
           <h1 className="mt-8 text-4xl font-black tracking-tight sm:text-5xl">Sistema de Gestión</h1>
           <p className="mt-3 text-lg text-green-200">Chifa-Pollería Lopez · Acceso por celular</p>
-          <p className="mt-2 text-xs text-green-100/70">
-            Default {DEFAULT_PHONE} · código respaldo {DEFAULT_OTP_FALLBACK}
-          </p>
         </div>
       </div>
 
@@ -40,7 +37,7 @@ export function Login() {
             accountType="staff"
             purpose="login"
             title="Entrar al Sistema"
-            hint={`Celular registrado. WhatsApp te manda el código; si está caído usa ${DEFAULT_OTP_FALLBACK}.`}
+            hint={`Escribe tu celular registrado. WhatsApp te manda el código; si falla usa ${DEFAULT_OTP_FALLBACK}.`}
             onSuccess={async (data) => {
               if (!data.token || !data.user) throw new Error('Respuesta inválida del API')
               setApiToken(data.token, 'staff')

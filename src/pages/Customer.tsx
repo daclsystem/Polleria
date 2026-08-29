@@ -1,13 +1,15 @@
-import { useMemo, useState } from 'react'
-import { Link, useNavigate, useParams } from 'react-router-dom'
+import { useEffect, useMemo, useState } from 'react'
+import { Link, Navigate, useNavigate, useParams } from 'react-router-dom'
 import { ArrowLeft, MapPin, Minus, Plus, Printer, ShoppingBag, Trash2 } from 'lucide-react'
 import { useStore } from '../store/StoreContext'
 import { padOrder, soles } from '../lib/format'
 import { printTicket } from '../lib/print'
-import type { OrderItem } from '../types'
+import type { Customer, OrderItem } from '../types'
 import { Field, inputClass } from '../components/ui'
 import { useDeviceLocation } from '../hooks/useDeviceLocation'
 import { platformLabel } from '../lib/platform'
+import { PhoneOtpLogin } from '../components/PhoneOtpLogin'
+import { getCustomerSession, setCustomerHome, setCustomerSession } from '../lib/customerSession'
 
 export function CustomerApp() {
   const { orderId } = useParams()
@@ -21,9 +23,12 @@ function CustomerMenu() {
   const [cat, setCat] = useState('Todos')
   const [items, setItems] = useState<OrderItem[]>([])
   const [open, setOpen] = useState(false)
+  const [authOpen, setAuthOpen] = useState(false)
+  const [authPurpose, setAuthPurpose] = useState<'login' | 'register'>('login')
+  const [customer, setCustomer] = useState<Customer | null>(null)
   const [mode, setMode] = useState<'llevar' | 'delivery'>('llevar')
   const [name, setName] = useState('')
-  const [phone, setPhone] = useState('937493214')
+  const [phone, setPhone] = useState('')
   const [address, setAddress] = useState('')
   const [addressLat, setAddressLat] = useState<number | null>(null)
   const [addressLng, setAddressLng] = useState<number | null>(null)
@@ -31,6 +36,17 @@ function CustomerMenu() {
   const [note, setNote] = useState('')
   const [pay, setPay] = useState<'yape' | 'efectivo'>('yape')
   const { requestOnce, reverseGeocode, error: locError } = useDeviceLocation({ auto: false })
+
+  useEffect(() => {
+    const sess = getCustomerSession()
+    if (sess) {
+      setCustomerHome('/pedir')
+      setCustomer(sess)
+      setName(sess.name)
+      setPhone(sess.phone)
+      if (sess.address) setAddress(sess.address)
+    }
+  }, [])
 
   const categories = ['Todos', ...new Set(state.products.filter((p) => p.available).map((p) => p.category))]
   const products = state.products.filter((p) => p.available && (cat === 'Todos' || p.category === cat))
@@ -49,9 +65,23 @@ function CustomerMenu() {
     })
   }
 
+  const openCart = () => {
+    if (!getCustomerSession() && !customer) {
+      setAuthPurpose('login')
+      setAuthOpen(true)
+      return
+    }
+    setOpen(true)
+  }
+
   const send = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!name.trim() || items.length === 0) return
+    const sess = customer || getCustomerSession()
+    if (!sess) {
+      setAuthOpen(true)
+      return
+    }
+    if (items.length === 0) return
     const orderItems =
       mode === 'delivery' && fee > 0
         ? [...items, { productId: 'delivery', name: 'Delivery', qty: 1, price: fee }]
@@ -60,20 +90,23 @@ function CustomerMenu() {
       const order = await createOrder({
         type: mode === 'delivery' ? 'delivery' : 'llevar',
         items: orderItems,
-        customerName: name.trim(),
-        customerPhone: phone,
+        customerName: name.trim() || sess.name,
+        customerPhone: phone || sess.phone,
+        customerId: sess.id,
         address: mode === 'delivery' ? address : undefined,
         addressLat: mode === 'delivery' && addressLat != null ? addressLat : undefined,
         addressLng: mode === 'delivery' && addressLng != null ? addressLng : undefined,
         discount: 0,
-        paymentMethod: pay,
-        paid: pay === 'yape',
+        paymentMethod: 'pendiente',
+        paid: false,
+        codPaymentMethod: pay,
+        codCashAmount: pay === 'efectivo' ? total : undefined,
         notes: note || undefined,
         createdBy: 'Web',
         source: 'web',
         deliveryFee: mode === 'delivery' ? fee : 0,
       })
-      const tel = phone.replace(/\D/g, '').slice(-9)
+      const tel = (phone || sess.phone).replace(/\D/g, '').slice(-9)
       navigate(`/web/seguimiento/${order.id}${tel ? `?tel=${tel}` : ''}`)
     } catch (err) {
       alert((err as Error).message || 'No se pudo crear el pedido')
@@ -141,7 +174,7 @@ function CustomerMenu() {
 
       {qty > 0 ? (
         <button
-          onClick={() => setOpen(true)}
+          onClick={openCart}
           className="safe-bottom fixed bottom-4 left-1/2 z-30 flex min-h-12 w-[min(92vw,28rem)] -translate-x-1/2 items-center justify-between rounded-2xl bg-ember px-5 py-3 text-white shadow-xl shadow-ember/40"
         >
           <span className="inline-flex items-center gap-2 font-semibold">
@@ -150,6 +183,42 @@ function CustomerMenu() {
           </span>
           <span className="font-display text-lg">{soles(sub)}</span>
         </button>
+      ) : null}
+
+      {authOpen ? (
+        <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center">
+          <button className="absolute inset-0 bg-ink/50" onClick={() => setAuthOpen(false)} aria-label="Cerrar" />
+          <div className="relative max-h-[92dvh] w-full max-w-lg overflow-y-auto rounded-t-3xl bg-cream p-5 sm:rounded-3xl">
+            <PhoneOtpLogin
+              accountType="customer"
+              purpose={authPurpose}
+              showName={authPurpose === 'register'}
+              title={authPurpose === 'register' ? 'Regístrate' : 'Ingresa con tu celular'}
+              hint="Debes tener cuenta para pedir. El login es tu número de celular."
+              onSwitchPurpose={() => setAuthPurpose((p) => (p === 'login' ? 'register' : 'login'))}
+              onSuccess={(data) => {
+                if (!data.customer) return
+                const cust: Customer = {
+                  id: data.customer.id,
+                  name: data.customer.name,
+                  phone: data.customer.phone,
+                  email: data.customer.email,
+                  password: '',
+                  address: data.customer.address,
+                  photoUrl: data.customer.photoUrl,
+                  createdAt: data.customer.createdAt,
+                }
+                setCustomerSession(cust, data.token, '/pedir')
+                setCustomer(cust)
+                setName(cust.name)
+                setPhone(cust.phone)
+                if (cust.address) setAddress(cust.address)
+                setAuthOpen(false)
+                setOpen(true)
+              }}
+            />
+          </div>
+        </div>
       ) : null}
 
       {open ? (
@@ -273,6 +342,9 @@ function CustomerMenu() {
                   Efectivo
                 </button>
               </div>
+              <p className="text-xs text-ink/50">
+                Pendiente de liquidación: el repartidor cobrará en la entrega.
+              </p>
               <div className="flex justify-between font-display text-2xl">
                 <span>Total</span>
                 <span>{soles(total)}</span>
@@ -292,16 +364,7 @@ function Track({ orderId }: { orderId: string }) {
   const { state } = useStore()
   const order = useMemo(() => state.orders.find((o) => o.id === orderId), [state.orders, orderId])
   if (!order) {
-    return (
-      <div className="flex min-h-dvh items-center justify-center bg-cream p-6">
-        <div className="text-center">
-          <p className="font-display text-2xl">No encontramos ese pedido</p>
-          <Link to="/pedir" className="mt-4 inline-block text-ember">
-            Volver a la carta
-          </Link>
-        </div>
-      </div>
-    )
+    return <Navigate to="/pedir" replace />
   }
   const steps = [
     { id: 'nuevo', label: 'Recibido' },

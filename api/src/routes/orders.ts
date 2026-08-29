@@ -4,6 +4,14 @@ import { getPool, sql } from '../db.js'
 import { authRequired } from '../auth.js'
 import { emitEvent, roomsForOrderStatus } from '../realtime.js'
 import { notifyOrderCreatedServer, notifyOrderStatusServer } from '../lib/whatsappNotify.js'
+import {
+  deductStockForKitchenItems,
+  deductStockForOrderItems,
+  deductStockForSaleItems,
+  publishInventorySnapshot,
+  restoreStockForCancelledOrder,
+  restoreStockForOrderItems,
+} from '../lib/stockDeduct.js'
 
 export const ordersRouter = Router()
 
@@ -74,7 +82,11 @@ async function deriveOrderStatusFromItems(orderId: string, tx?: InstanceType<typ
   return null
 }
 
-function mapTrackOrder(order: Record<string, unknown>, items: unknown[]) {
+function mapTrackOrder(
+  order: Record<string, unknown>,
+  items: unknown[],
+  driver?: { Id?: string; Name?: string; Phone?: string } | null,
+) {
   return {
     id: String(order.Id),
     number: Number(order.Number),
@@ -98,6 +110,8 @@ function mapTrackOrder(order: Record<string, unknown>, items: unknown[]) {
     total: Number(order.Total),
     paid: Boolean(order.Paid),
     deliveryFee: Number(order.DeliveryFee || 0),
+    driverId: order.DriverId ? String(order.DriverId) : undefined,
+    driverName: driver?.Name ? String(driver.Name) : undefined,
     driverLat: order.DriverLat != null ? Number(order.DriverLat) : undefined,
     driverLng: order.DriverLng != null ? Number(order.DriverLng) : undefined,
     createdAt: new Date(order.CreatedAt as string).toISOString(),
@@ -156,14 +170,33 @@ ordersRouter.get('/track/:id', async (req, res) => {
       }
     }
 
+    let driver: { Id?: string; Name?: string; Phone?: string } | null = null
+    if (order.DriverId) {
+      const pool = await getPool()
+      const dr = await pool
+        .request()
+        .input('id', sql.UniqueIdentifier, String(order.DriverId))
+        .query(`SELECT TOP 1 Id, Name, Phone FROM dbo.Drivers WHERE Id=@id`)
+      driver = dr.recordset[0] || null
+    }
+
+    const isDelivery = order.Type === 'delivery' || order.Type === 'web'
     res.json({
-      order: mapTrackOrder(order, order.items as unknown[]),
-      steps: [
-        { key: 'nuevo', label: 'Pedido recibido' },
-        { key: 'en_cocina', label: 'Preparando' },
-        { key: 'listo', label: order.Type === 'delivery' || order.Type === 'web' ? 'En camino / listo' : 'Listo para recojo' },
-        { key: 'entregado', label: 'Entregado' },
-      ],
+      order: mapTrackOrder(order, order.items as unknown[], driver),
+      steps: isDelivery
+        ? [
+            { key: 'nuevo', label: 'Pedido recibido' },
+            { key: 'en_cocina', label: 'Preparando' },
+            { key: 'listo', label: 'Listo · esperando repartidor' },
+            { key: 'en_camino', label: 'En camino' },
+            { key: 'entregado', label: 'Entregado' },
+          ]
+        : [
+            { key: 'nuevo', label: 'Pedido recibido' },
+            { key: 'en_cocina', label: 'Preparando' },
+            { key: 'listo', label: 'Listo para recojo' },
+            { key: 'entregado', label: 'Entregado' },
+          ],
     })
   } catch (e) {
     res.status(500).json({ error: (e as Error).message })
@@ -201,6 +234,67 @@ ordersRouter.get('/track', async (req, res) => {
         { key: 'entregado', label: 'Entregado' },
       ],
     })
+  } catch (e) {
+    res.status(500).json({ error: (e as Error).message })
+  }
+})
+
+/** Historial del cliente autenticado (login por celular) */
+ordersRouter.get('/mine', authRequired, async (req, res) => {
+  try {
+    const u = req.user
+    if (!u || (u.accountType !== 'customer' && u.role !== 'customer')) {
+      return res.status(403).json({ error: 'Solo clientes' })
+    }
+    const pool = await getPool()
+    const r = await pool
+      .request()
+      .input('customerId', sql.UniqueIdentifier, u.id)
+      .query(`
+        SELECT TOP 100 o.*
+        FROM dbo.Orders o
+        WHERE o.CustomerId = @customerId
+        ORDER BY o.CreatedAt DESC
+      `)
+
+    const orders = []
+    for (const row of r.recordset) {
+      const full = await loadOrder(String(row.Id))
+      if (!full) continue
+      const rawItems = ((full as { items?: unknown[] }).items || []) as Array<Record<string, unknown>>
+      const items = rawItems.map((it) => ({
+        id: String(it.Id || it.id || ''),
+        productId: it.ProductId ? String(it.ProductId) : 'x',
+        name: String(it.Name || ''),
+        qty: Number(it.Qty || 0),
+        price: Number(it.Price || 0),
+        notes: it.Notes ? String(it.Notes) : undefined,
+      }))
+      orders.push({
+        id: String(full.Id),
+        number: Number(full.Number),
+        type: full.Type,
+        status: full.Status,
+        customerName: full.CustomerName,
+        customerPhone: full.CustomerPhone || undefined,
+        customerId: full.CustomerId ? String(full.CustomerId) : u.id,
+        address: full.Address || undefined,
+        items,
+        discount: Number(full.Discount || 0),
+        subtotal: Number(full.Subtotal),
+        igv: Number(full.Igv),
+        total: Number(full.Total),
+        paymentMethod: full.Paid ? 'efectivo' : 'pendiente',
+        paid: Boolean(full.Paid),
+        codPaymentMethod: full.CodPaymentMethod || undefined,
+        createdAt: new Date(full.CreatedAt as string).toISOString(),
+        updatedAt: new Date(full.UpdatedAt as string).toISOString(),
+        createdBy: 'Web',
+        source: full.Source,
+        driverId: full.DriverId ? String(full.DriverId) : undefined,
+      })
+    }
+    res.json({ orders })
   } catch (e) {
     res.status(500).json({ error: (e as Error).message })
   }
@@ -283,8 +377,9 @@ ordersRouter.post('/', async (req, res) => {
     if (!body.codPaymentMethod) {
       return res.status(400).json({ error: 'Indica pago contra entrega: yape | plin | efectivo' })
     }
+    // Efectivo sin monto → se asume el total (repartidor/caja liquidan después)
     if (body.codPaymentMethod === 'efectivo' && !(body.codCashAmount && body.codCashAmount > 0)) {
-      return res.status(400).json({ error: 'Indica con cuánto paga en efectivo' })
+      body.codCashAmount = Number(body.total) || 0
     }
   }
 
@@ -440,6 +535,16 @@ ordersRouter.patch('/:id/status', authRequired, async (req, res) => {
   const existing = await loadOrder(orderId)
   if (!existing) return res.status(404).json({ error: 'Pedido no encontrado' })
 
+  const orderType = String(existing.Type || '')
+  const isDeliveryOrder = orderType === 'delivery' || orderType === 'web'
+
+  // Delivery: no marcar entregado sin repartidor asignado (solo el conductor o con DriverId)
+  if (status === 'entregado' && isDeliveryOrder && !existing.DriverId) {
+    return res.status(400).json({
+      error: 'Asigna un repartidor antes de marcar entregado. El conductor confirma la entrega en su app.',
+    })
+  }
+
   const tx = new sql.Transaction(pool)
   await tx.begin()
   try {
@@ -453,6 +558,8 @@ ordersRouter.patch('/:id/status', authRequired, async (req, res) => {
           SET KitchenStatus = N'en_cocina'
           WHERE OrderId=@orderId AND KitchenStatus=@from
         `)
+      // Baja de almacén en tiempo real (receta × qty)
+      await deductStockForKitchenItems(orderId, tx, req.user?.id || null)
     } else if (status === 'listo') {
       const from = kitchenFrom || 'en_cocina'
       await new sql.Request(tx)
@@ -464,6 +571,9 @@ ordersRouter.patch('/:id/status', authRequired, async (req, res) => {
           WHERE OrderId=@orderId AND KitchenStatus=@from
         `)
     } else if (status === 'entregado' || status === 'cancelado') {
+      if (status === 'cancelado') {
+        await restoreStockForCancelledOrder(orderId, tx, req.user?.id || null)
+      }
       await new sql.Request(tx)
         .input('orderId', sql.UniqueIdentifier, orderId)
         .query(`
@@ -505,6 +615,9 @@ ordersRouter.patch('/:id/status', authRequired, async (req, res) => {
   const order = await loadOrder(orderId)
   const final = String((order as { Status?: string })?.Status || status)
   emitEvent('order:status', order, roomsForOrderStatus(final))
+  if (status === 'en_cocina' || status === 'cancelado') {
+    void publishInventorySnapshot()
+  }
 
   if (order && (order as { CustomerPhone?: string }).CustomerPhone) {
     void notifyOrderStatusServer(
@@ -529,6 +642,72 @@ ordersRouter.patch('/:id/status', authRequired, async (req, res) => {
   }
 
   res.json({ order })
+})
+
+/**
+ * Cocina: sacar insumos del almacén (antes o durante prep).
+ * Body opcional: { itemIds?: string[] }
+ */
+ordersRouter.post('/:id/stock/sacar', authRequired, async (req, res) => {
+  const orderId = paramId(req.params.id)
+  const itemIds = Array.isArray(req.body?.itemIds)
+    ? (req.body.itemIds as unknown[]).map(String).filter(Boolean)
+    : undefined
+  const pool = await getPool()
+  const existing = await loadOrder(orderId)
+  if (!existing) return res.status(404).json({ error: 'Pedido no encontrado' })
+
+  const tx = new sql.Transaction(pool)
+  await tx.begin()
+  try {
+    const result = await deductStockForOrderItems(orderId, tx, req.user?.id || null, {
+      itemIds,
+      // Solo ítems de cocina (no barra: eso va al pagar)
+      kitchenStatuses: ['pendiente', 'en_cocina', 'listo'],
+      reason: 'cocina',
+      notesPrefix: 'Sacar',
+    })
+    await tx.commit()
+    void publishInventorySnapshot()
+    const order = await loadOrder(orderId)
+    emitEvent('order:updated', order, roomsForOrderStatus(String(existing.Status || 'nuevo')))
+    res.json({ order, ...result })
+  } catch (e) {
+    await tx.rollback()
+    res.status(500).json({ error: (e as Error).message })
+  }
+})
+
+/**
+ * Cocina / caja: retorno a almacén de lo ya descontado.
+ * Body opcional: { itemIds?: string[] }
+ */
+ordersRouter.post('/:id/stock/retorno', authRequired, async (req, res) => {
+  const orderId = paramId(req.params.id)
+  const itemIds = Array.isArray(req.body?.itemIds)
+    ? (req.body.itemIds as unknown[]).map(String).filter(Boolean)
+    : undefined
+  const pool = await getPool()
+  const existing = await loadOrder(orderId)
+  if (!existing) return res.status(404).json({ error: 'Pedido no encontrado' })
+
+  const tx = new sql.Transaction(pool)
+  await tx.begin()
+  try {
+    const result = await restoreStockForOrderItems(orderId, tx, req.user?.id || null, {
+      itemIds,
+      reason: 'retorno',
+      notesPrefix: 'Retorno',
+    })
+    await tx.commit()
+    void publishInventorySnapshot()
+    const order = await loadOrder(orderId)
+    emitEvent('order:updated', order, roomsForOrderStatus(String(existing.Status || 'nuevo')))
+    res.json({ order, ...result })
+  } catch (e) {
+    await tx.rollback()
+    res.status(500).json({ error: (e as Error).message })
+  }
 })
 
 /** Agregar ítems a pedido abierto (mesa) */
@@ -717,6 +896,11 @@ ordersRouter.post('/:id/payments', authRequired, async (req, res) => {
       .input('paid', sql.Bit, paid)
       .query(`UPDATE dbo.Orders SET Paid = @paid, UpdatedAt = SYSUTCDATETIME() WHERE Id = @id`)
 
+    // Barra / gaseosa / sin cocina: descuenta stock solo al liquidar el cobro
+    if (paid && !existing.Paid) {
+      await deductStockForSaleItems(paramId(req.params.id), tx, req.user?.id || null)
+    }
+
     if (paid && existing.TableId) {
       await new sql.Request(tx)
         .input('tableId', sql.UniqueIdentifier, existing.TableId)
@@ -726,9 +910,47 @@ ordersRouter.post('/:id/payments', authRequired, async (req, res) => {
     await tx.commit()
     const order = await loadOrder(paramId(req.params.id))
     emitEvent('order:paid', order, ['ops', 'caja', 'mesas'])
+    if (paid && !existing.Paid) {
+      void publishInventorySnapshot()
+    }
     res.json({ order, paid })
   } catch (e) {
     await tx.rollback()
+    res.status(500).json({ error: (e as Error).message })
+  }
+})
+
+/**
+ * Caja: Liquidar pedido web entregado (ya pagado online).
+ * El repartidor ya entregó, caja confirma la liquidación.
+ */
+ordersRouter.post('/:id/settle-cashier', authRequired, async (req, res) => {
+  const orderId = paramId(req.params.id)
+  const pool = await getPool()
+  const existing = await loadOrder(orderId)
+  if (!existing) return res.status(404).json({ error: 'Pedido no encontrado' })
+
+  if (existing.Status !== 'entregado') {
+    return res.status(400).json({ error: 'Solo pedidos entregados se pueden liquidar' })
+  }
+  if (!existing.Paid) {
+    return res.status(400).json({ error: 'Este pedido no está pagado. Usa cobrar normal.' })
+  }
+
+  try {
+    await pool
+      .request()
+      .input('id', sql.UniqueIdentifier, orderId)
+      .query(`
+        UPDATE dbo.Orders
+        SET DriverSettledAt = SYSUTCDATETIME(), UpdatedAt = SYSUTCDATETIME()
+        WHERE Id = @id
+      `)
+
+    const order = await loadOrder(orderId)
+    emitEvent('order:updated', order, ['ops', 'caja'])
+    res.json({ order, settled: true })
+  } catch (e) {
     res.status(500).json({ error: (e as Error).message })
   }
 })

@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { apiFetch } from '../lib/apiClient'
-import { DEFAULT_OTP_FALLBACK, DEFAULT_PHONE } from '../lib/authDefaults'
+import { DEFAULT_OTP_FALLBACK } from '../lib/authDefaults'
 
 export type OtpAccountType = 'staff' | 'customer' | 'driver'
 
@@ -12,6 +12,7 @@ export function PhoneOtpLogin({
   title,
   hint,
   showName = false,
+  defaultPhone = '',
   onSuccess,
   onSwitchPurpose,
 }: {
@@ -20,6 +21,8 @@ export function PhoneOtpLogin({
   title: string
   hint?: string
   showName?: boolean
+  /** Celular inicial (vacío = el usuario escribe el suyo) */
+  defaultPhone?: string
   onSuccess: (data: {
     token?: string
     user?: {
@@ -54,16 +57,16 @@ export function PhoneOtpLogin({
   onSwitchPurpose?: () => void
 }) {
   const [step, setStep] = useState<Step>('phone')
-  const [phone, setPhone] = useState(DEFAULT_PHONE)
+  const [phone, setPhone] = useState(defaultPhone)
   const [name, setName] = useState('')
-  const [code, setCode] = useState(DEFAULT_OTP_FALLBACK)
+  const [code, setCode] = useState('')
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState<string | null>(null)
   const [err, setErr] = useState<string | null>(null)
 
   const goCode = (message?: string) => {
     setStep('code')
-    setCode(DEFAULT_OTP_FALLBACK)
+    setCode('')
     if (message) setMsg(message)
   }
 
@@ -171,14 +174,14 @@ export function PhoneOtpLogin({
               className="mt-1.5 w-full rounded-xl border border-gray-200 bg-white px-4 py-3.5 text-sm focus:border-[#1a3d1a] focus:ring-2 focus:ring-green-500/20 focus:outline-none"
               value={phone}
               onChange={(e) => setPhone(e.target.value)}
-              placeholder={DEFAULT_PHONE}
+              placeholder="999 999 999"
               inputMode="tel"
               autoComplete="tel"
               required
             />
             <p className="mt-1.5 text-xs text-gray-400">
-              Te enviamos un código por WhatsApp. Si falla, usa el código de respaldo{' '}
-              <strong>{DEFAULT_OTP_FALLBACK}</strong>.
+              Escribe tu celular registrado. Te enviamos un código por WhatsApp. Si falla, usa el código de
+              respaldo <strong>{DEFAULT_OTP_FALLBACK}</strong>.
             </p>
           </div>
           <button
@@ -212,13 +215,19 @@ export function PhoneOtpLogin({
               className="mt-1.5 w-full rounded-xl border border-gray-200 bg-white px-4 py-3.5 text-center text-2xl font-black tracking-[0.4em] focus:border-[#1a3d1a] focus:ring-2 focus:ring-green-500/20 focus:outline-none"
               value={code}
               onChange={(e) => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
-              placeholder={DEFAULT_OTP_FALLBACK}
+              placeholder="••••••"
               inputMode="numeric"
               autoComplete="one-time-code"
               required
             />
             <p className="mt-1.5 text-center text-xs text-gray-400">
-              Celular <strong>{phone}</strong> · respaldo <strong>{DEFAULT_OTP_FALLBACK}</strong>
+              Celular <strong>{phone}</strong>
+              {msg?.includes('respaldo') ? (
+                <>
+                  {' '}
+                  · respaldo <strong>{DEFAULT_OTP_FALLBACK}</strong>
+                </>
+              ) : null}
             </p>
           </div>
           <button
@@ -233,7 +242,7 @@ export function PhoneOtpLogin({
             disabled={busy}
             onClick={() => {
               setStep('phone')
-              setCode(DEFAULT_OTP_FALLBACK)
+              setCode('')
               setMsg(null)
               setErr(null)
             }}

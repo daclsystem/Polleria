@@ -17,7 +17,7 @@ export function ReservationModal({ onClose }: { onClose: () => void }) {
   const [time, setTime] = useState('')
   const [guests, setGuests] = useState(0)
   const [name, setName] = useState('')
-  const [phone, setPhone] = useState('937493214')
+  const [phone, setPhone] = useState('')
   const [notes, setNotes] = useState('')
   const [success, setSuccess] = useState(false)
 

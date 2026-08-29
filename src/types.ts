@@ -87,6 +87,8 @@ export interface OrderItem {
   selectedOptions?: SelectedOption[]
   /** Ronda cocina: pendiente (recibido) | en_cocina | listo | undefined (barra) */
   kitchenStatus?: 'pendiente' | 'en_cocina' | 'listo' | null
+  /** Ya se bajó del almacén (sacar cocina o cobro de barra) */
+  stockDeducted?: boolean
 }
 
 export interface Order {
@@ -107,6 +109,9 @@ export interface Order {
   total: number
   paymentMethod: PaymentMethod
   paid: boolean
+  /** Preferencia de cobro en puerta (web/delivery). Paid sigue en false hasta liquidar. */
+  codPaymentMethod?: 'yape' | 'plin' | 'efectivo'
+  codCashAmount?: number
   createdAt: string
   updatedAt: string
   createdBy: string
@@ -120,6 +125,9 @@ export interface Order {
   driverLng?: number
   addressLat?: number
   addressLng?: number
+  driverArrivedAt?: string
+  deliveryPhotoUrl?: string
+  driverSettledAt?: string
 }
 
 export type PrinterDriver = 'browser' | 'usb' | 'network'
@@ -164,6 +172,8 @@ export interface Settings {
   igvRate: number
   hours: string
   deliveryFee: number
+  originLat?: number
+  originLng?: number
   printers?: PrinterSetup
 }
 
@@ -251,9 +261,12 @@ export type ModuleId = (typeof MODULES)[number]
 export const ROLE_MODULES: Record<Role, ModuleId[]> = {
   /** Solo admin ve “Administrar” (carta, equipo, clientes, conductores, etc.) */
   admin: [...MODULES],
-  cajero: ['dashboard', 'pos', 'comandas', 'mesas', 'reservas', 'pedidos-web'],
-  cocina: ['cocina', 'comandas'],
-  mozo: ['pos', 'comandas', 'mesas', 'reservas'],
+  /** Cajero: solo cobrar y liquidar */
+  cajero: ['dashboard', 'comandas'],
+  /** Cocina: solo preparar */
+  cocina: ['cocina'],
+  /** Mozo: mesas, tomar pedidos, asignar delivery */
+  mozo: ['pos', 'comandas', 'mesas', 'reservas', 'pedidos-web'],
 }
 
 export const ROLE_LABEL: Record<Role, string> = {
@@ -265,16 +278,16 @@ export const ROLE_LABEL: Record<Role, string> = {
 
 export const ROLE_HOME: Record<Role, string> = {
   admin: '/',
-  cajero: '/',
+  cajero: '/comandas',
   cocina: '/cocina',
   mozo: '/mesas',
 }
 
 export const TYPE_LABEL: Record<OrderType, string> = {
   salon: 'Salón',
-  llevar: 'Para llevar',
+  llevar: 'Recojo en tienda',
   delivery: 'Delivery',
-  web: 'Pedido web',
+  web: 'Delivery',
 }
 
 export const PAY_LABEL: Record<PaymentMethod, string> = {
