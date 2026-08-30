@@ -146,14 +146,14 @@ function applyRooms(rooms: string[]) {
 
 /** Conecta al Socket.IO del API (path /realtime). Idempotente. */
 export function connectRealtime(rooms: string[] = ['ops']) {
-  if (!API_URL) return null
+  if (!import.meta.env.DEV && !API_URL) return null
 
   if (socket) {
     applyRooms(rooms)
     return socket
   }
 
-  socket = io(API_URL, {
+  socket = io(API_URL || window.location.origin, {
     path: '/realtime',
     transports: ['websocket', 'polling'],
     reconnection: true,

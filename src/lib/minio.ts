@@ -29,7 +29,7 @@ export async function uploadToMinio(
     publicUpload?: boolean
   },
 ): Promise<string> {
-  if (!API_URL) {
+  if (!import.meta.env.DEV && !API_URL) {
     throw new Error('VITE_API_URL no configurada — no se puede subir a MinIO')
   }
 
@@ -79,4 +79,8 @@ export function uploadAudio(file: File, onProgress?: (n: number) => void) {
 
 export function uploadDeliveryPhoto(file: File, onProgress?: (n: number) => void) {
   return uploadToMinio(file, { folder: 'deliveries', onProgress })
+}
+
+export function uploadAvatar(file: File, onProgress?: (n: number) => void) {
+  return uploadToMinio(file, { folder: 'media', onProgress, publicUpload: true })
 }

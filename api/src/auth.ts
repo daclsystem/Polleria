@@ -17,6 +17,8 @@ export interface AuthUser {
   pin?: string
   phone?: string
   photoUrl?: string
+  /** Admin oculto de sistema (IsSystem=1) */
+  isSystem?: boolean
 }
 
 declare global {
@@ -71,7 +73,7 @@ authRouter.post('/login', async (req, res) => {
   const result = await pool
     .request()
     .input('email', sql.NVarChar, email)
-    .query(`SELECT TOP 1 Id, Name, Email, PasswordHash, Role, Active, Pin, Phone, PhotoUrl FROM dbo.Users WHERE Email = @email`)
+    .query(`SELECT TOP 1 Id, Name, Email, PasswordHash, Role, Active, Pin, Phone, PhotoUrl, ISNULL(IsSystem,0) AS IsSystem FROM dbo.Users WHERE Email = @email`)
 
   const row = result.recordset[0]
   if (!row || !row.Active) return res.status(401).json({ error: 'Credenciales inválidas' })
@@ -108,6 +110,7 @@ authRouter.post('/login', async (req, res) => {
     pin: row.Pin || '0000',
     phone: row.Phone || undefined,
     photoUrl,
+    isSystem: Number(row.IsSystem) === 1,
   }
 
   return res.json({ token: signToken(user), user })

@@ -24,7 +24,8 @@ cd "$APP_DIR/api"
 cat > .env <<ENV
 PORT=3080
 JWT_SECRET=${JWT_SECRET}
-CORS_ORIGIN=http://localhost:5174,http://127.0.0.1:5174,https://indevsoft.com,https://www.indevsoft.com,https://${DOMAIN}
+CORS_ORIGIN=http://localhost:5174,http://127.0.0.1:5174,https://chifapollerialopez.com,https://www.chifapollerialopez.com,https://indevsoft.com,https://www.indevsoft.com,https://${DOMAIN}
+FRONT_PUBLIC_URL=https://chifapollerialopez.com
 
 DB_SERVER=127.0.0.1
 DB_PORT=1433

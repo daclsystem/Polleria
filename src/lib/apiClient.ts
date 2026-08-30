@@ -1,4 +1,5 @@
 import { API_URL, apiUrl } from './api'
+import { APP_NAME } from './paths'
 import type {
   Branch,
   Customer,
@@ -57,7 +58,7 @@ export class ApiError extends Error {
 }
 
 export function usingApi() {
-  return Boolean(API_URL)
+  return import.meta.env.DEV || Boolean(API_URL)
 }
 
 function isGuid(id?: string) {
@@ -68,18 +69,24 @@ export async function apiFetch<T = unknown>(
   path: string,
   options: RequestInit & { auth?: boolean; scope?: TokenScope } = {},
 ): Promise<T> {
-  if (!API_URL) throw new Error('VITE_API_URL no configurada')
+  if (!import.meta.env.DEV && !API_URL) throw new Error('VITE_API_URL no configurada')
   const headers = new Headers(options.headers || {})
   if (!headers.has('Content-Type') && options.body && !(options.body instanceof FormData)) {
     headers.set('Content-Type', 'application/json')
   }
+  const scope = options.scope || 'staff'
+  const publicFront = APP_NAME === 'web' || APP_NAME === 'cliente'
   if (options.auth !== false) {
-    const token = getApiToken(options.scope || 'staff')
+    const skipStaffOnPublic = publicFront && scope === 'staff'
+    const token = skipStaffOnPublic ? null : getApiToken(scope)
     if (token) headers.set('Authorization', `Bearer ${token}`)
   }
   const res = await fetch(apiUrl(path), { ...options, headers })
   const data = await res.json().catch(() => ({}))
   if (!res.ok) {
+    if (res.status === 401 && scope === 'staff' && publicFront) {
+      setApiToken(null, 'staff')
+    }
     const err = data as { error?: string; code?: string }
     if (err.code === 'SESSION_REPLACED' && typeof window !== 'undefined') {
       window.dispatchEvent(
@@ -355,12 +362,20 @@ export type DriverDeliveryOrder = {
   createdAt: string
 }
 
+export type DriverEarnings = {
+  rate?: number
+  today: { trips: number; total: number }
+  week: { trips: number; total: number }
+  month: { trips: number; total: number }
+}
+
 export async function apiDriverMyOrders() {
   return apiFetch<{
     mine: DriverDeliveryOrder[]
     available: DriverDeliveryOrder[]
     orders: DriverDeliveryOrder[]
     origin: { name: string; address: string; lat?: number; lng?: number }
+    earnings?: DriverEarnings
   }>('/api/drivers/me/orders', { scope: 'driver' })
 }
 
@@ -482,6 +497,19 @@ export async function apiSaveBanners(banners: unknown[]) {
   })
 }
 
+export async function apiGetWebsite(admin = false) {
+  return apiFetch<{ site: unknown | null }>(admin ? '/api/config/website/admin' : '/api/config/website', {
+    auth: admin,
+  })
+}
+
+export async function apiSaveWebsite(site: unknown) {
+  return apiFetch('/api/config/website', {
+    method: 'PUT',
+    body: JSON.stringify({ site }),
+  })
+}
+
 export async function apiGetWhatsappConfig() {
   return apiFetch<{ config: unknown }>('/api/config/whatsapp')
 }
@@ -512,5 +540,182 @@ export async function apiSaveInvoices(invoices: unknown[]) {
   return apiFetch('/api/config/invoices', {
     method: 'PUT',
     body: JSON.stringify({ invoices }),
+  })
+}
+
+
+/* —— Direcciones favoritas (cliente) —— */
+export type CustomerAddressDto = {
+  id: string
+  customerId: string
+  label: string
+  address: string
+  lat: number | null
+  lng: number | null
+  isDefault: boolean
+  createdAt: string
+}
+
+export async function apiListCustomerAddresses() {
+  return apiFetch<{ addresses: CustomerAddressDto[] }>('/api/customer/addresses', {
+    scope: 'customer',
+  })
+}
+
+export async function apiSaveCustomerAddress(data: {
+  id?: string
+  label: string
+  address: string
+  lat?: number | null
+  lng?: number | null
+  isDefault?: boolean
+}) {
+  if (data.id) {
+    return apiFetch<{ address: CustomerAddressDto }>(`/api/customer/addresses/${data.id}`, {
+      method: 'PUT',
+      scope: 'customer',
+      body: JSON.stringify(data),
+    })
+  }
+  return apiFetch<{ address: CustomerAddressDto }>('/api/customer/addresses', {
+    method: 'POST',
+    scope: 'customer',
+    body: JSON.stringify(data),
+  })
+}
+
+export async function apiDeleteCustomerAddress(id: string) {
+  return apiFetch(`/api/customer/addresses/${id}`, { method: 'DELETE', scope: 'customer' })
+}
+
+export async function apiUpdateCustomerProfile(data: { name?: string; photoUrl?: string }) {
+  return apiFetch<{ customer: Customer }>('/api/customer/profile', {
+    method: 'PATCH',
+    scope: 'customer',
+    body: JSON.stringify(data),
+  })
+}
+
+export async function apiDriverUpdateProfile(data: { name?: string; photoUrl?: string }) {
+  return apiFetch<{ driver: { id: string; name: string; phone: string; photoUrl?: string } }>(
+    '/api/drivers/me',
+    {
+      method: 'PATCH',
+      scope: 'driver',
+      body: JSON.stringify(data),
+    },
+  )
+}
+
+let earningsEndpointOk: boolean | null = null
+
+export async function apiDriverEarnings() {
+  if (earningsEndpointOk === false) {
+    throw new ApiError('Ganancias no disponibles', 404)
+  }
+  try {
+    const data = await apiFetch<{
+      today: { trips: number; total: number }
+      week: { trips: number; total: number }
+      month: { trips: number; total: number }
+    }>('/api/drivers/me/earnings', { scope: 'driver' })
+    earningsEndpointOk = true
+    return data
+  } catch (e) {
+    if (e instanceof ApiError && (e.status === 404 || e.status === 403)) {
+      earningsEndpointOk = false
+    }
+    throw e
+  }
+}
+
+/* —— Cupones —— */
+export type CouponDto = {
+  id: string
+  code: string
+  title: string
+  description: string
+  discountType: 'percent' | 'fixed'
+  discountValue: number
+  minSubtotal: number
+  maxDiscount: number | null
+  startsAt: string | null
+  endsAt: string | null
+  maxUsesTotal: number | null
+  maxUsesPerCustomer: number
+  usedCount: number
+  active: boolean
+  createdAt: string
+}
+
+export async function apiPublicCoupons() {
+  return apiFetch<{ coupons: CouponDto[] }>('/api/coupons/public', { auth: false })
+}
+
+export async function apiValidateCoupon(code: string, subtotal: number) {
+  return apiFetch<{ coupon: CouponDto; discount: number }>('/api/coupons/validate', {
+    method: 'POST',
+    scope: 'customer',
+    body: JSON.stringify({ code, subtotal }),
+  })
+}
+
+export async function apiAdminCoupons() {
+  return apiFetch<{ coupons: CouponDto[] }>('/api/coupons')
+}
+
+export async function apiSaveCoupon(data: Partial<CouponDto> & { code: string; title: string; discountType: string; discountValue: number }, id?: string) {
+  if (id) {
+    return apiFetch<{ coupon: CouponDto }>(`/api/coupons/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    })
+  }
+  return apiFetch<{ coupon: CouponDto }>('/api/coupons', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  })
+}
+
+export async function apiDeleteCoupon(id: string) {
+  return apiFetch(`/api/coupons/${id}`, { method: 'DELETE' })
+}
+
+
+export type ProductReviewDto = {
+  id: string
+  productId: string
+  customerName: string
+  stars: number
+  comment: string
+  createdAt: string
+}
+
+export async function apiProductReviews(productId: string) {
+  return apiFetch<{ reviews: ProductReviewDto[]; average: number; count: number }>(
+    `/api/reviews/product/${productId}`,
+    { auth: false },
+  )
+}
+
+export async function apiCreateProductReview(data: {
+  productId: string
+  stars: number
+  comment?: string
+  orderId?: string
+}) {
+  return apiFetch<ProductReviewDto>('/api/reviews', {
+    method: 'POST',
+    scope: 'customer',
+    body: JSON.stringify(data),
+  })
+}
+
+export async function apiUpdateStaffProfile(data: { name?: string; photoUrl?: string }) {
+  return apiFetch<{
+    user: { id: string; name: string; email?: string; role: string; photoUrl?: string }
+  }>('/api/users/me', {
+    method: 'PATCH',
+    body: JSON.stringify(data),
   })
 }

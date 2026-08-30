@@ -1,30 +1,40 @@
 @import "tailwindcss";
+@source "./**/*.{html,js,ts,jsx,tsx}";
 
 @theme {
-  --font-sans: "Plus Jakarta Sans", ui-sans-serif, system-ui, sans-serif;
-  --font-display: "Syne", ui-sans-serif, system-ui, sans-serif;
+  --font-sans: "Source Sans 3", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Fraunces", ui-serif, Georgia, serif;
   --color-ink: #0c0c0c;
   --color-ink-soft: #1a1a1a;
   --color-cream: #f4f5f7;
   --color-cream-dark: #e8eaee;
-  --color-ember: #e11d2e;
-  --color-ember-hot: #c41222;
-  --color-gold: #f0b429;
+  --color-ember: #1a3d1a;
+  --color-ember-hot: #143314;
+  --color-gold: #ffd700;
   --color-brick: #c81e1e;
   --color-sage: #0f9f6e;
 }
 
 html,
-body,
-#root {
+body {
+  height: auto;
   min-height: 100%;
+  overflow-x: hidden;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+#root {
+  min-height: 100dvh;
+  height: auto;
+  overflow: visible;
 }
 
 body {
   margin: 0;
   background:
-    radial-gradient(1200px 500px at 10% -10%, rgba(225, 29, 46, 0.06), transparent 55%),
-    radial-gradient(900px 400px at 100% 0%, rgba(15, 159, 110, 0.05), transparent 50%),
+    radial-gradient(1200px 500px at 10% -10%, rgba(26, 61, 26, 0.06), transparent 55%),
+    radial-gradient(900px 400px at 100% 0%, rgba(255, 215, 0, 0.05), transparent 50%),
     var(--color-cream);
   color: var(--color-ink);
   font-family: var(--font-sans);
@@ -32,19 +42,16 @@ body {
   text-size-adjust: 100%;
 }
 
-#root {
-  min-height: 100dvh;
-}
-
 .font-display {
   font-family: var(--font-display);
-  letter-spacing: -0.02em;
+  letter-spacing: -0.01em;
+  font-optical-sizing: auto;
 }
 
 .flame-bg {
   background:
-    radial-gradient(900px 420px at 0% 0%, rgba(225, 29, 46, 0.32), transparent 55%),
-    radial-gradient(700px 360px at 100% 10%, rgba(240, 180, 41, 0.14), transparent 50%),
+    radial-gradient(900px 420px at 0% 0%, rgba(26, 61, 26, 0.32), transparent 55%),
+    radial-gradient(700px 360px at 100% 10%, rgba(255, 215, 0, 0.14), transparent 50%),
     #0c0c0c;
 }
 
@@ -81,7 +88,7 @@ body {
 .chip-on {
   background: var(--color-ember);
   color: #fff;
-  box-shadow: 0 8px 20px -10px rgba(225, 29, 46, 0.7);
+  box-shadow: 0 8px 20px -10px rgba(26, 61, 26, 0.7);
 }
 
 .chip-off {
@@ -134,7 +141,7 @@ body {
   background: var(--color-ember);
   color: #fff;
   font-weight: 700;
-  box-shadow: 0 10px 24px -12px rgba(225, 29, 46, 0.65);
+  box-shadow: 0 10px 24px -12px rgba(26, 61, 26, 0.65);
   transition: transform 0.12s ease, background 0.12s ease;
 }
 
@@ -175,4 +182,72 @@ body {
   .no-print {
     display: none !important;
   }
+}
+
+
+/* —— Web landing atmosphere —— */
+.web-hero-grid {
+  background-image:
+    linear-gradient(rgba(255, 215, 0, 0.04) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 215, 0, 0.04) 1px, transparent 1px);
+  background-size: 48px 48px;
+  mask-image: radial-gradient(ellipse at center, black 20%, transparent 75%);
+}
+
+.web-float {
+  animation: web-float 9s ease-in-out infinite;
+}
+.web-float-delayed {
+  animation: web-float 11s ease-in-out infinite reverse;
+  animation-delay: -2s;
+}
+@keyframes web-float {
+  0%, 100% { transform: translateY(0) scale(1); }
+  50% { transform: translateY(-18px) scale(1.04); }
+}
+
+.web-hero-logo {
+  animation: web-logo-in 0.9s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+@keyframes web-logo-in {
+  from { opacity: 0; transform: translateY(16px) scale(0.92); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.web-reveal {
+  animation: web-reveal 0.7s ease both;
+}
+@keyframes web-reveal {
+  from { opacity: 0; transform: translateY(12px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.web-nav {
+  transition: background 0.25s ease, border-color 0.25s ease;
+}
+
+.scrollbar-hide {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+}
+
+.h-scroll {
+  display: flex;
+  gap: 0.75rem;
+  overflow-x: scroll;
+  overflow-y: hidden;
+  padding-bottom: 0.6rem;
+  -webkit-overflow-scrolling: touch;
+  touch-action: pan-x;
+  overscroll-behavior-x: contain;
+}
+.h-scroll::-webkit-scrollbar {
+  height: 6px;
+}
+.h-scroll::-webkit-scrollbar-thumb {
+  background: #b8bdc6;
+  border-radius: 99px;
 }

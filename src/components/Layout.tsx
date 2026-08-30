@@ -1,41 +1,45 @@
 import { NavLink, Outlet, useNavigate } from 'react-router-dom'
 import type { LucideIcon } from 'lucide-react'
 import {
+  BarChart3,
+  Bike,
+  Building2,
+  CalendarCheck,
+  Camera,
   ChefHat,
+  ChevronsLeft,
+  ChevronsRight,
   ClipboardList,
+  Contact,
+  ExternalLink,
+  FileText,
+  Globe,
   LayoutDashboard,
   LogOut,
   Menu,
+  MessageCircle,
   Package,
+  Palette,
   Settings,
   ShoppingBag,
   Table2,
-  UtensilsCrossed,
+  TicketPercent,
   Users,
-  BarChart3,
-  Globe,
-  Monitor,
+  UtensilsCrossed,
   X,
-  ExternalLink,
-  CalendarCheck,
-  Building2,
-  FileText,
-  MessageCircle,
-  Contact,
-  Bike,
-  ChevronsLeft,
-  ChevronsRight,
 } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useAuth } from '../auth/AuthContext'
 import { useStore } from '../store/StoreContext'
 import { ROLE_LABEL, type ModuleId, type Role } from '../types'
-import { withBase } from '../lib/paths'
+import { customerMenuUrl } from '../lib/paths'
 import { APP_VERSION } from '../lib/version'
 import { LiveToasts } from './LiveToasts'
 import { unlockSounds } from '../lib/sounds'
 import { ConfirmLogout } from './ConfirmLogout'
 import { defaultAvatarUrl, shortAccountId } from '../lib/avatar'
+import { uploadAvatar } from '../lib/minio'
+import { apiUpdateStaffProfile } from '../lib/apiClient'
 
 const NAV: { to: string; label: string; hint: string; icon: LucideIcon; module: ModuleId }[] = [
   { to: '/', label: 'Inicio', hint: 'Resumen del día', icon: LayoutDashboard, module: 'dashboard' },
@@ -51,10 +55,23 @@ const NAV: { to: string; label: string; hint: string; icon: LucideIcon; module: 
   { to: '/clientes', label: 'Clientes', hint: 'Agenda de clientes', icon: Contact, module: 'clientes' },
   { to: '/conductores', label: 'Conductores', hint: 'Repartidores delivery', icon: Bike, module: 'conductores' },
   { to: '/reportes', label: 'Reportes', hint: 'Ventas e impresión', icon: BarChart3, module: 'reportes' },
-  { to: '/sucursales', label: 'Sucursales', hint: 'Locales del negocio', icon: Building2, module: 'sucursales' },
+  {
+    to: '/sucursales',
+    label: 'Sucursales',
+    hint: 'Locales operativos (POS, cocina)',
+    icon: Building2,
+    module: 'sucursales',
+  },
   { to: '/facturacion', label: 'Facturación', hint: 'Boletas y facturas SUNAT', icon: FileText, module: 'facturacion' },
   { to: '/whatsapp', label: 'WhatsApp', hint: 'Mensajes a clientes', icon: MessageCircle, module: 'whatsapp' },
-  { to: '/web-config', label: 'Página Web', hint: 'Banners y contenido', icon: Monitor, module: 'web-config' },
+  {
+    to: '/web-config',
+    label: 'Personalización web',
+    hint: 'Horarios, locales, qué vende y textos de la web',
+    icon: Palette,
+    module: 'web-config',
+  },
+  { to: '/cupones', label: 'Cupones', hint: 'Descuentos y códigos', icon: TicketPercent, module: 'cupones' },
   { to: '/config', label: 'Ajustes', hint: 'Datos del local', icon: Settings, module: 'config' },
 ]
 
@@ -72,9 +89,12 @@ const GROUPS: { title: string; modules: ModuleId[] }[] = [
       'sucursales',
       'facturacion',
       'whatsapp',
-      'web-config',
       'config',
     ],
+  },
+  {
+    title: 'Web pública',
+    modules: ['web-config', 'cupones'],
   },
 ]
 
@@ -117,10 +137,26 @@ export function Layout() {
   const bottomIds = user ? BOTTOM[user.role] : []
   const bottom = NAV.filter((i) => bottomIds.includes(i.module) && can(i.module))
   const bottomCount = Math.min(bottom.length, 3) + 1
-  const photo = user?.photoUrl || defaultAvatarUrl(user?.name || 'Usuario', 'staff')
+  const [photo, setPhoto] = useState(() => user?.photoUrl || defaultAvatarUrl(user?.name || 'Usuario', 'staff'))
+  const avatarRef = useRef<HTMLInputElement>(null)
+  const [uploadingAvatar, setUploadingAvatar] = useState(false)
+
+  const handleAvatarChange = async (file: File | null) => {
+    if (!file || !user) return
+    setUploadingAvatar(true)
+    try {
+      const url = await uploadAvatar(file)
+      await apiUpdateStaffProfile({ photoUrl: url })
+      setPhoto(url)
+    } catch {
+      /* ignore */
+    } finally {
+      setUploadingAvatar(false)
+    }
+  }
 
   return (
-    <div className="flex min-h-dvh bg-cream" onPointerDownCapture={() => unlockSounds()}>
+    <div className="flex h-dvh overflow-hidden bg-cream" onPointerDownCapture={() => unlockSounds()}>
       <LiveToasts />
       <ConfirmLogout
         open={logoutOpen}
@@ -215,14 +251,31 @@ export function Layout() {
               )
             })}
           </nav>
+          <input
+              ref={avatarRef}
+              type="file"
+              accept="image/*"
+              className="hidden"
+              onChange={(e) => void handleAvatarChange(e.target.files?.[0] ?? null)}
+            />
           <div className={`border-t border-white/10 p-4 ${collapsed ? 'lg:p-2' : ''}`}>
             <div className={`flex items-center gap-3 ${collapsed ? 'lg:justify-center lg:gap-0' : ''}`}>
-              <img
-                src={photo}
-                alt={user?.name || ''}
-                className="h-12 w-12 shrink-0 rounded-full object-cover ring-2 ring-white/20"
-                title={user?.name}
-              />
+              <button
+                type="button"
+                disabled={uploadingAvatar}
+                onClick={() => avatarRef.current?.click()}
+                className="relative shrink-0 disabled:opacity-50"
+                title="Cambiar foto"
+              >
+                <img
+                  src={photo}
+                  alt={user?.name || ''}
+                  className="h-12 w-12 rounded-full object-cover ring-2 ring-white/20"
+                />
+                <span className="absolute -bottom-0.5 -right-0.5 flex h-5 w-5 items-center justify-center rounded-full bg-ember text-white">
+                  <Camera size={10} />
+                </span>
+              </button>
               <div className={`min-w-0 ${collapsed ? 'lg:hidden' : ''}`}>
                 <p className="truncate text-sm font-semibold">{user?.name}</p>
                 <p className="text-xs text-cream/50">{user ? ROLE_LABEL[user.role] : ''}</p>
@@ -321,7 +374,7 @@ export function Layout() {
               </span>
             )}
             <a
-              href={withBase('pedir')}
+              href={customerMenuUrl()}
               target="_blank"
               rel="noreferrer"
               className="inline-flex min-h-10 items-center gap-1.5 rounded-full bg-ink px-3.5 py-1.5 text-xs font-bold text-cream shadow-sm"
@@ -337,7 +390,7 @@ export function Layout() {
             No se pudo sincronizar con el API: {apiError}
           </div>
         ) : null}
-        <main className="min-h-0 flex-1 overflow-y-auto p-3 sm:p-5 lg:p-8">
+        <main className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto p-3 sm:p-5 lg:p-8">
           <Outlet />
         </main>
       </div>

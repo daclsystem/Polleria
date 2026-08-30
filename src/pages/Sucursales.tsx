@@ -27,7 +27,10 @@ export function Sucursales() {
   return (
     <div>
       <div className="flex flex-wrap items-end justify-between gap-4">
-        <PageTitle title="Sucursales" hint="Gestiona los locales de tu negocio." />
+        <PageTitle
+          title="Sucursales"
+          hint="Locales operativos del sistema (caja, cocina, pedidos). Lo que ve el cliente en la web se edita en Personalización web."
+        />
         <button
           onClick={() => { setEditing(null); setShowForm(true) }}
           className="flex min-h-11 items-center gap-2 rounded-xl bg-ember px-4 py-2 text-sm font-semibold text-white"

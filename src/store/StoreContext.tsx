@@ -9,6 +9,7 @@ import {
   type ReactNode,
 } from 'react'
 import { totalsFromItems, uid } from '../lib/format'
+import { enrichProducts } from '../lib/enrichProducts'
 import {
   apiAddOrderItems,
   apiAdjustStock,
@@ -52,6 +53,8 @@ import {
 } from '../lib/realtime'
 import { playSound } from '../lib/sounds'
 import { filterKitchenItems } from '../lib/kitchen'
+import { createSeed } from '../data/seed'
+import { APP_NAME } from '../lib/paths'
 import type {
   AppState,
   Branch,
@@ -94,6 +97,7 @@ function emptyApiState(): AppState {
 }
 
 function requireApi() {
+  if (import.meta.env.DEV) return
   if (!usingApi()) throw new Error('VITE_API_URL no configurada')
 }
 
@@ -188,6 +192,7 @@ interface NewOrderInput {
   address?: string
   tableId?: string
   discount?: number
+  couponCode?: string
   paymentMethod: PaymentMethod
   paid: boolean
   notes?: string
@@ -417,17 +422,42 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       }
     }
 
-    let stop = getApiToken() ? startLive() : () => {}
-
-    if (!getApiToken()) {
+    const loadPublicCatalog = () => {
+      setApiLoading(true)
       void apiFetch<{ products: Product[] }>('/api/catalog/products', { auth: false })
-        .then((data) => setState((prev) => ({ ...prev, products: data.products })))
-        .catch((e) => setApiError((e as Error).message))
+        .then((data) => {
+          const list = enrichProducts(data.products || [])
+          setState((prev) => ({
+            ...prev,
+            products: list.length ? list : enrichProducts(createSeed().products),
+          }))
+        })
+        .catch((e) => {
+          setApiError((e as Error).message)
+          setState((prev) =>
+            prev.products.length > 0
+              ? prev
+              : { ...prev, products: enrichProducts(createSeed().products) },
+          )
+        })
+        .finally(() => setApiLoading(false))
+    }
+
+    const publicFront = APP_NAME === 'web' || APP_NAME === 'cliente'
+    if (publicFront) {
+      loadPublicCatalog()
+      return
+    }
+
+    let stop = getApiToken('staff') ? startLive() : () => {}
+
+    if (!getApiToken('staff')) {
+      loadPublicCatalog()
     }
 
     const onAuth = () => {
       stop()
-      stop = getApiToken() ? startLive() : () => {}
+      stop = getApiToken('staff') ? startLive() : () => {}
     }
     window.addEventListener('polleria-auth', onAuth)
     return () => {
@@ -478,6 +508,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           tableNumber: table?.number,
           notes: input.notes,
           discount: input.discount ?? 0,
+          couponCode: input.couponCode,
           subtotal: money.subtotal,
           igv: money.igv,
           total: money.total,

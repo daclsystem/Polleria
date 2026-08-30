@@ -15,6 +15,10 @@ export interface User {
   pin: string
   /** Celular WhatsApp para recuperación de cuenta */
   phone?: string
+  /** DNI / documento */
+  dni?: string
+  /** Cuenta interna: no se lista ni se edita desde Equipo */
+  isSystem?: boolean
   /** Foto de perfil (MinIO o ui-avatars) */
   photoUrl?: string
 }
@@ -50,6 +54,10 @@ export interface Product {
   sendToKitchen?: boolean
   optionGroups?: ProductOptionGroup[]
   tags?: string[]
+  /** Unidades vendidas (últimos ~60 días) */
+  soldCount?: number
+  ratingAvg?: number
+  reviewCount?: number
 }
 
 export interface InventoryItem {
@@ -253,6 +261,7 @@ export const MODULES = [
   'facturacion',
   'whatsapp',
   'web-config',
+  'cupones',
   'config',
 ] as const
 

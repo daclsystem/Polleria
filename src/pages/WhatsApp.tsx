@@ -44,12 +44,20 @@ export function WhatsApp() {
   const [previewMsg, setPreviewMsg] = useState<string | null>(null)
   const [customPhone, setCustomPhone] = useState('')
   const [customMsg, setCustomMsg] = useState('')
+  const [phoneQuery, setPhoneQuery] = useState('')
   const [sendResult, setSendResult] = useState<string | null>(null)
   const [sessionStatus, setSessionStatus] = useState<string>('…')
 
+  const phoneDigits = phoneQuery.replace(/\D/g, '')
   const recentOrders = state.orders
     .filter((o) => o.customerPhone && o.status !== 'cancelado')
-    .slice(0, 15)
+    .filter((o) => {
+      if (!phoneDigits) return true
+      const tel = String(o.customerPhone || '').replace(/\D/g, '')
+      const name = o.customerName.toLowerCase()
+      return tel.includes(phoneDigits) || name.includes(phoneQuery.trim().toLowerCase())
+    })
+    .slice(0, phoneDigits ? 40 : 15)
 
   useEffect(() => {
     void fetchWspgoConfig().then(setConfig)
@@ -149,11 +157,22 @@ export function WhatsApp() {
       {tab === 'pedidos' && (
         <div className="mt-5 space-y-3">
           <p className="text-xs text-ink/50">
-            Cada pedido nuevo se envía solo al local y al cliente. Aquí puedes reenviar plantillas.
+            Recibido y listo se envían solos al crear el pedido. Aquí solo reenvías “en camino” si hace falta.
           </p>
+          <label className="block">
+            <span className="text-[11px] font-bold tracking-[0.14em] text-ink/40 uppercase">Buscar teléfono</span>
+            <input
+              className={`${inputClass} mt-1.5`}
+              value={phoneQuery}
+              onChange={(e) => setPhoneQuery(e.target.value)}
+              placeholder="937493214 o nombre"
+              inputMode="tel"
+              autoComplete="tel"
+            />
+          </label>
           {recentOrders.length === 0 ? (
             <div className="rounded-2xl border border-dashed border-ink/15 py-12 text-center text-ink/40">
-              No hay pedidos con teléfono registrado
+              {phoneDigits ? 'Ningún pedido con ese teléfono' : 'No hay pedidos con teléfono registrado'}
             </div>
           ) : (
             recentOrders.map((o) => (
@@ -171,28 +190,16 @@ export function WhatsApp() {
                     </p>
                   </div>
                 </div>
-                <div className="flex flex-wrap gap-2">
+                {o.type === 'delivery' ? (
                   <button
-                    onClick={() => handleSendToOrder(o, 'pedidoRecibido')}
-                    className="flex min-h-8 items-center gap-1 rounded-lg bg-[#25d366] px-3 text-xs font-semibold text-white"
+                    onClick={() => handleSendToOrder(o, 'pedidoEnCamino')}
+                    className="flex min-h-9 items-center justify-center gap-1 rounded-lg bg-blue-600 px-3 text-xs font-semibold text-white"
                   >
-                    <Send size={11} /> Recibido
+                    <Send size={11} /> Enviar en camino
                   </button>
-                  <button
-                    onClick={() => handleSendToOrder(o, 'pedidoListo')}
-                    className="flex min-h-8 items-center gap-1 rounded-lg bg-[#25d366] px-3 text-xs font-semibold text-white"
-                  >
-                    <Send size={11} /> Listo
-                  </button>
-                  {o.type === 'delivery' ? (
-                    <button
-                      onClick={() => handleSendToOrder(o, 'pedidoEnCamino')}
-                      className="flex min-h-8 items-center gap-1 rounded-lg bg-blue-600 px-3 text-xs font-semibold text-white"
-                    >
-                      <Send size={11} /> En camino
-                    </button>
-                  ) : null}
-                </div>
+                ) : (
+                  <p className="text-xs font-medium text-ink/40">Recojo · aviso automático</p>
+                )}
               </div>
             ))
           )}

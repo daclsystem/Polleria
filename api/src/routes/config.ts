@@ -67,6 +67,37 @@ configRouter.put('/banners', authRequired, requireRoles('admin'), async (req, re
   }
 })
 
+/** Público: contenido de secciones de la web */
+configRouter.get('/website', async (_req, res) => {
+  try {
+    const data = await getConfig('web_site')
+    res.json({ site: data && typeof data === 'object' ? data : null })
+  } catch (e) {
+    res.status(500).json({ error: (e as Error).message })
+  }
+})
+
+/** Admin: leer / guardar contenido web */
+configRouter.get('/website/admin', authRequired, requireRoles('admin'), async (_req, res) => {
+  try {
+    const data = await getConfig('web_site')
+    res.json({ site: data && typeof data === 'object' ? data : null })
+  } catch (e) {
+    res.status(500).json({ error: (e as Error).message })
+  }
+})
+
+configRouter.put('/website', authRequired, requireRoles('admin'), async (req, res) => {
+  try {
+    const site = req.body?.site ?? req.body
+    if (!site || typeof site !== 'object') return res.status(400).json({ error: 'site requerido' })
+    await putConfig('web_site', site)
+    res.json({ ok: true })
+  } catch (e) {
+    res.status(500).json({ error: (e as Error).message })
+  }
+})
+
 configRouter.get('/whatsapp', authRequired, async (_req, res) => {
   try {
     const data = await getConfig('whatsapp')

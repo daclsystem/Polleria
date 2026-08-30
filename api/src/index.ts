@@ -8,12 +8,17 @@ import { authRouter } from './auth.js'
 import { recoverRouter } from './routes/recover.js'
 import { catalogRouter } from './routes/catalog.js'
 import { deliveryRouter } from './routes/delivery.js'
+import { geoRouter } from './routes/geo.js'
+import { systemRouter } from './routes/system.js'
 import { ordersRouter } from './routes/orders.js'
 import { mediaRouter } from './routes/media.js'
 import { crudRouter } from './routes/crud.js'
 import { configRouter } from './routes/config.js'
 import { otpAuthRouter } from './routes/otpAuth.js'
 import { driversRouter } from './routes/drivers.js'
+import { couponsRouter } from './routes/coupons.js'
+import { customerAddressesRouter } from './routes/customerAddresses.js'
+import { reviewsRouter } from './routes/reviews.js'
 
 dotenv.config()
 
@@ -23,8 +28,20 @@ const corsOrigins = (process.env.CORS_ORIGIN || 'http://localhost:5174')
   .map((s) => s.trim())
   .filter(Boolean)
 
+function allowOrigin(origin?: string) {
+  if (!origin) return true
+  if (corsOrigins.includes(origin)) return true
+  if (/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) return true
+  return false
+}
+
 const app = express()
-app.use(cors({ origin: corsOrigins, credentials: true }))
+app.use(
+  cors({
+    origin: (origin, cb) => cb(null, allowOrigin(origin)),
+    credentials: true,
+  }),
+)
 app.use(express.json({ limit: '2mb' }))
 
 app.get('/health', async (_req, res) => {
@@ -43,9 +60,14 @@ app.use('/api/auth/otp', otpAuthRouter)
 app.use('/api/drivers', driversRouter)
 app.use('/api/catalog', catalogRouter)
 app.use('/api/delivery', deliveryRouter)
+app.use('/api/geo', geoRouter)
+app.use('/api/system', systemRouter)
 app.use('/api/orders', ordersRouter)
 app.use('/api/media', mediaRouter)
 app.use('/api/config', configRouter)
+app.use('/api/coupons', couponsRouter)
+app.use('/api/customer/addresses', customerAddressesRouter)
+app.use('/api/reviews', reviewsRouter)
 app.use('/api', crudRouter)
 
 app.use((_req, res) => {

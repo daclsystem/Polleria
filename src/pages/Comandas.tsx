@@ -7,9 +7,10 @@ import { printTicket } from '../lib/print'
 import { filterKitchenItems } from '../lib/kitchen'
 import { orderBelongsToStaff } from '../lib/realtime'
 import { apiAssignDriver, apiListDrivers, apiSettleCashier } from '../lib/apiClient'
+import { siteUrl } from '../lib/paths'
 import { isDeliveryOrder, needsDriver } from '../lib/orderType'
 import type { Driver, Order, OrderStatus, PaymentMethod } from '../types'
-import { Empty, Modal, PageTitle, StatusBadge, TypeBadge, inputClass } from '../components/ui'
+import { Empty, Modal, PageTitle, StatusBadge, TypeBadge } from '../components/ui'
 
 type ComandaFilter = 'por_cobrar' | 'liquidar_caja' | 'todas' | 'delivery' | 'recojo' | OrderStatus
 
@@ -55,7 +56,7 @@ function mozoCanSeeOrder(o: Order, user: { id?: string; name?: string }) {
 }
 
 export function Comandas() {
-  const { state, updateOrderStatus, payOrder, cancelOrder, reloadFromApi } = useStore()
+  const { state, updateOrderStatus, payOrder, reloadFromApi } = useStore()
   const { user } = useAuth()
   const isMozo = user?.role === 'mozo'
   const isCajero = user?.role === 'cajero'
@@ -64,6 +65,27 @@ export function Comandas() {
   const [pay, setPay] = useState<PaymentMethod>('efectivo')
   const [drivers, setDrivers] = useState<Driver[]>([])
   const [assigning, setAssigning] = useState(false)
+  const [pickedDriverId, setPickedDriverId] = useState('')
+  const driverAppUrl = siteUrl('driver')
+
+  const assignDriver = async (order: Order, driverId: string | null) => {
+    if (assigning) return
+    if ((order.driverId || '') === (driverId || '')) return
+    setAssigning(true)
+    try {
+      await apiAssignDriver(order.id, driverId)
+      setSelected({
+        ...order,
+        driverId: driverId || undefined,
+        driverName: driverId ? drivers.find((d) => d.id === driverId)?.name : undefined,
+      })
+      await reloadFromApi()
+    } catch (err) {
+      alert((err as Error).message)
+    } finally {
+      setAssigning(false)
+    }
+  }
 
   useEffect(() => {
     void apiListDrivers()
@@ -148,6 +170,10 @@ export function Comandas() {
   }, [state.orders, filter, isMozo, user])
 
   const current = selected ? (state.orders.find((o) => o.id === selected.id) ?? null) : null
+
+  useEffect(() => {
+    setPickedDriverId(current?.driverId || '')
+  }, [current?.id, current?.driverId])
 
   // Si el pedido ya no existe (borrado / liquidado / sync), cerrar modal
   useEffect(() => {
@@ -354,45 +380,91 @@ export function Comandas() {
             current.status !== 'cancelado' &&
             current.status !== 'entregado' ? (
               <div className="rounded-xl bg-teal-50 p-3">
-                <p className="mb-2 text-xs font-semibold tracking-wide text-teal-800 uppercase">
-                  {isMozo ? 'Asignar repartidor' : 'Conductor (delivery)'}
+                <p className="mb-1 text-xs font-semibold tracking-wide text-teal-800 uppercase">
+                  1. Elige repartidor
                 </p>
-                <select
-                  className={inputClass}
-                  disabled={assigning}
-                  value={current.driverId || ''}
-                  onChange={async (e) => {
-                    const driverId = e.target.value || null
-                    setAssigning(true)
-                    try {
-                      await apiAssignDriver(current.id, driverId)
-                      setSelected({
-                        ...current,
-                        driverId: driverId || undefined,
-                        driverName: driverId
-                          ? drivers.find((d) => d.id === driverId)?.name
-                          : undefined,
-                      })
-                      await reloadFromApi()
-                    } catch (err) {
-                      alert((err as Error).message)
-                    } finally {
-                      setAssigning(false)
-                    }
-                  }}
-                >
-                  <option value="">Sin asignar — elige repartidor</option>
-                  {drivers.map((d) => (
-                    <option key={d.id} value={d.id}>
-                      {d.name} · {d.phone}
-                    </option>
-                  ))}
-                </select>
-                <p className="mt-1.5 text-[11px] text-teal-800/70">
-                  {isMozo
-                    ? 'Cuando esté listo, el repartidor lo lleva y marca entregado en /conductor.'
-                    : 'App conductor: /conductor — toma pedidos listos y abre la ruta en Maps.'}
+                <p className="mb-2 text-sm font-medium text-teal-950">
+                  {current.driverId
+                    ? `Asignado a ${current.driverName || 'repartidor'}. Puedes cambiarlo y tocar Asignar.`
+                    : 'Toca un nombre y luego el botón Asignar.'}
                 </p>
+                <div className="space-y-1.5">
+                  <button
+                    type="button"
+                    disabled={assigning}
+                    className={`flex min-h-11 w-full items-center rounded-xl px-3 text-left text-sm font-semibold ${
+                      !pickedDriverId ? 'bg-ink text-cream' : 'bg-white text-ink'
+                    }`}
+                    onClick={() => setPickedDriverId('')}
+                  >
+                    Sin asignar
+                  </button>
+                  {drivers.map((d) => {
+                    const on = pickedDriverId === d.id
+                    return (
+                      <button
+                        key={d.id}
+                        type="button"
+                        disabled={assigning}
+                        className={`flex min-h-11 w-full items-center rounded-xl px-3 text-left text-sm font-semibold ${
+                          on ? 'bg-ink text-cream' : 'bg-white text-ink'
+                        }`}
+                        onClick={() => setPickedDriverId(d.id)}
+                      >
+                        {d.name} · {d.phone}
+                      </button>
+                    )
+                  })}
+                </div>
+                {(() => {
+                  const dirty = (pickedDriverId || '') !== (current.driverId || '')
+                  const picked = drivers.find((d) => d.id === pickedDriverId)
+                  const assigned = current.driverId
+                    ? drivers.find((d) => d.id === current.driverId)
+                    : null
+                  return (
+                    <>
+                      <button
+                        type="button"
+                        disabled={assigning || !dirty}
+                        className="mt-3 min-h-11 w-full rounded-xl bg-teal-700 px-3 text-sm font-bold text-white disabled:opacity-40"
+                        onClick={() => void assignDriver(current, pickedDriverId || null)}
+                      >
+                        {assigning
+                          ? 'Asignando…'
+                          : !dirty
+                            ? picked
+                              ? `Ya asignado a ${picked.name}`
+                              : 'Elige un repartidor'
+                            : picked
+                              ? `Asignar a ${picked.name}`
+                              : 'Quitar repartidor'}
+                      </button>
+                      <div className="mt-3 rounded-xl bg-white/80 p-3 text-sm text-teal-950">
+                        <p className="text-xs font-bold tracking-wide text-teal-800 uppercase">
+                          2. El repartidor entra así
+                        </p>
+                        <a
+                          href={driverAppUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="mt-1 block font-bold text-teal-800 underline"
+                        >
+                          Abrir app repartidor
+                        </a>
+                        <p className="mt-1.5 text-xs leading-relaxed text-teal-900/80">
+                          Celular del conductor
+                          {assigned || picked
+                            ? ` (${(assigned || picked)?.phone})`
+                            : ''}
+                          {' '}
+                          + código por WhatsApp. Si no llega, usa <strong>123456</strong>.
+                          No usa el login del sistema.
+                        </p>
+                      </div>
+                    </>
+                  )
+                })()}
               </div>
             ) : null}
 
@@ -463,8 +535,7 @@ export function Comandas() {
                   current.type === 'delivery' || current.type === 'web' ? (
                     current.driverId ? (
                       <p className="w-full rounded-xl bg-teal-50 px-3 py-2 text-sm text-teal-900">
-                        Repartidor asignado. La entrega la confirma el conductor en su app (/conductor).
-                        En caja solo liquida el cobro.
+                        Repartidor asignado. La entrega la confirma él en su app. En caja solo se cobra.
                       </p>
                     ) : (
                       <p className="w-full rounded-xl bg-amber-50 px-3 py-2 text-sm font-semibold text-amber-900">
@@ -483,15 +554,6 @@ export function Comandas() {
                     </button>
                   )
                 ) : null}
-                <button
-                  className="min-h-11 rounded-xl bg-brick px-4 py-2 text-sm font-semibold text-white"
-                  onClick={() => {
-                    cancelOrder(current.id)
-                    setSelected(null)
-                  }}
-                >
-                  Cancelar
-                </button>
               </div>
             ) : null}
             {!current.paid && current.status !== 'cancelado' ? (

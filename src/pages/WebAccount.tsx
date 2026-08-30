@@ -7,6 +7,7 @@ import {
   MapPin,
   Package,
   ShoppingBag,
+  TicketPercent,
   Truck,
 } from 'lucide-react'
 import { MapContainer, Marker, Popup, TileLayer, useMap } from 'react-leaflet'
@@ -19,9 +20,10 @@ import { PhoneOtpLogin } from '../components/PhoneOtpLogin'
 import { ConfirmLogout } from '../components/ConfirmLogout'
 import { defaultAvatarUrl, shortAccountId } from '../lib/avatar'
 import { apiMyOrders } from '../lib/apiClient'
+import { CustomerAddressesPanel } from '../components/CustomerAddressesPanel'
+import { CustomerCouponsPanel } from '../components/CustomerCouponsPanel'
 import {
   clearCustomerSession,
-  getCustomerHome,
   getCustomerSession,
   setCustomerSession,
 } from '../lib/customerSession'
@@ -70,12 +72,12 @@ export function WebAccount() {
   const [searchParams] = useSearchParams()
   const [customer, setCustomer] = useState<Customer | null>(null)
   const [myOrders, setMyOrders] = useState<Order[]>([])
-  const [tab, setTab] = useState<'orders' | 'tracking'>('orders')
+  const [tab, setTab] = useState<'orders' | 'tracking' | 'addresses' | 'coupons'>('orders')
   const [trackingOrderId, setTrackingOrderId] = useState<string | null>(null)
   const [authPurpose, setAuthPurpose] = useState<'login' | 'register'>('login')
   const [logoutOpen, setLogoutOpen] = useState(false)
-  const [ordersReady, setOrdersReady] = useState(false)
-  const homePath = getCustomerHome()
+  const [, setOrdersReady] = useState(false)
+  const homePath = '/'
 
   const loadOrders = async () => {
     try {
@@ -113,14 +115,6 @@ export function WebAccount() {
     }
   }, [searchParams])
 
-  // Sin pedidos → home de la sesión (carta web o app)
-  useEffect(() => {
-    if (!customer || !ordersReady) return
-    if (myOrders.length > 0) return
-    const trackId = searchParams.get('track')
-    if (trackId) return
-    navigate(homePath, { replace: true })
-  }, [customer, ordersReady, myOrders.length, searchParams, navigate, homePath])
 
   const activeOrder = useMemo(() => {
     if (trackingOrderId) {
@@ -144,7 +138,7 @@ export function WebAccount() {
             <button onClick={() => navigate(homePath)} className="mb-4 inline-flex items-center gap-2 text-sm font-medium text-green-700 hover:underline">
               <ArrowLeft size={16} /> Volver al inicio
             </button>
-            <img src="/polleria/logo-lopez.png" alt="Logo" className="mx-auto h-20 w-auto rounded-2xl shadow-lg" />
+            <img src={`${import.meta.env.BASE_URL}logo-lopez.png`} alt="Logo" className="mx-auto h-20 w-auto rounded-2xl shadow-lg" />
             <h1 className="mt-4 text-2xl font-black text-gray-900">Mi Cuenta</h1>
             <p className="mt-1 text-sm text-gray-500">Entra con tu celular para ver el historial de pedidos</p>
           </div>
@@ -169,7 +163,7 @@ export function WebAccount() {
                   photoUrl: data.customer.photoUrl,
                   createdAt: data.customer.createdAt,
                 }
-                setCustomerSession(cust, data.token, '/web')
+                setCustomerSession(cust, data.token, 'web')
                 setCustomer(cust)
                 void loadOrders()
               }}
@@ -180,13 +174,6 @@ export function WebAccount() {
     )
   }
 
-  if (ordersReady && myOrders.length === 0 && !searchParams.get('track')) {
-    return (
-      <div className="flex min-h-dvh items-center justify-center bg-gray-50">
-        <p className="text-sm font-medium text-gray-500">Sin pedidos · yendo al inicio…</p>
-      </div>
-    )
-  }
 
   return (
     <div className="min-h-dvh bg-gray-50">
@@ -230,18 +217,30 @@ export function WebAccount() {
 
       {/* Tabs */}
       <div className="sticky top-16 z-30 bg-white shadow-sm">
-        <div className="mx-auto flex max-w-5xl">
+        <div className="mx-auto flex max-w-5xl overflow-x-auto scrollbar-hide">
           <button
             onClick={() => { setTab('orders'); setTrackingOrderId(null); void loadOrders() }}
-            className={`flex flex-1 items-center justify-center gap-2 border-b-3 py-4 text-sm font-bold transition ${tab === 'orders' ? 'border-[#1a3d1a] text-[#1a3d1a]' : 'border-transparent text-gray-400'}`}
+            className={`flex min-w-0 flex-1 shrink-0 items-center justify-center gap-1.5 border-b-3 px-2 py-3 text-xs font-bold whitespace-nowrap transition sm:gap-2 sm:px-4 sm:py-4 sm:text-sm ${tab === 'orders' ? 'border-[#1a3d1a] text-[#1a3d1a]' : 'border-transparent text-gray-400'}`}
           >
-            <ShoppingBag size={16} /> Mis Pedidos
+            <ShoppingBag size={16} className="shrink-0" /> <span>Pedidos</span>
           </button>
           <button
             onClick={() => setTab('tracking')}
-            className={`flex flex-1 items-center justify-center gap-2 border-b-3 py-4 text-sm font-bold transition ${tab === 'tracking' ? 'border-[#1a3d1a] text-[#1a3d1a]' : 'border-transparent text-gray-400'}`}
+            className={`flex min-w-0 flex-1 shrink-0 items-center justify-center gap-1.5 border-b-3 px-2 py-3 text-xs font-bold whitespace-nowrap transition sm:gap-2 sm:px-4 sm:py-4 sm:text-sm ${tab === 'tracking' ? 'border-[#1a3d1a] text-[#1a3d1a]' : 'border-transparent text-gray-400'}`}
           >
-            <MapPin size={16} /> Seguimiento
+            <Truck size={16} className="shrink-0" /> <span>Seguir</span>
+          </button>
+          <button
+            onClick={() => setTab('addresses')}
+            className={`flex min-w-0 flex-1 shrink-0 items-center justify-center gap-1.5 border-b-3 px-2 py-3 text-xs font-bold whitespace-nowrap transition sm:gap-2 sm:px-4 sm:py-4 sm:text-sm ${tab === 'addresses' ? 'border-[#1a3d1a] text-[#1a3d1a]' : 'border-transparent text-gray-400'}`}
+          >
+            <MapPin size={16} className="shrink-0" /> <span>Direc.</span>
+          </button>
+          <button
+            onClick={() => setTab('coupons')}
+            className={`flex min-w-0 flex-1 shrink-0 items-center justify-center gap-1.5 border-b-3 px-2 py-3 text-xs font-bold whitespace-nowrap transition sm:gap-2 sm:px-4 sm:py-4 sm:text-sm ${tab === 'coupons' ? 'border-[#1a3d1a] text-[#1a3d1a]' : 'border-transparent text-gray-400'}`}
+          >
+            <TicketPercent size={16} className="shrink-0" /> <span>Cupones</span>
           </button>
         </div>
       </div>
@@ -273,6 +272,18 @@ export function WebAccount() {
 
         {tab === 'tracking' && (
           <TrackingView order={activeOrder} />
+        )}
+
+        {tab === 'addresses' && (
+          <div className="mx-auto max-w-lg">
+            <CustomerAddressesPanel />
+          </div>
+        )}
+
+        {tab === 'coupons' && (
+          <div className="mx-auto max-w-lg">
+            <CustomerCouponsPanel />
+          </div>
         )}
       </div>
     </div>
@@ -382,7 +393,7 @@ function TrackingView({ order }: { order?: Order }) {
         </div>
         <p className="mt-4 text-lg font-semibold text-gray-400">No tienes pedidos activos para rastrear</p>
         <p className="mt-2 text-sm text-gray-400">Cuando hagas un pedido, podrás verlo aquí</p>
-        <Link to={getCustomerHome()} className="mt-4 font-bold text-green-700 hover:underline">
+        <Link to="/" className="mt-4 font-bold text-green-700 hover:underline">
           Ir al inicio
         </Link>
       </div>

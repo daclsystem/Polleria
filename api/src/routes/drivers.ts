@@ -291,6 +291,34 @@ driversRouter.post('/assign', authRequired, requireRoles('admin', 'cajero', 'moz
   }
 })
 
+async function computeDriverEarnings(pool: Awaited<ReturnType<typeof getPool>>, driverId: string) {
+  const rateRow = await pool.request().query(`
+    SELECT TOP 1 ISNULL(DeliveryFee, 5) AS Rate FROM dbo.Settings
+  `)
+  const rate = Number(rateRow.recordset[0]?.Rate || 5)
+  const r = await pool.request().input('driverId', sql.UniqueIdentifier, driverId).input('rate', sql.Decimal(10, 2), rate)
+    .query(`
+      SELECT
+        SUM(CASE WHEN CAST(COALESCE(DriverSettledAt, UpdatedAt, CreatedAt) AS DATE) = CAST(SYSUTCDATETIME() AS DATE) THEN 1 ELSE 0 END) AS todayTrips,
+        SUM(CASE WHEN CAST(COALESCE(DriverSettledAt, UpdatedAt, CreatedAt) AS DATE) = CAST(SYSUTCDATETIME() AS DATE) THEN CASE WHEN ISNULL(DeliveryFee,0) > 0 THEN DeliveryFee ELSE @rate END ELSE 0 END) AS todayTotal,
+        SUM(CASE WHEN COALESCE(DriverSettledAt, UpdatedAt, CreatedAt) >= DATEADD(day, -7, SYSUTCDATETIME()) THEN 1 ELSE 0 END) AS weekTrips,
+        SUM(CASE WHEN COALESCE(DriverSettledAt, UpdatedAt, CreatedAt) >= DATEADD(day, -7, SYSUTCDATETIME()) THEN CASE WHEN ISNULL(DeliveryFee,0) > 0 THEN DeliveryFee ELSE @rate END ELSE 0 END) AS weekTotal,
+        COUNT(*) AS monthTrips,
+        SUM(CASE WHEN ISNULL(DeliveryFee,0) > 0 THEN DeliveryFee ELSE @rate END) AS monthTotal
+      FROM dbo.Orders
+      WHERE DriverId = @driverId
+        AND Status = N'entregado'
+        AND COALESCE(DriverSettledAt, UpdatedAt, CreatedAt) >= DATEADD(day, -30, SYSUTCDATETIME())
+    `)
+  const row = r.recordset[0] || {}
+  return {
+    rate,
+    today: { trips: Number(row.todayTrips || 0), total: Number(row.todayTotal || 0) },
+    week: { trips: Number(row.weekTrips || 0), total: Number(row.weekTotal || 0) },
+    month: { trips: Number(row.monthTrips || 0), total: Number(row.monthTotal || 0) },
+  }
+}
+
 /** Conductor: mis entregas activas + pendientes de liquidar en base */
 driversRouter.get('/me/orders', authRequired, async (req, res) => {
   if (!isDriver(req)) return res.status(403).json({ error: 'Solo conductores' })
@@ -320,8 +348,9 @@ driversRouter.get('/me/orders', authRequired, async (req, res) => {
 
     const mine = r.recordset.map(mapDeliveryOrder)
     const origin = await getStoreOrigin()
+    const earnings = await computeDriverEarnings(pool, driverId)
 
-    res.json({ mine, available: [], orders: mine, origin })
+    res.json({ mine, available: [], orders: mine, origin, earnings })
   } catch (e) {
     res.status(500).json({ error: (e as Error).message })
   }
@@ -662,4 +691,47 @@ driversRouter.post('/me/location', authRequired, async (req, res) => {
   )
 
   res.json({ ok: true })
+})
+
+/** Conductor: actualizar su perfil (nombre, foto) */
+driversRouter.patch('/me', authRequired, async (req, res) => {
+  if (!isDriver(req)) return res.status(403).json({ error: 'Solo conductores' })
+  try {
+    const driverId = req.user!.id
+    const { name, photoUrl } = req.body as { name?: string; photoUrl?: string }
+    const pool = await getPool()
+    const sets: string[] = []
+    const rq = pool.request().input('id', sql.UniqueIdentifier, driverId)
+    if (name && name.trim()) {
+      sets.push('Name = @name')
+      rq.input('name', sql.NVarChar, name.trim().slice(0, 120))
+    }
+    if (photoUrl !== undefined) {
+      sets.push('PhotoUrl = @photo')
+      rq.input('photo', sql.NVarChar, photoUrl || null)
+    }
+    if (sets.length === 0) {
+      return res.status(400).json({ error: 'Nada que actualizar' })
+    }
+    sets.push('UpdatedAt = SYSUTCDATETIME()')
+    await rq.query(`UPDATE dbo.Drivers SET ${sets.join(', ')} WHERE Id = @id`)
+    const r = await pool.request().input('id', sql.UniqueIdentifier, driverId).query(`SELECT * FROM dbo.Drivers WHERE Id = @id`)
+    const row = r.recordset[0]
+    if (!row) return res.status(404).json({ error: 'Conductor no encontrado' })
+    res.json({ driver: mapDriver(row) })
+  } catch (e) {
+    res.status(500).json({ error: (e as Error).message })
+  }
+})
+
+/** Conductor: ver sus ganancias (entregas y totales por día/semana/mes) */
+driversRouter.get('/me/earnings', authRequired, async (req, res) => {
+  if (!isDriver(req)) return res.status(403).json({ error: 'Solo conductores' })
+  try {
+    const pool = await getPool()
+    const earnings = await computeDriverEarnings(pool, req.user!.id)
+    res.json(earnings)
+  } catch (e) {
+    res.status(500).json({ error: (e as Error).message })
+  }
 })

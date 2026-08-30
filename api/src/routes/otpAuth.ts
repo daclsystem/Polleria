@@ -68,7 +68,7 @@ async function findStaffByPhone(phone: string) {
     .request()
     .input('phone', sql.NVarChar, phone)
     .query(`
-      SELECT TOP 1 Id, Name, Email, Role, Active, Phone, Pin, PhotoUrl
+      SELECT TOP 1 Id, Name, Email, Role, Active, Phone, Pin, PhotoUrl, ISNULL(IsSystem,0) AS IsSystem
       FROM dbo.Users
       WHERE Active = 1
         AND Phone IS NOT NULL
@@ -90,6 +90,7 @@ async function findStaffByPhone(phone: string) {
         Phone: string
         Pin?: string
         PhotoUrl?: string
+        IsSystem?: boolean | number
       }
     | undefined
 }
@@ -180,6 +181,7 @@ async function issueSession(accountType: AccountType, phone: string, res: import
       pin: user.Pin || '0000',
       phone: user.Phone || undefined,
       photoUrl: staffPhoto(user.Name, user.PhotoUrl),
+      isSystem: Number(user.IsSystem) === 1,
     }
     return res.json({ ok: true, token: signToken(authUser), user: authUser })
   }
@@ -262,7 +264,11 @@ otpAuthRouter.post('/request', async (req, res) => {
     if (accountType !== 'staff' && accountType !== 'customer' && accountType !== 'driver') {
       return res.status(400).json({ error: 'accountType debe ser staff, customer o driver' })
     }
-    if (!phone || phone.length < 11) {
+    if (accountType === 'driver') {
+      if (!phone || phone.length < 5) {
+        return res.status(400).json({ error: 'Ingresa el celular del conductor' })
+      }
+    } else if (!phone || phone.length < 11) {
       return res.status(400).json({ error: 'Ingresa un celular válido (9 dígitos Perú)' })
     }
 

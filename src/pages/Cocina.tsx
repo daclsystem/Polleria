@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
-import { Bike, Clock, Printer, Volume2 } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { Bike, ChevronLeft, ChevronRight, Clock, Printer, Volume2 } from 'lucide-react'
 import { elapsedMinutes, padOrder } from '../lib/format'
 import { printTicket } from '../lib/print'
 import { playSound, unlockSounds } from '../lib/sounds'
@@ -72,7 +72,7 @@ export function Cocina() {
       // Delivery con repartidor asignado: sale de cocina, lo lleva el repartidor
       const isDeliveryWithDriver =
         (o.type === 'delivery' || o.type === 'web') && Boolean(o.driverId)
-      if (listos.length && o.status !== 'entregado' && !isDeliveryWithDriver) {
+      if (listos.length && !isDeliveryWithDriver) {
         list.push({
           key: `${o.id}:listo`,
           order: o,
@@ -138,9 +138,9 @@ export function Cocina() {
           </div>
         </div>
       </div>
-      <p className="shrink-0 text-[11px] font-medium text-ink/45">Desliza horizontal ← → para ver Recibidos · En fuego · Listos</p>
+      <p className="shrink-0 text-[11px] font-medium text-ink/45">Desliza o usa las flechas para ver Recibidos · En fuego · Listos</p>
 
-      <div className="-mx-1 flex min-h-0 flex-1 gap-3 overflow-x-auto overflow-y-hidden px-1 pb-2 [scrollbar-gutter:stable] snap-x snap-mandatory">
+      <KitchenBoard>
         {COLS.map((col) => {
           const colTickets = tickets
             .filter((t) => t.wave === col.id)
@@ -228,7 +228,66 @@ export function Cocina() {
             </section>
           )
         })}
+      </KitchenBoard>
+    </div>
+  )
+}
+
+function KitchenBoard({ children }: { children: ReactNode }) {
+  const ref = useRef<HTMLDivElement>(null)
+  const drag = useRef<{ x: number; left: number } | null>(null)
+
+  const scrollBy = (dir: number) => {
+    const el = ref.current
+    if (!el) return
+    const step = Math.min(el.clientWidth * 0.85, 360)
+    el.scrollBy({ left: dir * step, behavior: 'smooth' })
+  }
+
+  return (
+    <div className="relative min-h-0 min-w-0 w-full flex-1">
+      <div
+        ref={ref}
+        className="flex h-full min-h-0 min-w-0 gap-3 overflow-x-auto overflow-y-hidden pb-2 [scrollbar-width:thin] snap-x snap-mandatory"
+        style={{ WebkitOverflowScrolling: 'touch', touchAction: 'pan-x' }}
+        onPointerDown={(e) => {
+          if ((e.target as HTMLElement).closest('button, a, input, textarea')) return
+          const el = ref.current
+          if (!el) return
+          drag.current = { x: e.clientX, left: el.scrollLeft }
+          el.setPointerCapture(e.pointerId)
+        }}
+        onPointerMove={(e) => {
+          const el = ref.current
+          const d = drag.current
+          if (!el || !d) return
+          el.scrollLeft = d.left - (e.clientX - d.x)
+        }}
+        onPointerUp={() => {
+          drag.current = null
+        }}
+        onPointerCancel={() => {
+          drag.current = null
+        }}
+      >
+        {children}
       </div>
+      <button
+        type="button"
+        aria-label="Columna anterior"
+        onClick={() => scrollBy(-1)}
+        className="absolute left-0 top-1/2 z-10 flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full bg-white/95 text-ink shadow ring-1 ring-black/10 lg:hidden"
+      >
+        <ChevronLeft size={20} />
+      </button>
+      <button
+        type="button"
+        aria-label="Columna siguiente"
+        onClick={() => scrollBy(1)}
+        className="absolute right-0 top-1/2 z-10 flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full bg-white/95 text-ink shadow ring-1 ring-black/10 lg:hidden"
+      >
+        <ChevronRight size={20} />
+      </button>
     </div>
   )
 }

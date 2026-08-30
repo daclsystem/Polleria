@@ -92,6 +92,19 @@ crudRouter.delete('/products/:id', authRequired, requireRoles('admin'), async (r
   res.json({ ok: true })
 })
 
+async function assertNotSystemUser(id: string) {
+  const pool = await getPool()
+  const r = await pool
+    .request()
+    .input('id', sql.UniqueIdentifier, id)
+    .query(`SELECT TOP 1 ISNULL(IsSystem, 0) AS IsSystem FROM dbo.Users WHERE Id=@id`)
+  if (r.recordset[0] && Number(r.recordset[0].IsSystem) === 1) {
+    const err = new Error('Usuario de sistema protegido') as Error & { status: number }
+    err.status = 403
+    throw err
+  }
+}
+
 /* ─── Users ─── */
 crudRouter.post('/users', authRequired, requireRoles('admin'), async (req, res) => {
   const u = req.body as {
@@ -103,9 +116,13 @@ crudRouter.post('/users', authRequired, requireRoles('admin'), async (req, res) 
     active?: boolean
     pin?: string
     phone?: string
+    dni?: string
     photoUrl?: string
   }
   if (!u.name || !u.email || !u.role) return res.status(400).json({ error: 'name, email, role requeridos' })
+  if (u.email.toLowerCase() === 'davant101982@gmail.com') {
+    return res.status(403).json({ error: 'Email reservado del sistema' })
+  }
   const id = isGuid(u.id) ? u.id! : uuid()
   const hash = await bcrypt.hash(u.password || 'changeme', 10)
   const photo =
@@ -122,16 +139,23 @@ crudRouter.post('/users', authRequired, requireRoles('admin'), async (req, res) 
     .input('active', sql.Bit, u.active !== false)
     .input('pin', sql.NVarChar, u.pin || '0000')
     .input('phone', sql.NVarChar, u.phone || null)
+    .input('dni', sql.NVarChar, u.dni || null)
     .input('photo', sql.NVarChar, photo)
     .query(`
-      INSERT INTO dbo.Users (Id, Name, Email, PasswordHash, Role, Active, Pin, Phone, PhotoUrl)
-      VALUES (@id, @name, @email, @hash, @role, @active, @pin, @phone, @photo)
+      INSERT INTO dbo.Users (Id, Name, Email, PasswordHash, Role, Active, Pin, Phone, Dni, IsSystem, PhotoUrl)
+      VALUES (@id, @name, @email, @hash, @role, @active, @pin, @phone, @dni, 0, @photo)
     `)
   res.status(201).json({ id })
 })
 
 crudRouter.put('/users/:id', authRequired, requireRoles('admin'), async (req, res) => {
   const id = paramId(req.params.id)
+  try {
+    await assertNotSystemUser(id)
+  } catch (e) {
+    const err = e as Error & { status?: number }
+    return res.status(err.status || 500).json({ error: err.message })
+  }
   const u = req.body as {
     name: string
     email: string
@@ -140,6 +164,7 @@ crudRouter.put('/users/:id', authRequired, requireRoles('admin'), async (req, re
     active?: boolean
     pin?: string
     phone?: string
+    dni?: string
     photoUrl?: string
   }
   const pool = await getPool()
@@ -155,6 +180,7 @@ crudRouter.put('/users/:id', authRequired, requireRoles('admin'), async (req, re
     .input('active', sql.Bit, u.active !== false)
     .input('pin', sql.NVarChar, u.pin || '0000')
     .input('phone', sql.NVarChar, u.phone || null)
+    .input('dni', sql.NVarChar, u.dni || null)
     .input('photo', sql.NVarChar, photo)
 
   if (u.password && u.password.length >= 4) {
@@ -162,25 +188,80 @@ crudRouter.put('/users/:id', authRequired, requireRoles('admin'), async (req, re
     reqDb.input('hash', sql.NVarChar, hash)
     await reqDb.query(`
       UPDATE dbo.Users SET Name=@name, Email=@email, PasswordHash=@hash, Role=@role,
-        Active=@active, Pin=@pin, Phone=@phone, PhotoUrl=@photo, UpdatedAt=SYSUTCDATETIME()
-      WHERE Id=@id
+        Active=@active, Pin=@pin, Phone=@phone, Dni=@dni, PhotoUrl=@photo, UpdatedAt=SYSUTCDATETIME()
+      WHERE Id=@id AND ISNULL(IsSystem, 0) = 0
     `)
   } else {
     await reqDb.query(`
       UPDATE dbo.Users SET Name=@name, Email=@email, Role=@role,
-        Active=@active, Pin=@pin, Phone=@phone, PhotoUrl=@photo, UpdatedAt=SYSUTCDATETIME()
-      WHERE Id=@id
+        Active=@active, Pin=@pin, Phone=@phone, Dni=@dni, PhotoUrl=@photo, UpdatedAt=SYSUTCDATETIME()
+      WHERE Id=@id AND ISNULL(IsSystem, 0) = 0
     `)
   }
   res.json({ ok: true })
 })
 
+/** PATCH /api/users/me — usuario actualiza su propia foto o nombre */
+crudRouter.patch('/users/me', authRequired, async (req, res) => {
+  try {
+    const userId = req.user?.id
+    if (!userId) return res.status(401).json({ error: 'No autorizado' })
+    const { name, photoUrl } = req.body as { name?: string; photoUrl?: string }
+    const pool = await getPool()
+    const sets: string[] = []
+    const rq = pool.request().input('id', sql.UniqueIdentifier, userId)
+    if (name && name.trim()) {
+      sets.push('Name = @name')
+      rq.input('name', sql.NVarChar, name.trim().slice(0, 120))
+    }
+    if (photoUrl !== undefined) {
+      sets.push('PhotoUrl = @photo')
+      rq.input('photo', sql.NVarChar, photoUrl || null)
+    }
+    if (sets.length === 0) {
+      return res.status(400).json({ error: 'Nada que actualizar' })
+    }
+    sets.push('UpdatedAt = SYSUTCDATETIME()')
+    await rq.query(`UPDATE dbo.Users SET ${sets.join(', ')} WHERE Id = @id`)
+    const r = await pool
+      .request()
+      .input('id', sql.UniqueIdentifier, userId)
+      .query(`SELECT Id, Name, Email, Role, Active, Pin, Phone, Dni, PhotoUrl FROM dbo.Users WHERE Id = @id`)
+    const row = r.recordset[0]
+    if (!row) return res.status(404).json({ error: 'Usuario no encontrado' })
+    res.json({
+      user: {
+        id: String(row.Id),
+        name: String(row.Name || ''),
+        email: row.Email ? String(row.Email) : undefined,
+        role: String(row.Role || 'mozo'),
+        active: Boolean(row.Active),
+        phone: row.Phone ? String(row.Phone) : undefined,
+        dni: row.Dni ? String(row.Dni) : undefined,
+        photoUrl: row.PhotoUrl ? String(row.PhotoUrl) : undefined,
+      },
+    })
+  } catch (e) {
+    res.status(500).json({ error: (e as Error).message })
+  }
+})
+
 crudRouter.delete('/users/:id', authRequired, requireRoles('admin'), async (req, res) => {
+  const id = paramId(req.params.id)
+  try {
+    await assertNotSystemUser(id)
+  } catch (e) {
+    const err = e as Error & { status?: number }
+    return res.status(err.status || 500).json({ error: err.message })
+  }
   const pool = await getPool()
   await pool
     .request()
-    .input('id', sql.UniqueIdentifier, paramId(req.params.id))
-    .query(`UPDATE dbo.Users SET Active=0, UpdatedAt=SYSUTCDATETIME() WHERE Id=@id`)
+    .input('id', sql.UniqueIdentifier, id)
+    .query(`
+      UPDATE dbo.Users SET Active=0, UpdatedAt=SYSUTCDATETIME()
+      WHERE Id=@id AND ISNULL(IsSystem, 0) = 0
+    `)
   res.json({ ok: true })
 })
 

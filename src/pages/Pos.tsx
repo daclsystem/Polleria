@@ -1,11 +1,12 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
-import { Check, ChevronDown, Minus, Plus, Trash2, X } from 'lucide-react'
+import { Check, ChevronDown, MapPin, Minus, Plus, Trash2, X } from 'lucide-react'
 import { useAuth } from '../auth/AuthContext'
 import { useStore } from '../store/StoreContext'
 import { padOrder, soles } from '../lib/format'
 import { printTicket } from '../lib/print'
 import { apiUpsertCustomer } from '../lib/apiClient'
+import { formatDeliveryQuote, quoteDeliveryFromAddress } from '../lib/deliveryQuote'
 import { filterKitchenItems } from '../lib/kitchen'
 import { orderBelongsToStaff } from '../lib/realtime'
 import type { OrderItem, OrderType, PaymentMethod } from '../types'
@@ -44,6 +45,13 @@ export function Pos() {
   )
   const [phone, setPhone] = useState(isAppendMode ? (appendOrder?.customerPhone ?? '') : '')
   const [address, setAddress] = useState('')
+  const [addressLat, setAddressLat] = useState<number | null>(null)
+  const [addressLng, setAddressLng] = useState<number | null>(null)
+  const [quotedFee, setQuotedFee] = useState<number | null>(null)
+  const [quoteKm, setQuoteKm] = useState<number | null>(null)
+  const [quoteMin, setQuoteMin] = useState<number | null>(null)
+  const [quoteInfo, setQuoteInfo] = useState<string | null>(null)
+  const [quoteBusy, setQuoteBusy] = useState(false)
   const [notes, setNotes] = useState('')
   const [discount, setDiscount] = useState(0)
   const [items, setItems] = useState<OrderItem[]>([])
@@ -77,7 +85,15 @@ export function Pos() {
 
   const qty = items.reduce((s, i) => s + i.qty, 0)
   const gross = items.reduce((s, i) => s + i.qty * i.price, 0)
-  const total = Math.max(0, gross - discount)
+  const deliveryFee = type === 'delivery' ? quotedFee || 0 : 0
+  const total = Math.max(0, gross - discount + deliveryFee)
+
+  useEffect(() => {
+    if (type !== 'delivery') {
+      setQuotedFee(null)
+      setQuoteInfo(null)
+    }
+  }, [type])
   const cashNum = Number(cash) || 0
   const change = Math.max(0, cashNum - total)
   const canSend = items.length > 0 && (isAppendMode || type !== 'salon' || Boolean(tableId))
@@ -126,6 +142,39 @@ export function Pos() {
       alert('Nombre y teléfono del cliente son obligatorios')
       return
     }
+    if (type === 'delivery' && !address.trim()) {
+      alert('Indica la dirección de entrega para calcular km y tiempo')
+      return
+    }
+
+    let lat = addressLat
+    let lng = addressLng
+    let dist = quoteKm
+    let mins = quoteMin
+    let sendFee = deliveryFee
+    if (type === 'delivery') {
+      try {
+        const q = await quoteDeliveryFromAddress(address.trim())
+        lat = q.lat
+        lng = q.lng
+        dist = q.distanceKm
+        mins = q.timeMin
+        sendFee = q.fee
+        setAddressLat(q.lat)
+        setAddressLng(q.lng)
+        setQuotedFee(q.fee)
+        setQuoteKm(q.distanceKm)
+        setQuoteMin(q.timeMin)
+        setQuoteInfo(formatDeliveryQuote(q))
+      } catch (e) {
+        alert((e as Error).message || 'No se pudo calcular el delivery. Revisa la dirección o la ubicación del local.')
+        return
+      }
+    }
+    const orderItems =
+      type === 'delivery' && sendFee > 0
+        ? [...items, { productId: 'delivery', name: 'Delivery', qty: 1, price: sendFee }]
+        : items
 
     try {
       const { customer } = await apiUpsertCustomer({
@@ -135,11 +184,16 @@ export function Pos() {
       })
       const order = await createOrder({
         type,
-        items,
+        items: orderItems,
         customerName: name,
         customerPhone: customer.phone || phone,
         customerId: customer.id,
         address: type === 'delivery' ? address : undefined,
+        addressLat: type === 'delivery' && lat != null ? lat : undefined,
+        addressLng: type === 'delivery' && lng != null ? lng : undefined,
+        deliveryFee: type === 'delivery' ? sendFee : 0,
+        deliveryDistanceKm: type === 'delivery' ? dist ?? undefined : undefined,
+        deliveryTimeMin: type === 'delivery' ? mins ?? undefined : undefined,
         tableId: type === 'salon' ? tableId : undefined,
         discount,
         paymentMethod: paid ? payMethod : 'pendiente',
@@ -148,6 +202,7 @@ export function Pos() {
         createdBy: user?.name ?? 'POS',
         createdByUserId: user?.id,
         source: 'pos',
+        codPaymentMethod: type === 'delivery' ? (payMethod === 'yape' ? 'yape' : 'efectivo') : undefined,
       })
       if (paid) payOrder(order.id, payMethod)
       const kitchenItems = filterKitchenItems(order.items, state.products)
@@ -215,6 +270,12 @@ export function Pos() {
           <span>Subtotal</span>
           <span className="font-semibold text-ink">{soles(gross)}</span>
         </div>
+        {type === 'delivery' ? (
+          <div className="flex justify-between text-ink/45">
+            <span>Delivery{quoteInfo ? ` · ${quoteInfo}` : ''}</span>
+            <span className="font-semibold text-ink">{deliveryFee > 0 ? soles(deliveryFee) : '—'}</span>
+          </div>
+        ) : null}
         <Field label="Descuento (S/)">
           <input
             type="number"
@@ -318,12 +379,54 @@ export function Pos() {
             </button>
           ) : null}
           {type === 'delivery' ? (
-            <input
-              className={`${inputClass} sm:col-span-2`}
-              placeholder="Dirección de entrega"
-              value={address}
-              onChange={(e) => setAddress(e.target.value)}
-            />
+            <div className="sm:col-span-2 space-y-2">
+              <input
+                className={inputClass}
+                placeholder="Dirección de entrega"
+                value={address}
+                onChange={(e) => {
+                  setAddress(e.target.value)
+                  setQuotedFee(null)
+                  setQuoteInfo(null)
+                }}
+              />
+              <button
+                type="button"
+                disabled={quoteBusy || !address.trim()}
+                className="inline-flex min-h-10 items-center gap-2 rounded-xl bg-ink px-3 text-sm font-semibold text-cream disabled:opacity-40"
+                onClick={() => {
+                  void (async () => {
+                    setQuoteBusy(true)
+                    try {
+                      const q = await quoteDeliveryFromAddress(address.trim())
+                      setAddressLat(q.lat)
+                      setAddressLng(q.lng)
+                      if (q.address) setAddress(q.address)
+                      setQuotedFee(q.fee)
+                      setQuoteKm(q.distanceKm)
+                      setQuoteMin(q.timeMin)
+                      setQuoteInfo(formatDeliveryQuote(q))
+                    } catch (e) {
+                      setQuoteInfo((e as Error).message)
+                    } finally {
+                      setQuoteBusy(false)
+                    }
+                  })()
+                }}
+              >
+                <MapPin size={14} /> {quoteBusy ? 'Calculando…' : 'Calcular distancia y tiempo'}
+              </button>
+              {quoteInfo ? (
+                <p className="text-sm font-semibold text-teal-800">
+                  {quoteInfo}
+                  {deliveryFee > 0 ? ` · envío ${soles(deliveryFee)}` : ''}
+                </p>
+              ) : (
+                <p className="text-xs text-ink/45">
+                  Se calcula desde la ubicación del local (Configuración) y los rangos de delivery.
+                </p>
+              )}
+            </div>
           ) : null}
           {!isAppendMode && (!nameOk || !phoneOk) ? (
             <p className="sm:col-span-2 text-xs font-medium text-brick">

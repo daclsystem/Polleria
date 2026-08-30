@@ -22,6 +22,7 @@ import { Facturacion } from './pages/Facturacion'
 import { WhatsApp } from './pages/WhatsApp'
 import { Configuracion } from './pages/Configuracion'
 import { WebConfig } from './pages/WebConfig'
+import { Cupones } from './pages/Cupones'
 import { CustomerApp } from './pages/Customer'
 import { WebLanding } from './pages/WebLanding'
 import { WebAccount } from './pages/WebAccount'
@@ -195,6 +196,14 @@ export default function App() {
                 }
               />
             </Route>
+              <Route
+                path="/cupones"
+                element={
+                  <ProtectedRoute module="cupones">
+                    <Cupones />
+                  </ProtectedRoute>
+                }
+              />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </BrowserRouter>

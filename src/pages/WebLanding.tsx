@@ -3,64 +3,84 @@ import { useNavigate } from 'react-router-dom'
 import {
   ArrowRight,
   Clock,
+  Flame,
   MapPin,
-  Minus,
+  Menu,
   Phone,
   Plus,
-  ShoppingCart,
   Star,
-  Trash2,
   Truck,
+  Utensils,
   X,
 } from 'lucide-react'
 import { useStore } from '../store/StoreContext'
 import { soles } from '../lib/format'
 import { APP_VERSION } from '../lib/version'
-import { ProductModal } from '../components/ProductModal'
+import { BottomSheet } from '../components/BottomSheet'
 import { PhoneOtpLogin } from '../components/PhoneOtpLogin'
-import type { Customer, OrderItem, Product } from '../types'
-import { apiDeliveryQuote, apiGetBanners } from '../lib/apiClient'
+import type { Customer, OrderItem } from '../types'
+import {
+  apiDeliveryQuote,
+  apiGetBanners,
+  apiGetWebsite,
+  apiSaveCustomerAddress,
+  apiValidateCoupon,
+} from '../lib/apiClient'
+import { CustomerAddressesPanel } from '../components/CustomerAddressesPanel'
 import { useDeviceLocation } from '../hooks/useDeviceLocation'
 import { getPlataforma, platformLabel } from '../lib/platform'
 import { getCustomerSession, setCustomerHome, setCustomerSession } from '../lib/customerSession'
+import {
+  DEFAULT_WEB_BANNERS,
+  DEFAULT_WEB_SITE,
+  mergeWebSite,
+  normalizeBanners,
+  type WebBanner,
+  type WebHighlight,
+  type WebSiteContent,
+} from '../lib/webSite'
+import { customerMenuUrl, withBase } from '../lib/paths'
 
-interface Banner {
-  id: string
-  title: string
-  subtitle: string
-  cta: string
-  bgGradient: string
-  active: boolean
+function HighlightIcon({ icon }: { icon: WebHighlight['icon'] }) {
+  const cls = 'text-[#1a3d1a]'
+  if (icon === 'truck') return <Truck size={22} className={cls} />
+  if (icon === 'clock') return <Clock size={22} className={cls} />
+  if (icon === 'star') return <Star size={22} className={cls} />
+  if (icon === 'flame') return <Flame size={22} className={cls} />
+  if (icon === 'utensils') return <Utensils size={22} className={cls} />
+  return <MapPin size={22} className={cls} />
 }
-
-const DEFAULT_BANNERS: Banner[] = [
-  { id: 'b1', title: 'El Mejor Pollo de Cañete', subtitle: '¡Buenazo y económico! Crujiente por fuera, jugoso por dentro. El sabor que todos aman.', cta: 'Ver Menú', bgGradient: 'from-green-900 via-green-800 to-emerald-900', active: true },
-  { id: 'b2', title: 'Nuevo Local Más Amplio', subtitle: 'Ahora con 2 locales para atenderte mejor. Ven con toda la familia y disfruta.', cta: 'Hacer Pedido', bgGradient: 'from-yellow-900 via-amber-900 to-orange-900', active: true },
-  { id: 'b3', title: 'Chifa & Pollería en Uno', subtitle: 'Arroz chaufa, tallarín saltado, pollo a la brasa y mucho más. Todo en un solo lugar.', cta: 'Pedir Ahora', bgGradient: 'from-green-950 via-emerald-950 to-green-900', active: true },
-]
 
 export function WebLanding() {
   const { state, createOrder } = useStore()
   const navigate = useNavigate()
-  const [banners, setBanners] = useState<Banner[]>(DEFAULT_BANNERS)
+  const [banners, setBanners] = useState<WebBanner[]>(DEFAULT_WEB_BANNERS)
+  const [site, setSite] = useState<WebSiteContent>(DEFAULT_WEB_SITE)
 
   useEffect(() => {
-    void apiGetBanners(false)
-      .then((r) => {
-        const list = (r.banners as Banner[]) || []
-        if (list.length) setBanners(list)
+    void Promise.all([apiGetBanners(false), apiGetWebsite(false)])
+      .then(([b, w]) => {
+        setBanners(normalizeBanners(b.banners))
+        setSite(mergeWebSite(w.site))
       })
       .catch(() => undefined)
   }, [])
   const [currentBanner, setCurrentBanner] = useState(0)
+  const whatsappHref = `https://wa.me/${site.whatsappNumber.replace(/\D/g, '')}`
+  const phoneHref = `tel:+${site.whatsappNumber.replace(/\D/g, '')}`
   const [activeCat, setActiveCat] = useState('Todos')
   const [items, setItems] = useState<OrderItem[]>([])
-  const [cartOpen, setCartOpen] = useState(false)
+  const [, setCartOpen] = useState(false)
   const [checkoutOpen, setCheckoutOpen] = useState(false)
   const [mode, setMode] = useState<'llevar' | 'delivery'>('delivery')
   const [name, setName] = useState('')
   const [phone, setPhoneVal] = useState('')
   const [address, setAddress] = useState('')
+  const [couponCode, setCouponCode] = useState('')
+  const [couponDiscount, setCouponDiscount] = useState(0)
+  const [couponMsg, setCouponMsg] = useState<string | null>(null)
+  const [addrReload, setAddrReload] = useState(0)
+  const [saveAddrMsg, setSaveAddrMsg] = useState<string | null>(null)
   const [addressLat, setAddressLat] = useState<number | null>(null)
   const [addressLng, setAddressLng] = useState<number | null>(null)
   const [quotedFee, setQuotedFee] = useState<number | null>(null)
@@ -69,11 +89,11 @@ export function WebLanding() {
   const [note, setNote] = useState('')
   const [pay, setPay] = useState<'yape' | 'efectivo'>('yape')
   const [orderSuccess, setOrderSuccess] = useState<string | null>(null)
-  const [modalProduct, setModalProduct] = useState<Product | null>(null)
   const [customer, setCustomer] = useState<Customer | null>(null)
   const [authOpen, setAuthOpen] = useState(false)
   const [authPurpose, setAuthPurpose] = useState<'login' | 'register'>('login')
   const menuRef = useRef<HTMLDivElement>(null)
+  const [mobileNavOpen, setMobileNavOpen] = useState(false)
   const plataforma = getPlataforma()
   const { requestOnce, reverseGeocode, error: locError } = useDeviceLocation({ auto: false })
 
@@ -87,19 +107,14 @@ export function WebLanding() {
   useEffect(() => {
     const sess = getCustomerSession()
     if (sess) {
-      setCustomerHome('/web')
+      setCustomerHome('web')
       applyCustomer(sess)
     }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const openCheckout = () => {
-    setCartOpen(false)
-    if (!getCustomerSession() && !customer) {
-      setAuthPurpose('login')
-      setAuthOpen(true)
-      return
-    }
-    setCheckoutOpen(true)
+  /** Pedidos solo en /cliente (app tipo PedidosYa). La web es vitrina. */
+  const goToClienteApp = (productId?: string) => {
+    window.location.assign(customerMenuUrl(productId ? { productId } : undefined))
   }
 
   useEffect(() => {
@@ -123,7 +138,7 @@ export function WebLanding() {
   const subtotal = items.reduce((s, i) => s + i.qty * i.price, 0)
   const deliveryFee =
     mode === 'delivery' ? (quotedFee != null ? quotedFee : state.settings.deliveryFee) : 0
-  const total = subtotal + deliveryFee
+  const total = Math.max(0, subtotal + deliveryFee - couponDiscount)
 
   const detectMyLocation = async () => {
     setLocBusy(true)
@@ -159,63 +174,9 @@ export function WebLanding() {
     }
   }
 
+  /** Pedir: la web solo manda a /cliente. Login o sesión se resuelven allá. */
   const openProductModal = (id: string) => {
-    const p = state.products.find((x) => x.id === id)
-    if (!p) return
-    if (p.optionGroups && p.optionGroups.length > 0) {
-      setModalProduct(p)
-    } else {
-      addDirectly(p)
-    }
-  }
-
-  const addDirectly = (p: Product) => {
-    setItems((prev) => {
-      const f = prev.find((i) => i.productId === p.id && !i.selectedOptions)
-      if (f) return prev.map((i) => (i.productId === p.id && !i.selectedOptions ? { ...i, qty: i.qty + 1 } : i))
-      return [...prev, { productId: p.id, name: p.name, qty: 1, price: p.price }]
-    })
-  }
-
-  const addFromModal = (item: OrderItem) => {
-    setItems((prev) => [...prev, item])
-  }
-
-  const addSuggestion = (productId: string) => {
-    const p = state.products.find((x) => x.id === productId)
-    if (!p) return
-    if (p.optionGroups && p.optionGroups.length > 0) {
-      setModalProduct(p)
-    } else {
-      addDirectly(p)
-    }
-  }
-
-  const getSuggestions = (product: Product): Product[] => {
-    const sameCat = state.products.filter(
-      (p) => p.available && p.id !== product.id && p.category === product.category,
-    )
-    const otherPopular = state.products.filter(
-      (p) => p.available && p.id !== product.id && p.category !== product.category && p.tags?.includes('Popular'),
-    )
-    const drinks = state.products.filter(
-      (p) => p.available && p.category === 'Bebidas' && p.id !== product.id,
-    )
-    const combined = [...sameCat.slice(0, 2), ...drinks.slice(0, 2), ...otherPopular.slice(0, 1)]
-    const unique = Array.from(new Map(combined.map((p) => [p.id, p])).values())
-    return unique.slice(0, 4)
-  }
-
-  const remove = (idx: number) => {
-    setItems((prev) => prev.filter((_, i) => i !== idx))
-  }
-
-  const updateQty = (idx: number, delta: number) => {
-    setItems((prev) =>
-      prev
-        .map((item, i) => (i === idx ? { ...item, qty: item.qty + delta } : item))
-        .filter((item) => item.qty > 0),
-    )
+    goToClienteApp(id)
   }
 
   const scrollToMenu = () => {
@@ -248,7 +209,8 @@ export function WebLanding() {
         address: mode === 'delivery' ? address : undefined,
         addressLat: mode === 'delivery' && addressLat != null ? addressLat : undefined,
         addressLng: mode === 'delivery' && addressLng != null ? addressLng : undefined,
-        discount: 0,
+        discount: couponDiscount,
+        couponCode: couponCode.trim() || undefined,
         paymentMethod: 'pendiente',
         paid: false,
         codPaymentMethod: pay,
@@ -263,7 +225,7 @@ export function WebLanding() {
       setCheckoutOpen(false)
       setCartOpen(false)
       const tel = (phone || customer?.phone || '').replace(/\D/g, '').slice(-9)
-      navigate(`/web/seguimiento/${order.id}${tel ? `?tel=${tel}` : ''}`)
+      navigate(`/seguimiento/${order.id}${tel ? `?tel=${tel}` : ''}`)
     } catch (err) {
       alert((err as Error).message || 'No se pudo crear el pedido')
     }
@@ -286,7 +248,7 @@ export function WebLanding() {
           <p className="mt-1 text-gray-500">Tu pedido <strong>#{order?.number}</strong> ha sido recibido y está siendo preparado.</p>
           <div className="mt-8 flex flex-col gap-3">
             <button
-              onClick={() => navigate(`/web/cuenta?track=${orderSuccess}`)}
+              onClick={() => navigate(`/cuenta?track=${orderSuccess}`)}
               className="rounded-2xl bg-green-700 px-6 py-4 text-lg font-bold text-white shadow-lg shadow-green-700/30 hover:bg-green-800"
             >
               🗺️ Seguir mi Pedido en Mapa
@@ -306,128 +268,278 @@ export function WebLanding() {
   return (
     <div className="min-h-dvh bg-white">
       {/* NAVBAR */}
-      <nav className="fixed top-0 z-50 w-full bg-[#1a3d1a]/97 shadow-xl shadow-black/20 backdrop-blur-lg">
-        <div className="mx-auto flex h-[72px] max-w-7xl items-center justify-between px-4 sm:px-6">
-          <div className="flex items-center">
-            <img src="/polleria/logo-lopez.png" alt="Chifa Pollería Lopez" className="h-14 w-auto" />
-          </div>
-          <div className="hidden items-center gap-8 text-sm font-semibold text-white/80 lg:flex">
+      <nav className="web-nav fixed top-0 z-50 w-full border-b border-white/10 bg-[#0c2210]/80 backdrop-blur-xl">
+        <div className="mx-auto flex h-[4.5rem] max-w-7xl items-center justify-between px-4 sm:px-6">
+          <a href="#inicio" className="flex items-center gap-3">
+            <img
+              src={withBase('logo-lopez.png')}
+              alt={site.brandName}
+              className="h-12 w-auto drop-shadow-[0_4px_12px_rgba(0,0,0,0.35)] sm:h-14"
+            />
+          </a>
+          <div className="hidden items-center gap-8 text-[0.8125rem] font-semibold tracking-wide text-white/70 lg:flex">
             <a href="#inicio" className="transition hover:text-[#ffd700]">Inicio</a>
-            <button onClick={scrollToMenu} className="transition hover:text-[#ffd700]">Menú</button>
-            <button onClick={() => navigate('/web/reservar')} className="transition hover:text-[#ffd700]">Reservar</button>
-            <a href="#locales" className="transition hover:text-[#ffd700]">Locales</a>
-            <a href="#contacto" className="transition hover:text-[#ffd700]">Contacto</a>
+            {site.sections.about ? <a href="#nosotros" className="transition hover:text-[#ffd700]">Nosotros</a> : null}
+            {site.sections.menu ? (
+              <button type="button" onClick={scrollToMenu} className="transition hover:text-[#ffd700]">
+                Carta
+              </button>
+            ) : null}
+            <button type="button" onClick={() => navigate('/reservar')} className="transition hover:text-[#ffd700]">
+              Reservar
+            </button>
+            {site.sections.schedule ? <a href="#horarios" className="transition hover:text-[#ffd700]">Horarios</a> : null}
+            {site.sections.locales ? <a href="#locales" className="transition hover:text-[#ffd700]">Locales</a> : null}
+            {site.sections.contact ? <a href="#contacto" className="transition hover:text-[#ffd700]">Contacto</a> : null}
           </div>
           <div className="flex items-center gap-2">
             <button
-              onClick={() => {
-                if (customer) navigate('/web/cuenta')
-                else {
-                  setAuthPurpose('login')
-                  setAuthOpen(true)
-                }
-              }}
-              className="flex h-11 items-center gap-2 rounded-full border border-white/20 bg-white/10 px-4 text-sm font-bold text-white transition hover:bg-white/20"
+              onClick={() => goToClienteApp()}
+              className="flex h-11 items-center gap-2 rounded-full border border-white/15 bg-white/5 px-4 text-sm font-bold text-white transition hover:bg-white/15"
             >
               <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" /></svg>
               <span className="hidden sm:inline">{customer ? customer.name.split(' ')[0] : 'Mi Cuenta'}</span>
             </button>
             <button
-              onClick={() => setCartOpen(true)}
-              className="relative flex h-11 items-center gap-2 rounded-full bg-[#ffd700] px-5 text-sm font-bold text-[#1a3d1a] shadow-lg shadow-yellow-500/20 transition hover:scale-105 hover:bg-yellow-400"
+              type="button"
+              onClick={() => setMobileNavOpen(true)}
+              className="flex h-11 w-11 items-center justify-center rounded-full bg-white/10 text-white lg:hidden"
+              aria-label="Menú"
             >
-              <ShoppingCart size={18} />
-              <span className="hidden sm:inline">Mi Pedido</span>
-              {qty > 0 && (
-                <span className="absolute -right-1 -top-1 flex h-6 w-6 items-center justify-center rounded-full bg-red-600 text-xs font-bold text-white shadow">
-                  {qty}
-                </span>
-              )}
+              <Menu size={22} />
             </button>
           </div>
         </div>
       </nav>
 
-      {/* HERO BANNER */}
-      <section id="inicio" className="relative pt-[72px]">
-        <div className={`relative overflow-hidden bg-gradient-to-br ${banners[currentBanner]?.bgGradient ?? 'from-green-900 to-emerald-900'} transition-all duration-1000`}>
-          <div className="absolute inset-0 bg-[url('data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNjAiIGhlaWdodD0iNjAiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+PGNpcmNsZSBjeD0iMzAiIGN5PSIzMCIgcj0iMS41IiBmaWxsPSJyZ2JhKDI1NSwyMTUsMCwwLjA0KSIvPjwvc3ZnPg==')] opacity-60" />
-          <div className="absolute inset-0 bg-gradient-to-t from-black/40 to-transparent" />
-          <div className="relative mx-auto flex min-h-[480px] max-w-7xl flex-col items-center justify-center px-6 py-20 text-center sm:min-h-[560px] sm:py-28">
-            <span className="mb-4 inline-flex items-center gap-2 rounded-full border border-[#ffd700]/30 bg-[#ffd700]/10 px-4 py-1.5 text-sm font-semibold text-[#ffd700]">
-              <Star size={14} fill="currentColor" /> El mejor pollo de Cañete
-            </span>
-            <h2 className="max-w-4xl text-4xl font-black leading-tight text-white sm:text-6xl lg:text-7xl">
-              {banners[currentBanner]?.title}
-            </h2>
-            <p className="mt-5 max-w-2xl text-lg text-white/75 sm:text-xl">
-              {banners[currentBanner]?.subtitle}
-            </p>
-            <div className="mt-10 flex flex-wrap items-center justify-center gap-4">
+      {/* MOBILE NAV DRAWER */}
+      {mobileNavOpen && (
+        <div className="fixed inset-0 z-[60] lg:hidden">
+          <button
+            type="button"
+            className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+            onClick={() => setMobileNavOpen(false)}
+            aria-label="Cerrar menú"
+          />
+          <div className="absolute right-0 top-0 flex h-full w-72 flex-col bg-[#0c2210] shadow-2xl">
+            <div className="flex items-center justify-between border-b border-white/10 px-5 py-5">
+              <p className="font-display text-lg font-semibold text-[#ffd700]">{site.brandName}</p>
               <button
-                onClick={scrollToMenu}
-                className="inline-flex items-center gap-2 rounded-full bg-[#ffd700] px-8 py-4 text-lg font-black text-[#1a3d1a] shadow-xl shadow-yellow-500/30 transition hover:scale-105 hover:bg-yellow-400"
+                type="button"
+                onClick={() => setMobileNavOpen(false)}
+                className="flex h-10 w-10 items-center justify-center rounded-full bg-white/10 text-white"
               >
-                {banners[currentBanner]?.cta ?? 'Ver Menú'}
-                <ArrowRight size={20} />
+                <X size={18} />
               </button>
+            </div>
+            <nav className="flex-1 space-y-1 overflow-y-auto px-4 py-4">
+              <a href="#inicio" onClick={() => setMobileNavOpen(false)} className="flex min-h-12 items-center rounded-xl px-3 text-sm font-semibold text-white/80 transition hover:bg-white/10 hover:text-white">
+                Inicio
+              </a>
+              {site.sections.about ? (
+                <a href="#nosotros" onClick={() => setMobileNavOpen(false)} className="flex min-h-12 items-center rounded-xl px-3 text-sm font-semibold text-white/80 transition hover:bg-white/10 hover:text-white">
+                  Nosotros
+                </a>
+              ) : null}
+              {site.sections.menu ? (
+                <button type="button" onClick={() => { scrollToMenu(); setMobileNavOpen(false) }} className="flex min-h-12 w-full items-center rounded-xl px-3 text-left text-sm font-semibold text-white/80 transition hover:bg-white/10 hover:text-white">
+                  Carta
+                </button>
+              ) : null}
+              <button type="button" onClick={() => { navigate('/reservar'); setMobileNavOpen(false) }} className="flex min-h-12 w-full items-center rounded-xl px-3 text-left text-sm font-semibold text-white/80 transition hover:bg-white/10 hover:text-white">
+                Reservar mesa
+              </button>
+              {site.sections.schedule ? (
+                <a href="#horarios" onClick={() => setMobileNavOpen(false)} className="flex min-h-12 items-center rounded-xl px-3 text-sm font-semibold text-white/80 transition hover:bg-white/10 hover:text-white">
+                  Horarios
+                </a>
+              ) : null}
+              {site.sections.locales ? (
+                <a href="#locales" onClick={() => setMobileNavOpen(false)} className="flex min-h-12 items-center rounded-xl px-3 text-sm font-semibold text-white/80 transition hover:bg-white/10 hover:text-white">
+                  Locales
+                </a>
+              ) : null}
+              {site.sections.contact ? (
+                <a href="#contacto" onClick={() => setMobileNavOpen(false)} className="flex min-h-12 items-center rounded-xl px-3 text-sm font-semibold text-white/80 transition hover:bg-white/10 hover:text-white">
+                  Contacto
+                </a>
+              ) : null}
+            </nav>
+            <div className="border-t border-white/10 p-4">
               <button
-                onClick={() => navigate('/web/reservar')}
-                className="inline-flex items-center gap-2 rounded-full border-2 border-white/30 bg-white/10 px-8 py-4 text-lg font-bold text-white backdrop-blur-sm transition hover:border-white/50 hover:bg-white/20"
+                type="button"
+                onClick={() => {
+                  setMobileNavOpen(false)
+                  goToClienteApp()
+                }}
+                className="w-full rounded-xl bg-[#ffd700] py-3 text-sm font-bold text-[#0c2210]"
               >
-                📅 Reservar Mesa
+                {customer ? `Hola, ${customer.name.split(' ')[0]}` : 'Mi Cuenta'}
               </button>
             </div>
           </div>
-          {/* Banner indicators */}
-          <div className="absolute bottom-8 left-1/2 flex -translate-x-1/2 gap-2">
+        </div>
+      )}
+
+      {/* HERO — marca primero, full-bleed */}
+      <section id="inicio" className="relative min-h-[min(100dvh,920px)] overflow-hidden pt-[4.5rem]">
+        <div
+          className={`absolute inset-0 bg-gradient-to-br ${banners[currentBanner]?.bgGradient ?? 'from-[#0b2a0b] via-[#1a3d1a] to-[#0f4d2e]'} transition-all duration-1000`}
+        />
+        <div className="web-hero-grid absolute inset-0 opacity-40" />
+        <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top,rgba(255,215,0,0.14),transparent_55%)]" />
+        <div className="absolute inset-0 bg-gradient-to-t from-black/55 via-black/20 to-transparent" />
+        <div className="absolute -left-24 bottom-10 h-72 w-72 rounded-full bg-[#ffd700]/10 blur-3xl web-float" />
+        <div className="absolute -right-16 top-28 h-64 w-64 rounded-full bg-emerald-400/10 blur-3xl web-float-delayed" />
+
+        <div className="relative z-10 mx-auto flex min-h-[calc(min(100dvh,920px)-4.5rem)] max-w-7xl flex-col items-center justify-center px-6 py-16 text-center sm:py-20">
+          <img
+            src={withBase('logo-lopez.png')}
+            alt=""
+            className="web-hero-logo mb-6 h-24 w-auto rounded-2xl shadow-[0_20px_50px_-20px_rgba(0,0,0,0.65)] sm:h-28"
+          />
+          <p className="font-display text-[clamp(2.35rem,6.5vw,4.25rem)] font-semibold leading-[1.05] tracking-normal text-[#ffd700]">
+            {site.brandName}
+          </p>
+          <p className="mt-3 max-w-xl text-base font-medium text-white/70 sm:text-lg">{site.slogan}</p>
+          <div className="mt-8 h-px w-16 bg-[#ffd700]/50" />
+          <p className="mt-6 text-[0.7rem] font-bold tracking-[0.28em] text-[#ffd700]/90 uppercase">
+            {site.heroEyebrow.replace(/^⭐\s*/, '')}
+          </p>
+          <h1 className="mt-3 max-w-4xl font-display text-[clamp(1.65rem,4vw,2.85rem)] font-semibold leading-snug text-white">
+            {banners[currentBanner]?.title}
+          </h1>
+          <p className="mt-4 max-w-2xl text-base text-white/65 sm:text-lg">
+            {banners[currentBanner]?.subtitle}
+          </p>
+          <div className="mt-10 flex flex-wrap items-center justify-center gap-3 sm:gap-4">
+            <button
+              onClick={scrollToMenu}
+              className="inline-flex items-center gap-2 rounded-full bg-[#ffd700] px-8 py-4 text-base font-extrabold text-[#0c2210] shadow-[0_12px_40px_-12px_rgba(255,215,0,0.55)] transition hover:scale-[1.03] hover:bg-[#ffe44d] sm:text-lg"
+            >
+              {banners[currentBanner]?.cta ?? 'Ver carta'}
+              <ArrowRight size={20} />
+            </button>
+            <button
+              onClick={() => navigate('/reservar')}
+              className="inline-flex items-center gap-2 rounded-full border border-white/35 bg-white/5 px-8 py-4 text-base font-bold text-white backdrop-blur-sm transition hover:border-white/55 hover:bg-white/15 sm:text-lg"
+            >
+              Reservar mesa
+            </button>
+          </div>
+        </div>
+
+        {banners.length > 1 ? (
+          <div className="absolute bottom-8 left-1/2 z-10 flex -translate-x-1/2 gap-2">
             {banners.map((_, i) => (
               <button
                 key={i}
+                type="button"
+                aria-label={`Banner ${i + 1}`}
                 onClick={() => setCurrentBanner(i)}
-                className={`h-2 rounded-full transition-all duration-300 ${i === currentBanner ? 'w-10 bg-[#ffd700]' : 'w-2 bg-white/40 hover:bg-white/60'}`}
+                className={`h-1.5 rounded-full transition-all duration-300 ${i === currentBanner ? 'w-10 bg-[#ffd700]' : 'w-2 bg-white/35 hover:bg-white/55'}`}
               />
             ))}
           </div>
+        ) : null}
+      </section>
+
+      {/* INFO — franja tipográfica, sin chips */}
+      <section className="border-b border-[#1a3d1a]/10 bg-[#f3f7f3]">
+        <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-center gap-x-10 gap-y-3 px-4 py-5 text-sm text-[#1a3d1a]/80 sm:justify-between sm:px-6">
+          <p className="flex items-center gap-2 font-semibold">
+            <Truck size={16} className="text-[#1a3d1a]" /> Delivery a domicilio
+          </p>
+          <p className="flex items-center gap-2 font-semibold">
+            <Clock size={16} className="text-[#1a3d1a]" /> {site.schedule[0]?.hours || state.settings.hours}
+          </p>
+          <p className="flex items-center gap-2 font-semibold">
+            <MapPin size={16} className="text-[#1a3d1a]" /> {site.branches.find((b) => b.active !== false)?.address || state.settings.address}
+          </p>
+          <p className="flex items-center gap-2 font-semibold">
+            <Phone size={16} className="text-[#1a3d1a]" /> {site.phoneDisplay || state.settings.phone}
+          </p>
         </div>
       </section>
 
-      {/* INFO BAR */}
-      <section className="border-b border-green-100 bg-gradient-to-r from-green-50 via-white to-green-50 py-6">
-        <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-center gap-6 px-4 text-sm sm:gap-10">
-          <div className="flex items-center gap-2.5">
-            <div className="flex h-9 w-9 items-center justify-center rounded-full bg-green-100">
-              <Truck size={16} className="text-green-700" />
+      {/* QUÉ VENDEMOS */}
+      {site.sections.highlights && site.highlights.length > 0 ? (
+        <section className="relative overflow-hidden bg-white py-16 sm:py-20">
+          <div className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-[#1a3d1a]/15 to-transparent" />
+          <div className="mx-auto max-w-7xl px-4 sm:px-6">
+            <div className="max-w-2xl">
+              <p className="text-[0.7rem] font-bold tracking-[0.22em] text-[#1a3d1a]/55 uppercase">En la mesa</p>
+              <h2 className="mt-2 font-display text-3xl font-semibold tracking-normal text-[#0c2210] sm:text-4xl">
+                Lo que nos pide Cañete
+              </h2>
             </div>
-            <span className="font-semibold text-gray-700">Delivery rápido</span>
-          </div>
-          <div className="flex items-center gap-2.5">
-            <div className="flex h-9 w-9 items-center justify-center rounded-full bg-green-100">
-              <Clock size={16} className="text-green-700" />
+            <div className="mt-10 grid gap-8 sm:grid-cols-2 lg:grid-cols-4">
+              {site.highlights.map((h, idx) => (
+                <div key={h.id} className="web-reveal group relative border-t border-[#1a3d1a]/15 pt-5" style={{ animationDelay: `${idx * 80}ms` }}>
+                  <div className="mb-3 text-[#1a3d1a]/80 transition group-hover:text-[#1a3d1a]">
+                    <HighlightIcon icon={h.icon} />
+                  </div>
+                  <h3 className="font-display text-xl font-bold text-[#0c2210]">{h.title}</h3>
+                  <p className="mt-2 text-sm leading-relaxed text-[#1a3d1a]/65">{h.text}</p>
+                </div>
+              ))}
             </div>
-            <span className="font-semibold text-gray-700">{state.settings.hours}</span>
           </div>
-          <div className="flex items-center gap-2.5">
-            <div className="flex h-9 w-9 items-center justify-center rounded-full bg-green-100">
-              <MapPin size={16} className="text-green-700" />
+        </section>
+      ) : null}
+
+      {/* NOSOTROS */}
+      {site.sections.about ? (
+        <section id="nosotros" className="relative overflow-hidden bg-[#0f2410] py-20 text-white sm:py-24">
+          <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_20%_20%,rgba(255,215,0,0.12),transparent_50%)]" />
+          <div className="relative mx-auto grid max-w-7xl items-center gap-12 px-4 sm:px-6 lg:grid-cols-12">
+            <div className="lg:col-span-7">
+              <p className="text-[0.7rem] font-bold tracking-[0.22em] text-[#ffd700]/80 uppercase">Nosotros</p>
+              <h2 className="mt-3 font-display text-4xl font-semibold tracking-normal sm:text-5xl">{site.aboutTitle}</h2>
+              <p className="mt-5 max-w-xl text-lg leading-relaxed text-green-100/85">{site.aboutText}</p>
+              <p className="mt-5 font-display text-xl font-semibold text-[#ffd700]">{site.slogan}</p>
+              <div className="mt-9 flex flex-wrap gap-3">
+                <button
+                  type="button"
+                  onClick={scrollToMenu}
+                  className="inline-flex items-center gap-2 rounded-full bg-[#ffd700] px-6 py-3 text-sm font-extrabold text-[#0c2210]"
+                >
+                  Ver carta <ArrowRight size={16} />
+                </button>
+                <a
+                  href={whatsappHref}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-2 rounded-full border border-white/25 px-6 py-3 text-sm font-bold text-white transition hover:bg-white/10"
+                >
+                  WhatsApp
+                </a>
+              </div>
             </div>
-            <span className="font-semibold text-gray-700">{state.settings.address}</span>
-          </div>
-          <div className="flex items-center gap-2.5">
-            <div className="flex h-9 w-9 items-center justify-center rounded-full bg-green-100">
-              <Phone size={16} className="text-green-700" />
+            <div className="lg:col-span-5">
+              <div className="relative overflow-hidden rounded-[2rem] border border-white/10 bg-white/5 p-10 backdrop-blur-sm">
+                <div className="absolute -right-8 -top-8 h-36 w-36 rounded-full bg-[#ffd700]/15 blur-2xl" />
+                <img src={withBase('logo-lopez.png')} alt={site.brandName} className="relative h-28 w-auto rounded-2xl" />
+                <p className="relative mt-8 font-display text-3xl font-semibold text-[#ffd700]">{site.brandName}</p>
+                <div className="relative mt-4 flex gap-1">
+                  {[1, 2, 3, 4, 5].map((s) => (
+                    <Star key={s} size={18} className="text-[#ffd700]" fill="currentColor" />
+                  ))}
+                </div>
+                <p className="relative mt-4 text-sm text-green-100/70">Sazón de casa · Cañete</p>
+              </div>
             </div>
-            <span className="font-semibold text-gray-700">{state.settings.phone}</span>
           </div>
-        </div>
-      </section>
+        </section>
+      ) : null}
 
       {/* MENU */}
+      {site.sections.menu ? (
       <section ref={menuRef} id="menu" className="mx-auto max-w-7xl px-4 py-16 sm:px-6 sm:py-20">
-        <div className="text-center">
-          <span className="text-sm font-bold tracking-widest text-green-700 uppercase">Nuestra Carta</span>
-          <h2 className="mt-2 text-4xl font-black text-gray-900 sm:text-5xl">¿Qué se te antoja hoy?</h2>
-          <p className="mt-3 text-lg text-gray-500">Elige tus platos favoritos y te los preparamos al instante</p>
+        <div className="mx-auto max-w-2xl text-center">
+          <p className="text-[0.7rem] font-bold tracking-[0.22em] text-[#1a3d1a]/55 uppercase">Nuestra carta</p>
+          <h2 className="mt-2 font-display text-4xl font-semibold tracking-normal text-[#0c2210] sm:text-5xl">{site.menuTitle}</h2>
+          <p className="mt-3 text-lg text-[#1a3d1a]/65">{site.menuSubtitle}</p>
         </div>
 
         {/* Categories */}
@@ -448,22 +560,21 @@ export function WebLanding() {
         </div>
 
         {/* Product grid */}
-        <div className="mt-10 grid gap-5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+        <div className="mt-10 grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
           {products.map((p) => {
             const cartQty = items.filter((i) => i.productId === p.id).reduce((s, i) => s + i.qty, 0)
             return (
               <article
                 key={p.id}
                 onClick={() => openProductModal(p.id)}
-                className="group relative cursor-pointer overflow-hidden rounded-3xl border border-gray-100 bg-white shadow-sm transition-all duration-300 hover:-translate-y-1 hover:shadow-xl"
+                className="group relative cursor-pointer overflow-hidden rounded-2xl border border-gray-100 bg-white shadow-sm transition-all duration-300 hover:-translate-y-1 hover:shadow-xl"
               >
-                {/* Tags */}
                 {p.tags && p.tags.length > 0 && (
-                  <div className="absolute left-3 top-3 z-10 flex flex-wrap gap-1">
-                    {p.tags.map((tag) => (
+                  <div className="absolute left-2 top-2 z-10 flex flex-wrap gap-1">
+                    {p.tags.slice(0, 1).map((tag) => (
                       <span
                         key={tag}
-                        className={`rounded-full px-2.5 py-0.5 text-[10px] font-bold uppercase shadow-sm ${
+                        className={`rounded px-1.5 py-0.5 text-[9px] font-bold uppercase shadow-sm ${
                           tag === 'Oferta' ? 'bg-red-500 text-white' :
                           tag === 'Nuevo' ? 'bg-blue-500 text-white' :
                           tag === 'Popular' ? 'bg-[#ffd700] text-[#1a3d1a]' :
@@ -475,37 +586,31 @@ export function WebLanding() {
                     ))}
                   </div>
                 )}
-                {/* Cart badge */}
                 {cartQty > 0 && (
-                  <div className="absolute right-3 top-3 z-10 flex h-7 w-7 items-center justify-center rounded-full bg-[#1a3d1a] text-xs font-bold text-white shadow-lg">
+                  <div className="absolute right-2 top-2 z-10 flex h-6 w-6 items-center justify-center rounded-full bg-[#1a3d1a] text-[10px] font-bold text-white shadow-lg">
                     {cartQty}
                   </div>
                 )}
                 <div
-                  className="flex h-44 items-center justify-center text-7xl transition-transform duration-300 group-hover:scale-110"
+                  className="flex aspect-[4/3] w-full items-center justify-center text-4xl transition-transform duration-300 group-hover:scale-110"
                   style={{ background: `linear-gradient(135deg, ${p.tone}15, ${p.tone}08)` }}
                 >
                   {p.emoji}
                 </div>
-                <div className="p-5">
-                  <h3 className="text-lg font-bold text-gray-900">{p.name}</h3>
-                  <p className="mt-1 line-clamp-2 text-sm text-gray-500">{p.description}</p>
-                  <div className="mt-3 flex items-baseline gap-2">
-                    <span className="text-2xl font-black text-[#1a3d1a]">{soles(p.price)}</span>
+                <div className="p-2.5">
+                  <h3 className="line-clamp-1 text-[13px] font-bold text-gray-900">{p.name}</h3>
+                  <p className="mt-0.5 line-clamp-1 text-[10px] text-gray-500">{p.description || '\u00A0'}</p>
+                  <div className="mt-1.5 flex items-baseline gap-1.5">
+                    <span className="text-sm font-black text-[#1a3d1a]">{soles(p.price)}</span>
                     {p.originalPrice && (
-                      <span className="text-sm text-gray-400 line-through">{soles(p.originalPrice)}</span>
-                    )}
-                    {p.originalPrice && (
-                      <span className="rounded-full bg-red-100 px-2 py-0.5 text-xs font-bold text-red-600">
-                        -{Math.round(((p.originalPrice - p.price) / p.originalPrice) * 100)}%
-                      </span>
+                      <span className="text-[10px] text-gray-400 line-through">{soles(p.originalPrice)}</span>
                     )}
                   </div>
                   <button
                     onClick={(e) => { e.stopPropagation(); openProductModal(p.id) }}
-                    className="mt-3 flex h-11 w-full items-center justify-center gap-2 rounded-2xl bg-[#1a3d1a] text-sm font-bold text-white shadow-lg shadow-green-900/20 transition hover:scale-[1.02] hover:bg-green-800"
+                    className="mt-1.5 flex h-8 w-full items-center justify-center gap-1 rounded-lg bg-[#1a3d1a] text-[11px] font-bold text-white shadow-sm transition hover:bg-green-800"
                   >
-                    <Plus size={16} /> Agregar al pedido
+                    <Plus size={12} /> Pedir
                   </button>
                 </div>
               </article>
@@ -513,288 +618,231 @@ export function WebLanding() {
           })}
         </div>
       </section>
+      ) : null}
 
-      {/* LOCALES */}
-      <section id="locales" className="bg-[#1a3d1a] py-20 text-white">
-        <div className="mx-auto max-w-7xl px-4 sm:px-6">
-          <div className="grid gap-12 lg:grid-cols-2">
-            <div>
-              <span className="text-sm font-bold tracking-widest text-[#ffd700] uppercase">Visítanos</span>
-              <h2 className="mt-3 text-4xl font-black">Nuestros Locales</h2>
-              <p className="mt-3 text-lg text-green-200">2 locales en Cañete para atenderte mejor</p>
-              <div className="mt-8 space-y-5">
-                <div className="flex items-start gap-4 rounded-2xl bg-white/5 p-4">
-                  <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-[#ffd700]/20">
-                    <MapPin size={20} className="text-[#ffd700]" />
-                  </div>
-                  <div>
-                    <p className="font-bold text-white">Dirección</p>
-                    <p className="text-green-200">{state.settings.address}</p>
-                  </div>
-                </div>
-                <div className="flex items-start gap-4 rounded-2xl bg-white/5 p-4">
-                  <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-[#ffd700]/20">
-                    <Clock size={20} className="text-[#ffd700]" />
-                  </div>
-                  <div>
-                    <p className="font-bold text-white">Horario</p>
-                    <p className="text-green-200">{state.settings.hours}</p>
-                  </div>
-                </div>
-                <div className="flex items-start gap-4 rounded-2xl bg-white/5 p-4">
-                  <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-[#ffd700]/20">
-                    <Phone size={20} className="text-[#ffd700]" />
-                  </div>
-                  <div>
-                    <p className="font-bold text-white">Teléfono / WhatsApp</p>
-                    <p className="text-green-200">{state.settings.phone}</p>
-                  </div>
-                </div>
-                <div className="flex items-start gap-4 rounded-2xl bg-white/5 p-4">
-                  <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-[#ffd700]/20">
-                    <Truck size={20} className="text-[#ffd700]" />
-                  </div>
-                  <div>
-                    <p className="font-bold text-white">Delivery</p>
-                    <p className="text-green-200">Envío: {soles(state.settings.deliveryFee)} · Pedidos por WhatsApp o Web</p>
-                  </div>
-                </div>
+
+      {/* HORARIOS */}
+      {site.sections.schedule ? (
+      <section id="horarios" className="relative bg-[#f3f7f3] py-20 sm:py-24">
+        <div className="mx-auto max-w-5xl px-4 sm:px-6">
+          <div className="max-w-2xl">
+            <p className="text-[0.7rem] font-bold tracking-[0.22em] text-[#1a3d1a]/55 uppercase">Atención</p>
+            <h2 className="mt-2 font-display text-4xl font-semibold tracking-normal text-[#0c2210] sm:text-5xl">
+              {site.scheduleTitle}
+            </h2>
+            <p className="mt-3 text-lg text-[#1a3d1a]/65">{site.scheduleSubtitle}</p>
+          </div>
+          <div className="mt-12 grid gap-px overflow-hidden rounded-[1.5rem] bg-[#1a3d1a]/10 sm:grid-cols-3">
+            {site.schedule.map((row) => {
+              const hoursText = row.closed ? 'Cerrado' : row.hours
+              const waLink = !row.closed && row.linkWhatsApp
+              return (
+              <div key={row.id} className="bg-[#f3f7f3] px-6 py-8 text-center sm:bg-white">
+                <p className="text-xs font-bold tracking-[0.18em] text-[#1a3d1a]/50 uppercase">{row.label}</p>
+                {waLink ? (
+                  <a
+                    href={whatsappHref}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="mt-3 inline-block font-display text-2xl font-semibold text-[#1a3d1a] underline decoration-[#25D366]/50 underline-offset-4 transition hover:text-[#128C7E]"
+                  >
+                    {hoursText}
+                  </a>
+                ) : (
+                  <p className={`mt-3 font-display text-2xl font-semibold ${row.closed ? 'text-red-600' : 'text-[#0c2210]'}`}>
+                    {hoursText}
+                  </p>
+                )}
               </div>
-            </div>
-            <div className="flex flex-col items-center justify-center rounded-3xl bg-white/5 p-10 backdrop-blur-sm">
-              <img src="/polleria/logo-lopez.png" alt="Chifa Pollería Lopez" className="h-32 w-auto rounded-2xl" />
-              <h3 className="mt-6 text-center text-2xl font-black text-[#ffd700]">CHIFA - POLLERÍA LOPEZ</h3>
-              <p className="mt-2 text-center text-green-200">El mejor pollo de Cañete</p>
-              <div className="mt-6 flex items-center gap-1">
-                {[1, 2, 3, 4, 5].map((s) => (
-                  <Star key={s} size={20} className="text-[#ffd700]" fill="currentColor" />
-                ))}
-              </div>
-              <p className="mt-2 text-sm text-green-300">La preferida de Cañete</p>
-            </div>
+              )
+            })}
           </div>
         </div>
       </section>
+      ) : null}
+
+      {/* LOCALES */}
+      {site.sections.locales ? (
+      <section id="locales" className="relative overflow-hidden bg-[#0a1a0c] py-20 text-white sm:py-24">
+        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_80%_0%,rgba(255,215,0,0.12),transparent_45%)]" />
+        <div className="relative mx-auto max-w-7xl px-4 sm:px-6">
+          <div className="max-w-2xl">
+            <p className="text-[0.7rem] font-bold tracking-[0.22em] text-[#ffd700]/75 uppercase">Visítanos</p>
+            <h2 className="mt-2 font-display text-4xl font-semibold tracking-normal sm:text-5xl">{site.localesTitle}</h2>
+            <p className="mt-3 text-lg text-green-200/80">{site.localesSubtitle}</p>
+          </div>
+          <div className="mt-12 grid gap-6 md:grid-cols-2">
+            {site.branches.filter((b) => b.active !== false).map((br) => (
+              <article
+                key={br.id}
+                className="group relative overflow-hidden rounded-[1.75rem] border border-white/10 bg-gradient-to-br from-white/[0.07] to-transparent p-8 transition hover:border-[#ffd700]/35"
+              >
+                <div className="absolute -right-6 -top-6 h-28 w-28 rounded-full bg-[#ffd700]/10 blur-2xl transition group-hover:bg-[#ffd700]/20" />
+                <div className="relative flex items-start justify-between gap-4">
+                  <div>
+                    <h3 className="font-display text-2xl font-semibold text-[#ffd700]">{br.name}</h3>
+                    <p className="mt-4 flex items-start gap-2 text-green-100/90">
+                      <MapPin size={18} className="mt-0.5 shrink-0 text-[#ffd700]" />
+                      {br.address}
+                    </p>
+                    <p className="mt-2 flex items-center gap-2 text-green-100/90">
+                      <Clock size={18} className="text-[#ffd700]" />
+                      {br.hours}
+                    </p>
+                    <p className="mt-2 flex items-center gap-2 text-green-100/90">
+                      <Phone size={18} className="text-[#ffd700]" />
+                      {br.phone}
+                    </p>
+                  </div>
+                  <img src={withBase('logo-lopez.png')} alt="" className="h-14 w-auto rounded-xl opacity-90" />
+                </div>
+                <div className="relative mt-7 flex flex-wrap gap-3">
+                  {br.mapUrl ? (
+                    <a
+                      href={br.mapUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-2 rounded-full bg-[#ffd700] px-5 py-2.5 text-sm font-extrabold text-[#0c2210]"
+                    >
+                      Cómo llegar
+                    </a>
+                  ) : null}
+                  <a
+                    href={`https://wa.me/${site.whatsappNumber.replace(/\D/g, '')}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-2 rounded-full border border-white/25 px-5 py-2.5 text-sm font-bold text-white transition hover:bg-white/10"
+                  >
+                    WhatsApp
+                  </a>
+                </div>
+              </article>
+            ))}
+          </div>
+        </div>
+      </section>
+      ) : null}
 
       {/* CONTACTO */}
-      <section id="contacto" className="py-20">
-        <div className="mx-auto max-w-4xl px-4 text-center">
-          <span className="text-sm font-bold tracking-widest text-green-700 uppercase">Contáctanos</span>
-          <h2 className="mt-3 text-4xl font-black text-gray-900">¿Tienes alguna consulta?</h2>
-          <p className="mt-3 text-lg text-gray-500">Escríbenos o llámanos. ¡Estamos para servirte!</p>
-          <div className="mt-10 flex flex-wrap items-center justify-center gap-4">
+      {site.sections.contact ? (
+      <section id="contacto" className="relative overflow-hidden bg-white py-20 sm:py-24">
+        <div className="mx-auto max-w-3xl px-4 text-center sm:px-6">
+          <p className="text-[0.7rem] font-bold tracking-[0.22em] text-[#1a3d1a]/55 uppercase">Contacto</p>
+          <h2 className="mt-2 font-display text-4xl font-semibold tracking-normal text-[#0c2210] sm:text-5xl">
+            {site.contactTitle}
+          </h2>
+          <p className="mt-3 text-lg text-[#1a3d1a]/65">{site.contactSubtitle}</p>
+          <div className="mt-10 flex flex-wrap items-center justify-center gap-3">
             <a
-              href="https://wa.me/51937493214"
+              href={whatsappHref}
               target="_blank"
               rel="noopener noreferrer"
-              className="inline-flex items-center gap-3 rounded-2xl bg-green-600 px-8 py-4 text-lg font-bold text-white shadow-lg shadow-green-600/30 transition hover:scale-105 hover:bg-green-700"
+              className="inline-flex items-center gap-3 rounded-full bg-[#1a3d1a] px-8 py-4 text-base font-extrabold text-[#ffd700] shadow-[0_16px_40px_-16px_rgba(26,61,26,0.55)] transition hover:scale-[1.03]"
             >
-              <svg className="h-6 w-6" fill="currentColor" viewBox="0 0 24 24">
-                <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z" />
-              </svg>
               WhatsApp
             </a>
             <a
-              href={`tel:+51937493214`}
-              className="inline-flex items-center gap-3 rounded-2xl bg-[#1a3d1a] px-8 py-4 text-lg font-bold text-white shadow-lg shadow-green-900/30 transition hover:scale-105 hover:bg-green-900"
+              href={phoneHref}
+              className="inline-flex items-center gap-3 rounded-full border border-[#1a3d1a]/20 bg-[#f3f7f3] px-8 py-4 text-base font-extrabold text-[#0c2210] transition hover:border-[#1a3d1a]/40"
             >
-              <Phone size={22} /> Llamar
-            </a>
-            <a
-              href="https://www.facebook.com/profile.php?id=61586064026668"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center gap-3 rounded-2xl bg-blue-600 px-8 py-4 text-lg font-bold text-white shadow-lg shadow-blue-600/30 transition hover:scale-105 hover:bg-blue-700"
-            >
-              <svg className="h-6 w-6" fill="currentColor" viewBox="0 0 24 24">
-                <path d="M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.47h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.47h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z" />
-              </svg>
-              Facebook
+              <Phone size={20} /> {site.phoneDisplay || 'Llamar'}
             </a>
           </div>
+          {(site.facebookUrl || site.instagramUrl || site.tiktokUrl) ? (
+            <div className="mt-8 flex flex-wrap items-center justify-center gap-5 text-sm font-semibold text-[#1a3d1a]/55">
+              {site.facebookUrl ? (
+                <a href={site.facebookUrl} target="_blank" rel="noopener noreferrer" className="transition hover:text-[#1a3d1a]">
+                  Facebook
+                </a>
+              ) : null}
+              {site.instagramUrl ? (
+                <a href={site.instagramUrl} target="_blank" rel="noopener noreferrer" className="transition hover:text-[#1a3d1a]">
+                  Instagram
+                </a>
+              ) : null}
+              {site.tiktokUrl ? (
+                <a href={site.tiktokUrl} target="_blank" rel="noopener noreferrer" className="transition hover:text-[#1a3d1a]">
+                  TikTok
+                </a>
+              ) : null}
+            </div>
+          ) : null}
         </div>
       </section>
+      ) : null}
 
       {/* FOOTER */}
-      <footer className="bg-[#1a3d1a] py-10">
-        <div className="mx-auto max-w-7xl px-4 text-center">
-          <img src="/polleria/logo-lopez.png" alt="Logo" className="mx-auto h-16 w-auto rounded-lg" />
-          <p className="mt-4 text-lg font-black text-[#ffd700]">CHIFA - POLLERÍA LOPEZ</p>
-          <p className="mt-1 text-green-300">{state.settings.slogan}</p>
-          <p className="mt-4 text-sm text-green-400">{state.settings.address} | {state.settings.phone}</p>
-          <p className="mt-4 text-xs text-green-500">© {new Date().getFullYear()} Chifa-Pollería Lopez. Todos los derechos reservados. · v{APP_VERSION}</p>
+      <footer className="border-t border-white/10 bg-[#0a1a0c] py-12">
+        <div className="mx-auto max-w-7xl px-4 text-center sm:px-6">
+          <img src={withBase('logo-lopez.png')} alt="" className="mx-auto h-14 w-auto rounded-xl" />
+          <p className="mt-5 font-display text-xl font-semibold text-[#ffd700]">{site.brandName}</p>
+          <p className="mt-1 text-sm text-green-200/70">{site.slogan || state.settings.slogan}</p>
+          <p className="mt-4 text-sm text-green-200/50">
+            {state.settings.address} · {site.phoneDisplay || state.settings.phone}
+          </p>
+          <p className="mt-6 text-xs text-green-200/35">
+            © {new Date().getFullYear()} {site.brandName}. Todos los derechos reservados. · v{APP_VERSION}
+          </p>
         </div>
       </footer>
 
-      {/* FLOATING CART (mobile) */}
-      {qty > 0 && !cartOpen && (
+      <button
+        type="button"
+        onClick={() => navigate('/reservar')}
+        className="fixed bottom-6 right-4 z-40 flex h-14 items-center gap-2 rounded-2xl bg-[#ffd700] px-5 text-sm font-black text-[#1a3d1a] shadow-2xl shadow-yellow-500/40 transition hover:scale-105 lg:hidden"
+      >
+        📅 Reservar Mesa
+      </button>
+
+      <BottomSheet open={authOpen} onClose={() => setAuthOpen(false)} z={60}>
         <button
-          onClick={() => setCartOpen(true)}
-          className="fixed bottom-6 left-1/2 z-40 flex h-14 w-[min(90vw,22rem)] -translate-x-1/2 items-center justify-between rounded-2xl bg-[#1a3d1a] px-5 text-white shadow-2xl shadow-green-900/50 transition hover:scale-[1.02] sm:left-auto sm:right-6 sm:w-auto sm:translate-x-0"
+          type="button"
+          onClick={() => setAuthOpen(false)}
+          className="absolute right-3 top-3 rounded-full p-2 hover:bg-gray-100"
         >
-          <span className="inline-flex items-center gap-2 font-bold">
-            <ShoppingCart size={18} className="text-[#ffd700]" />
-            {qty} {qty === 1 ? 'ítem' : 'ítems'}
-          </span>
-          <span className="ml-4 rounded-full bg-[#ffd700] px-4 py-1.5 text-sm font-black text-[#1a3d1a]">{soles(subtotal)}</span>
+          <X size={20} />
         </button>
-      )}
-
-      {/* FLOATING RESERVE BUTTON (mobile, when cart is empty) */}
-      {qty === 0 && !cartOpen && (
-        <button
-          onClick={() => navigate('/web/reservar')}
-          className="fixed bottom-6 right-4 z-40 flex h-14 items-center gap-2 rounded-2xl bg-[#ffd700] px-5 text-sm font-black text-[#1a3d1a] shadow-2xl shadow-yellow-500/40 transition hover:scale-105 lg:hidden"
-        >
-          📅 Reservar Mesa
-        </button>
-      )}
-
-      {/* CART DRAWER */}
-      {cartOpen && (
-        <div className="fixed inset-0 z-50">
-          <button className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setCartOpen(false)} />
-          <div className="absolute right-0 top-0 flex h-full w-full max-w-md flex-col bg-white shadow-2xl">
-            <div className="flex items-center justify-between border-b px-6 py-5">
-              <h2 className="text-2xl font-black text-gray-900">Tu Pedido</h2>
-              <button onClick={() => setCartOpen(false)} className="rounded-full p-2 hover:bg-gray-100">
-                <X size={22} />
-              </button>
-            </div>
-            <div className="flex-1 overflow-y-auto px-6 py-4">
-              {items.length === 0 ? (
-                <div className="flex flex-col items-center justify-center py-20 text-center">
-                  <div className="flex h-20 w-20 items-center justify-center rounded-full bg-gray-100">
-                    <ShoppingCart size={32} className="text-gray-300" />
-                  </div>
-                  <p className="mt-5 text-lg font-semibold text-gray-400">Tu carrito está vacío</p>
-                  <button onClick={() => setCartOpen(false)} className="mt-4 font-bold text-green-700 hover:underline">
-                    Explorar Menú
-                  </button>
-                </div>
-              ) : (
-                <ul className="space-y-3">
-                  {items.map((item, idx) => (
-                    <li key={idx} className="rounded-2xl bg-gray-50 p-4">
-                      <div className="flex gap-4">
-                        <div className="min-w-0 flex-1">
-                          <p className="font-bold text-gray-900">{item.name}</p>
-                          {item.selectedOptions && item.selectedOptions.length > 0 && (
-                            <div className="mt-1 flex flex-wrap gap-1">
-                              {item.selectedOptions.map((opt) => (
-                                <span key={`${opt.groupId}-${opt.optionId}`} className="rounded-full bg-green-100 px-2 py-0.5 text-[11px] font-medium text-green-800">
-                                  {opt.name}{opt.price > 0 ? ` +${soles(opt.price)}` : ''}
-                                </span>
-                              ))}
-                            </div>
-                          )}
-                          {item.notes && (
-                            <p className="mt-1 text-xs text-gray-500 italic">📝 {item.notes}</p>
-                          )}
-                          <p className="mt-1 text-sm font-semibold text-green-700">{soles(item.price * item.qty)}</p>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <button onClick={() => updateQty(idx, -1)} className="flex h-8 w-8 items-center justify-center rounded-full bg-white shadow hover:bg-gray-100">
-                            <Minus size={13} />
-                          </button>
-                          <span className="w-5 text-center font-bold">{item.qty}</span>
-                          <button onClick={() => updateQty(idx, 1)} className="flex h-8 w-8 items-center justify-center rounded-full bg-[#1a3d1a] text-white hover:bg-green-800">
-                            <Plus size={13} />
-                          </button>
-                          <button onClick={() => remove(idx)} className="ml-1 flex h-8 w-8 items-center justify-center rounded-full text-gray-400 hover:bg-red-50 hover:text-red-600">
-                            <Trash2 size={14} />
-                          </button>
-                        </div>
-                      </div>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
-            {items.length > 0 && (
-              <div className="border-t px-6 py-5">
-                <div className="flex justify-between text-sm text-gray-500">
-                  <span>Subtotal</span>
-                  <span className="font-semibold">{soles(subtotal)}</span>
-                </div>
-                <div className="mt-3 flex justify-between text-xl font-black">
-                  <span>Total</span>
-                  <span className="text-[#1a3d1a]">{soles(subtotal)}</span>
-                </div>
-                <button
-                  onClick={openCheckout}
-                  className="mt-5 w-full rounded-2xl bg-[#ffd700] py-4 text-lg font-black text-[#1a3d1a] shadow-lg shadow-yellow-500/20 transition hover:bg-yellow-400"
-                >
-                  Continuar con el Pedido →
-                </button>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* PRODUCT MODAL */}
-      {modalProduct && (
-        <ProductModal
-          product={modalProduct}
-          suggestions={getSuggestions(modalProduct)}
-          onAdd={addFromModal}
-          onAddSuggestion={addSuggestion}
-          onClose={() => setModalProduct(null)}
+        <PhoneOtpLogin
+          accountType="customer"
+          purpose={authPurpose}
+          showName={authPurpose === 'register'}
+          title={authPurpose === 'register' ? 'Crea tu cuenta' : 'Ingresa con tu celular'}
+          hint={
+            authPurpose === 'register'
+              ? 'Te registramos con tu número. Así guardamos tu historial de pedidos.'
+              : 'Si aún no tienes cuenta, regístrate. El login es tu celular + código.'
+          }
+          onSwitchPurpose={() => setAuthPurpose((p) => (p === 'login' ? 'register' : 'login'))}
+          onSuccess={(data) => {
+            const src = data.customer
+            if (!src) return
+            const cust: Customer = {
+              id: src.id,
+              name: src.name,
+              phone: src.phone,
+              email: src.email,
+              password: '',
+              address: src.address,
+              photoUrl: src.photoUrl,
+              createdAt: src.createdAt,
+            }
+            try {
+              setCustomerSession(cust, data.token, 'cliente')
+              applyCustomer(cust)
+            } finally {
+              setAuthOpen(false)
+              setCheckoutOpen(false)
+              window.location.assign(customerMenuUrl())
+            }
+          }}
         />
-      )}
-
-
-      {/* AUTH CLIENTE (celular) */}
-      {authOpen && (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
-          <button className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setAuthOpen(false)} />
-          <div className="relative w-full max-w-md overflow-hidden rounded-3xl bg-white p-6 shadow-2xl">
-            <button
-              type="button"
-              onClick={() => setAuthOpen(false)}
-              className="absolute right-3 top-3 rounded-full p-2 hover:bg-gray-100"
-            >
-              <X size={20} />
-            </button>
-            <PhoneOtpLogin
-              accountType="customer"
-              purpose={authPurpose}
-              showName={authPurpose === 'register'}
-              title={authPurpose === 'register' ? 'Crea tu cuenta' : 'Ingresa con tu celular'}
-              hint={
-                authPurpose === 'register'
-                  ? 'Te registramos con tu número. Así guardamos tu historial de pedidos.'
-                  : 'Si aún no tienes cuenta, regístrate. El login es tu celular + código.'
-              }
-              onSwitchPurpose={() => setAuthPurpose((p) => (p === 'login' ? 'register' : 'login'))}
-              onSuccess={(data) => {
-                if (!data.customer) return
-                const cust: Customer = {
-                  id: data.customer.id,
-                  name: data.customer.name,
-                  phone: data.customer.phone,
-                  email: data.customer.email,
-                  password: '',
-                  address: data.customer.address,
-                  photoUrl: data.customer.photoUrl,
-                  createdAt: data.customer.createdAt,
-                }
-                setCustomerSession(cust, data.token, '/web')
-                applyCustomer(cust)
-                setAuthOpen(false)
-                setCheckoutOpen(true)
-              }}
-            />
-          </div>
-        </div>
-      )}
+      </BottomSheet>
 
       {/* CHECKOUT */}
       {checkoutOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+        <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center sm:p-4">
           <button className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setCheckoutOpen(false)} />
-          <div className="relative max-h-[92dvh] w-full max-w-lg overflow-y-auto rounded-3xl bg-white p-7 shadow-2xl">
+          <div className="relative max-h-[92dvh] w-full max-w-lg overflow-y-auto rounded-t-3xl bg-white p-5 shadow-2xl sm:rounded-3xl sm:p-7">
             <div className="mb-6 flex items-center justify-between">
               <h2 className="text-2xl font-black">Finalizar Pedido</h2>
               <button onClick={() => setCheckoutOpen(false)} className="rounded-full p-2 hover:bg-gray-100">
@@ -889,6 +937,47 @@ export function WebLanding() {
                     </p>
                   ) : null}
                   {locError ? <p className="mt-1 text-xs text-amber-700">{locError}</p> : null}
+                  {customer && address.trim() ? (
+                    <button
+                      type="button"
+                      className="mt-2 w-full rounded-xl border border-dashed border-green-700/40 py-2.5 text-sm font-bold text-green-800 hover:bg-green-50"
+                      onClick={() => {
+                        void (async () => {
+                          try {
+                            await apiSaveCustomerAddress({
+                              label: 'Favorita',
+                              address: address.trim(),
+                              lat: addressLat,
+                              lng: addressLng,
+                              isDefault: true,
+                            })
+                            setAddrReload((n) => n + 1)
+                            setSaveAddrMsg('Dirección guardada en favoritas')
+                          } catch (e) {
+                            setSaveAddrMsg((e as Error).message || 'No se pudo guardar')
+                          }
+                        })()
+                      }}
+                    >
+                      ☆ Guardar como favorita
+                    </button>
+                  ) : null}
+                  {saveAddrMsg ? <p className="mt-1 text-xs text-green-700">{saveAddrMsg}</p> : null}
+                  {customer ? (
+                    <div className="mt-3 rounded-2xl bg-white p-3 ring-1 ring-gray-100">
+                      <p className="mb-2 text-xs font-bold uppercase tracking-wide text-gray-400">Favoritas</p>
+                      <CustomerAddressesPanel
+                        pickMode
+                        reloadKey={addrReload}
+                        onPick={(a) => {
+                          setAddress(a.address)
+                          setAddressLat(a.lat)
+                          setAddressLng(a.lng)
+                        }}
+                      />
+                    </div>
+                  ) : null}
+
                   {quoteInfo && addressLat == null ? (
                     <p className="mt-1 text-xs text-amber-700">{quoteInfo}</p>
                   ) : null}
@@ -897,6 +986,38 @@ export function WebLanding() {
               <div>
                 <label className="text-sm font-bold text-gray-700">Indicaciones (opcional)</label>
                 <input className="mt-1.5 w-full rounded-xl border border-gray-200 px-4 py-3.5 text-sm focus:border-green-500 focus:ring-2 focus:ring-green-500/20 focus:outline-none" value={note} onChange={(e) => setNote(e.target.value)} placeholder="Tocar timbre, dejar en portería..." />
+              </div>
+
+              <div>
+                <label className="text-sm font-bold text-gray-700">Cupón de descuento</label>
+                <div className="mt-1.5 flex gap-2">
+                  <input
+                    className="flex-1 rounded-xl border border-gray-200 px-4 py-3 text-sm uppercase focus:border-green-500 focus:outline-none"
+                    value={couponCode}
+                    onChange={(e) => { setCouponCode(e.target.value.toUpperCase()); setCouponDiscount(0); setCouponMsg(null) }}
+                    placeholder="BIENVENIDO10"
+                  />
+                  <button
+                    type="button"
+                    className="rounded-xl bg-[#1a3d1a] px-4 py-3 text-sm font-bold text-white"
+                    onClick={async () => {
+                      try {
+                        const r = await apiValidateCoupon(couponCode, subtotal)
+                        setCouponDiscount(r.discount)
+                        setCouponMsg(`Descuento: ${soles(r.discount)}`)
+                      } catch (e) {
+                        setCouponDiscount(0)
+                        setCouponMsg((e as Error).message || 'Cupón inválido')
+                      }
+                    }}
+                  >
+                    Aplicar
+                  </button>
+                </div>
+                {couponMsg ? <p className="mt-1 text-xs text-green-700">{couponMsg}</p> : null}
+                {couponDiscount > 0 ? (
+                  <p className="mt-1 text-sm font-bold text-green-800">− {soles(couponDiscount)}</p>
+                ) : null}
               </div>
               <div>
                 <label className="text-sm font-bold text-gray-700">Pago al repartidor</label>

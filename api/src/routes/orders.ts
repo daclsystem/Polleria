@@ -12,6 +12,11 @@ import {
   restoreStockForCancelledOrder,
   restoreStockForOrderItems,
 } from '../lib/stockDeduct.js'
+import {
+  computeCouponDiscount,
+  customerCouponUses,
+  loadCouponByCode,
+} from './coupons.js'
 
 export const ordersRouter = Router()
 
@@ -353,6 +358,7 @@ ordersRouter.post('/', async (req, res) => {
     tableNumber?: number
     notes?: string
     discount?: number
+    couponCode?: string
     subtotal: number
     igv: number
     total: number
@@ -373,6 +379,38 @@ ordersRouter.post('/', async (req, res) => {
     return res.status(400).json({ error: 'customerName e items requeridos' })
   }
 
+  if (body.type === 'delivery') {
+    try {
+      const { quoteDeliveryAddress, quoteDeliveryPoint } = await import('../lib/deliveryQuote.js')
+      const quoted =
+        body.addressLat != null && body.addressLng != null
+          ? await quoteDeliveryPoint(Number(body.addressLat), Number(body.addressLng))
+          : body.address
+            ? await quoteDeliveryAddress(String(body.address))
+            : null
+      if (quoted) {
+        body.addressLat = quoted.lat
+        body.addressLng = quoted.lng
+        body.deliveryDistanceKm = quoted.distanceKm
+        body.deliveryTimeMin = quoted.timeMin
+        body.deliveryFee = quoted.fee
+        const hasFeeLine = body.items.some((i) => i.productId === 'delivery' || /^delivery$/i.test(i.name))
+        if (!hasFeeLine && quoted.fee > 0) {
+          body.items.push({ productId: undefined, name: 'Delivery', qty: 1, price: quoted.fee })
+          const itemsGross = body.items.reduce((s, i) => s + i.qty * i.price, 0)
+          const after = Math.max(0, itemsGross - Number(body.discount || 0))
+          const igvRate = 0.18
+          body.total = after
+          body.subtotal = Math.round((after / (1 + igvRate)) * 100) / 100
+          body.igv = Math.round((after - body.subtotal) * 100) / 100
+        }
+      }
+    } catch (e) {
+      const err = e as Error & { status?: number }
+      return res.status(err.status || 422).json({ error: err.message || 'No se pudo calcular el delivery' })
+    }
+  }
+
   if (body.source === 'web' || body.type === 'delivery') {
     if (!body.codPaymentMethod) {
       return res.status(400).json({ error: 'Indica pago contra entrega: yape | plin | efectivo' })
@@ -381,6 +419,31 @@ ordersRouter.post('/', async (req, res) => {
     if (body.codPaymentMethod === 'efectivo' && !(body.codCashAmount && body.codCashAmount > 0)) {
       body.codCashAmount = Number(body.total) || 0
     }
+  }
+
+  let appliedCoupon: Awaited<ReturnType<typeof loadCouponByCode>> = null
+  let appliedDiscount = Number(body.discount ?? 0)
+  const couponCodeRaw = String(body.couponCode || '').trim().toUpperCase()
+  if (couponCodeRaw) {
+    appliedCoupon = await loadCouponByCode(couponCodeRaw)
+    if (!appliedCoupon) return res.status(400).json({ error: 'Cupón no válido' })
+    if (body.customerId) {
+      const uses = await customerCouponUses(appliedCoupon.id, body.customerId)
+      if (uses >= appliedCoupon.maxUsesPerCustomer) {
+        return res.status(400).json({ error: 'Ya usaste este cupón el máximo de veces' })
+      }
+    }
+    const itemsGross = body.items.reduce((s, i) => s + i.qty * i.price, 0)
+    const calc = computeCouponDiscount(appliedCoupon, itemsGross)
+    if (!calc.ok) return res.status(400).json({ error: calc.error })
+    appliedDiscount = calc.discount
+    const after = Math.max(0, Math.round((itemsGross - appliedDiscount) * 100) / 100)
+    const igvRate = body.subtotal > 0 ? body.igv / body.subtotal : 0.18
+    body.total = after
+    body.subtotal = Math.round((after / (1 + igvRate)) * 100) / 100
+    body.igv = Math.round((after - body.subtotal) * 100) / 100
+    body.discount = appliedDiscount
+    if (body.codPaymentMethod === 'efectivo') body.codCashAmount = after
   }
 
   const pool = await getPool()
@@ -415,7 +478,8 @@ ordersRouter.post('/', async (req, res) => {
       .input('deliveryFee', sql.Decimal(10, 2), body.deliveryFee ?? 0)
       .input('codPaymentMethod', sql.NVarChar, body.codPaymentMethod || null)
       .input('codCashAmount', sql.Decimal(10, 2), body.codCashAmount ?? null)
-      .input('discount', sql.Decimal(10, 2), body.discount ?? 0)
+      .input('discount', sql.Decimal(10, 2), appliedDiscount)
+      .input('couponCode', sql.NVarChar, appliedCoupon?.code || null)
       .input('subtotal', sql.Decimal(10, 2), body.subtotal)
       .input('igv', sql.Decimal(10, 2), body.igv)
       .input('total', sql.Decimal(10, 2), body.total)
@@ -426,11 +490,11 @@ ordersRouter.post('/', async (req, res) => {
         INSERT INTO dbo.Orders (
           Id, Number, Type, Status, TableId, TableNumber, CustomerId, CustomerName, CustomerPhone,
           Address, AddressLat, AddressLng, DeliveryDistanceKm, DeliveryTimeMin, DeliveryFee,
-          CodPaymentMethod, CodCashAmount, Discount, Subtotal, Igv, Total, Paid, Notes, Source, CreatedByUserId
+          CodPaymentMethod, CodCashAmount, Discount, CouponCode, Subtotal, Igv, Total, Paid, Notes, Source, CreatedByUserId
         ) VALUES (
           @id, @number, @type, @status, @tableId, @tableNumber, @customerId, @customerName, @customerPhone,
           @address, @addressLat, @addressLng, @deliveryDistanceKm, @deliveryTimeMin, @deliveryFee,
-          @codPaymentMethod, @codCashAmount, @discount, @subtotal, @igv, @total, 0, @notes, @source, @createdBy
+          @codPaymentMethod, @codCashAmount, @discount, @couponCode, @subtotal, @igv, @total, 0, @notes, @source, @createdBy
         )
       `)
 
@@ -477,6 +541,20 @@ ordersRouter.post('/', async (req, res) => {
         `)
     }
 
+    if (appliedCoupon) {
+      await new sql.Request(tx)
+        .input('id', sql.UniqueIdentifier, uuid())
+        .input('couponId', sql.UniqueIdentifier, appliedCoupon.id)
+        .input('customerId', sql.UniqueIdentifier, body.customerId || null)
+        .input('orderId', sql.UniqueIdentifier, orderId)
+        .input('discount', sql.Decimal(10, 2), appliedDiscount)
+        .query(`
+          INSERT INTO dbo.CouponRedemptions (Id, CouponId, CustomerId, OrderId, Discount)
+          VALUES (@id, @couponId, @customerId, @orderId, @discount);
+          UPDATE dbo.Coupons SET UsedCount = UsedCount + 1 WHERE Id = @couponId;
+        `)
+    }
+
     await tx.commit()
 
     const order = await loadOrder(orderId)
@@ -510,7 +588,7 @@ ordersRouter.post('/', async (req, res) => {
     res.status(201).json({
       order,
       trackingUrl: isCustomerChannel
-        ? `${(process.env.FRONT_PUBLIC_URL || 'https://indevsoft.com/polleria').replace(/\/$/, '')}/web/seguimiento/${orderId}`
+        ? `${(process.env.FRONT_PUBLIC_URL || 'https://chifapollerialopez.com').replace(/\/$/, '')}/seguimiento/${orderId}`
         : undefined,
       whatsappPending: isCustomerChannel,
     })

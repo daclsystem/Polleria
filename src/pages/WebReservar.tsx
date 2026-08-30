@@ -80,7 +80,7 @@ export function WebReservar() {
           <p className="mt-4 text-sm text-gray-400">Te contactaremos al <strong>{phone}</strong> para confirmar.</p>
           <div className="mt-8 flex flex-col gap-3">
             <button
-              onClick={() => navigate('/web')}
+              onClick={() => navigate('/')}
               className="rounded-2xl bg-[#ffd700] py-4 text-lg font-black text-[#1a3d1a] shadow-lg transition hover:bg-yellow-400"
             >
               Volver a la Tienda
@@ -102,7 +102,7 @@ export function WebReservar() {
       {/* Header */}
       <header className="sticky top-0 z-40 bg-[#1a3d1a] shadow-xl">
         <div className="mx-auto flex h-16 max-w-3xl items-center gap-4 px-4">
-          <button onClick={() => navigate('/web')} className="flex h-9 w-9 items-center justify-center rounded-full bg-white/10 text-white hover:bg-white/20">
+          <button onClick={() => navigate('/')} className="flex h-9 w-9 items-center justify-center rounded-full bg-white/10 text-white hover:bg-white/20">
             <ArrowLeft size={18} />
           </button>
           <div>
@@ -172,7 +172,7 @@ export function WebReservar() {
             </div>
             <div className="rounded-2xl bg-white p-4 shadow-sm ring-1 ring-gray-100">
               <p className="mb-3 text-xs font-bold uppercase text-gray-500">Almuerzo</p>
-              <div className="grid grid-cols-4 gap-2">
+              <div className="grid grid-cols-3 gap-2 sm:grid-cols-4">
                 {TIME_SLOTS.filter((s) => parseInt(s) < 16).map((slot) => (
                   <button
                     key={slot}
@@ -188,7 +188,7 @@ export function WebReservar() {
                 ))}
               </div>
               <p className="mb-3 mt-5 text-xs font-bold uppercase text-gray-500">Cena</p>
-              <div className="grid grid-cols-4 gap-2">
+              <div className="grid grid-cols-3 gap-2 sm:grid-cols-4">
                 {TIME_SLOTS.filter((s) => parseInt(s) >= 16).map((slot) => (
                   <button
                     key={slot}
@@ -231,7 +231,7 @@ export function WebReservar() {
                 <p className="text-sm text-gray-500">Capacidad disponible: {totalSeats} asientos</p>
               </div>
             </div>
-            <div className="grid grid-cols-4 gap-3">
+            <div className="grid grid-cols-3 gap-3 sm:grid-cols-4">
               {GUEST_OPTIONS.map((n) => (
                 <button
                   key={n}

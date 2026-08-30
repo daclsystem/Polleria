@@ -18,7 +18,17 @@ let io: Server | null = null
 export function initRealtime(httpServer: HttpServer, corsOrigins: string[]) {
   io = new Server(httpServer, {
     cors: {
-      origin: corsOrigins,
+      origin: (origin, cb) => {
+        if (
+          !origin ||
+          corsOrigins.includes(origin) ||
+          /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)
+        ) {
+          cb(null, true)
+          return
+        }
+        cb(null, false)
+      },
       methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
     },
     path: '/realtime',

@@ -2,11 +2,11 @@
 
 let permissionAsked = false
 
-export async function ensureWebNotifications(): Promise<boolean> {
+export async function ensureWebNotifications(force = false): Promise<boolean> {
   if (typeof window === 'undefined' || !('Notification' in window)) return false
   if (Notification.permission === 'granted') return true
   if (Notification.permission === 'denied') return false
-  if (permissionAsked) return false
+  if (permissionAsked && !force) return false
   permissionAsked = true
   try {
     const p = await Notification.requestPermission()
@@ -23,8 +23,8 @@ export function notifyWeb(title: string, body: string, opts?: { tag?: string; on
     const n = new Notification(title, {
       body,
       tag: opts?.tag || 'polleria',
-      icon: '/polleria/logo-lopez.png',
-      badge: '/polleria/favicon.svg',
+      icon: `${import.meta.env.BASE_URL}logo-lopez.png`,
+      badge: `${import.meta.env.BASE_URL}favicon.svg`,
     })
     n.onclick = () => {
       window.focus()

@@ -36,7 +36,9 @@ export function Usuarios() {
         </button>
       </div>
       <div className="mt-6 grid gap-3">
-        {state.users.map((u) => (
+        {state.users
+          .filter((u) => !u.isSystem)
+          .map((u) => (
           <article key={u.id} className="flex flex-wrap items-center justify-between gap-3 rounded-2xl bg-white p-4 shadow-sm">
             <div className="flex items-center gap-3">
               <img
@@ -47,6 +49,7 @@ export function Usuarios() {
               <div>
                 <p className="font-semibold">{u.name}</p>
                 <p className="text-sm text-ink/45">{u.email}</p>
+                {u.dni ? <p className="text-xs text-ink/40">DNI {u.dni}{u.phone ? ` · ${u.phone}` : ''}</p> : null}
                 <p className="font-mono text-[10px] tracking-wider text-ink/35">ID · {shortAccountId(u.id)}</p>
               </div>
             </div>
@@ -107,6 +110,24 @@ export function Usuarios() {
                 required
               />
             </Field>
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="DNI">
+                <input
+                  className={inputClass}
+                  value={editing.dni || ''}
+                  onChange={(e) => setEditing({ ...editing, dni: e.target.value })}
+                  placeholder="12345678"
+                />
+              </Field>
+              <Field label="Teléfono">
+                <input
+                  className={inputClass}
+                  value={editing.phone || ''}
+                  onChange={(e) => setEditing({ ...editing, phone: e.target.value })}
+                  placeholder="999999999"
+                />
+              </Field>
+            </div>
             <Field label="Contraseña">
               <input
                 className={inputClass}

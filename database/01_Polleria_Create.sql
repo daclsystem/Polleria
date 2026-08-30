@@ -61,6 +61,10 @@ BEGIN
     Role          NVARCHAR(20)     NOT NULL, -- admin | cajero | cocina | mozo
     Active        BIT              NOT NULL CONSTRAINT DF_Users_Active DEFAULT (1),
     Pin           NVARCHAR(10)     NOT NULL CONSTRAINT DF_Users_Pin DEFAULT (N'0000'),
+    Phone         NVARCHAR(40)     NULL,
+    Dni           NVARCHAR(20)     NULL,
+    IsSystem      BIT              NOT NULL CONSTRAINT DF_Users_IsSystem DEFAULT (0),
+    PhotoUrl      NVARCHAR(500)    NULL,
     CreatedAt     DATETIME2(0)     NOT NULL CONSTRAINT DF_Users_CreatedAt DEFAULT (SYSUTCDATETIME()),
     UpdatedAt     DATETIME2(0)     NOT NULL CONSTRAINT DF_Users_UpdatedAt DEFAULT (SYSUTCDATETIME()),
     CONSTRAINT UQ_Users_Email UNIQUE (Email),
@@ -101,6 +105,7 @@ BEGIN
     Ruc             NVARCHAR(20)     NOT NULL,
     IgvRate         DECIMAL(5,4)     NOT NULL CONSTRAINT DF_Settings_IgvRate DEFAULT (0.18),
     Hours           NVARCHAR(120)    NOT NULL,
+    DeliveryFee     DECIMAL(10,2)    NOT NULL CONSTRAINT DF_Settings_DeliveryFee DEFAULT (5), -- fallback si no hay quote
     OriginLat       DECIMAL(10,7)    NULL,  -- local para API de ruta
     OriginLng       DECIMAL(10,7)    NULL,
     GeoRouteApiUrl  NVARCHAR(500)    NULL,  -- plantilla o base URL

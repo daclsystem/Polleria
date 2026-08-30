@@ -3,7 +3,7 @@ import { useStore } from '../store/StoreContext'
 import type { ModuleId, Role, User } from '../types'
 import { ROLE_MODULES } from '../types'
 import { apiFetch, getApiToken, setApiToken } from '../lib/apiClient'
-import { withBase } from '../lib/paths'
+import { APP_NAME, siteUrl } from '../lib/paths'
 import { defaultAvatarUrl } from '../lib/avatar'
 
 const STAFF_SESSION_KEY = 'polleria-staff-session'
@@ -19,6 +19,7 @@ interface AuthApi {
     pin?: string
     phone?: string
     photoUrl?: string
+    isSystem?: boolean
   }) => Promise<void>
   logout: () => void
   can: (module: ModuleId) => boolean
@@ -55,6 +56,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     pin?: string
     phone?: string
     photoUrl?: string
+    isSystem?: boolean
   }) => {
     const fromCatalog = state.users.find((x) => x.id === uIn.id)
     const u: User = {
@@ -70,6 +72,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         uIn.photoUrl ||
         fromCatalog?.photoUrl ||
         defaultAvatarUrl(uIn.name, 'staff'),
+      isSystem: Boolean(uIn.isSystem),
     }
     localStorage.setItem(STAFF_SESSION_KEY, u.id)
     localStorage.setItem('polleria-api-user', JSON.stringify(u))
@@ -106,11 +109,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (detail?.scope && detail.scope !== 'staff') return
       alert(detail?.message || 'Tu sesión se cerró porque iniciaste en otro dispositivo')
       logout()
-      window.location.assign(withBase('login'))
+      window.location.assign(siteUrl('system', '/login'))
     }
     window.addEventListener('polleria-session-replaced', onReplaced)
 
     const t = window.setInterval(() => {
+      if (APP_NAME !== 'system') return
       if (!getApiToken('staff')) return
       void apiFetch('/api/auth/session', { scope: 'staff' }).catch(() => {})
     }, 20000)
@@ -123,6 +127,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const can = (module: ModuleId) => {
     if (!user) return false
+    /** Admin de sistema: acceso total (Página Web, cupones, etc.) */
+    if (user.isSystem) return true
     return ROLE_MODULES[user.role]?.includes(module) ?? false
   }
 

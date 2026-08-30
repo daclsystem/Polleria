@@ -3,7 +3,7 @@ import { getPool, sql } from '../db.js'
 const WSP_BASE = process.env.WSPGO_BASE_URL || 'https://iwspgo.indevsoft.com'
 const WSP_KEY = process.env.WSPGO_API_KEY || '753ce43470bc2ad5b72bce84a7080d7ec92f77a6690bff51e5e03a5cd14eb6e0'
 const WSP_SESSION = process.env.WSPGO_SESSION || 'PolleriaLopez'
-const FRONT_URL = (process.env.FRONT_PUBLIC_URL || 'https://apipchifapollerialopez.indevsoft.com/polleria').replace(/\/$/, '')
+const FRONT_URL = (process.env.FRONT_PUBLIC_URL || 'https://chifapollerialopez.com').replace(/\/$/, '')
 
 function normalizePhone(phone: string) {
   let digits = phone.replace(/\D/g, '')
@@ -22,7 +22,7 @@ function soles(n: number) {
 
 export function trackingUrl(orderId: string, phone?: string) {
   const q = phone ? `?tel=${encodeURIComponent(normalizePhone(phone).slice(-9))}` : ''
-  return `${FRONT_URL}/web/seguimiento/${orderId}${q}`
+  return `${FRONT_URL}/seguimiento/${orderId}${q}`
 }
 
 async function sendText(phone: string, text: string) {
@@ -139,7 +139,6 @@ export async function notifyOrderStatusServer(order: OrderLike, status: string) 
   const phone = String(order.CustomerPhone || '')
   if (!phone) return { sent: false, reason: 'sin teléfono' }
 
-  const track = trackingUrl(String(order.Id), phone)
   const headline = STATUS_MSG[status] || `Estado: *${status}*`
   const extra =
     status === 'listo' && (order.Type === 'delivery' || order.Type === 'web')
@@ -148,12 +147,15 @@ export async function notifyOrderStatusServer(order: OrderLike, status: string) 
         ? '\n🏪 Ya puedes pasar a recogerlo.'
         : ''
 
+  const showTrack = status !== 'entregado' && status !== 'cancelado'
+  const track = showTrack ? trackingUrl(String(order.Id), phone) : ''
+  const trackLine = showTrack ? `\n\n📍 Tracking:\n${track}` : ''
+
   const text =
     `🍗 *Chifa-Pollería Lopez*\n` +
     `Pedido *#${order.Number}*\n\n` +
-    `${headline}${extra}\n\n` +
-    `📍 Tracking:\n${track}`
+    `${headline}${extra}${trackLine}`
 
   await sendText(phone, text)
-  return { sent: true, track }
+  return { sent: true, track: track || undefined }
 }

@@ -5,6 +5,29 @@ function hoursAgo(hours: number, minutes = 0) {
   return new Date(Date.now() - hours * 3600000 - minutes * 60000).toISOString()
 }
 
+const PRESA_GROUP = {
+  id: 'presa',
+  title: 'Elige tu presa',
+  required: true,
+  maxSelect: 1,
+  options: [
+    { id: 'pr1', name: 'Pecho', price: 0 },
+    { id: 'pr2', name: 'Pierna', price: 0 },
+  ],
+}
+
+const PAPAS_GROUP = {
+  id: 'papas',
+  title: 'Elige tus papas',
+  required: true,
+  maxSelect: 1,
+  options: [
+    { id: 'pa1', name: 'Papas regulares', price: 0 },
+    { id: 'pa2', name: 'Papas familiares (+S/4)', price: 4 },
+    { id: 'pa3', name: 'Sin papas', price: 0 },
+  ],
+}
+
 const CREMAS_GROUP = {
   id: 'cremas',
   title: 'Elige tus cremas',
@@ -76,7 +99,7 @@ const products: Product[] = [
     available: true,
     prepMinutes: 12,
     tags: ['Oferta', 'Popular'],
-    optionGroups: [CREMAS_GROUP, ADICIONALES_GROUP, BEBIDA_GROUP],
+    optionGroups: [PRESA_GROUP, PAPAS_GROUP, CREMAS_GROUP, ADICIONALES_GROUP, BEBIDA_GROUP],
   },
   {
     id: 'p2',
@@ -90,7 +113,7 @@ const products: Product[] = [
     available: true,
     prepMinutes: 14,
     tags: ['Oferta'],
-    optionGroups: [CREMAS_GROUP, ADICIONALES_GROUP],
+    optionGroups: [PRESA_GROUP, PAPAS_GROUP, CREMAS_GROUP, ADICIONALES_GROUP],
   },
   {
     id: 'p3',
@@ -104,7 +127,7 @@ const products: Product[] = [
     available: true,
     prepMinutes: 16,
     tags: ['Oferta', 'Top'],
-    optionGroups: [CREMAS_GROUP, ADICIONALES_GROUP],
+    optionGroups: [PRESA_GROUP, PAPAS_GROUP, CREMAS_GROUP, ADICIONALES_GROUP],
   },
   {
     id: 'p4',
@@ -117,7 +140,7 @@ const products: Product[] = [
     available: true,
     prepMinutes: 10,
     tags: ['Económico'],
-    optionGroups: [CREMAS_GROUP, BEBIDA_GROUP],
+    optionGroups: [PRESA_GROUP, PAPAS_GROUP, CREMAS_GROUP, BEBIDA_GROUP],
   },
   {
     id: 'p5',
@@ -129,7 +152,7 @@ const products: Product[] = [
     tone: '#E85D04',
     available: true,
     prepMinutes: 8,
-    optionGroups: [CREMAS_GROUP, ADICIONALES_GROUP, BEBIDA_GROUP],
+    optionGroups: [PRESA_GROUP, PAPAS_GROUP, CREMAS_GROUP, ADICIONALES_GROUP, BEBIDA_GROUP],
   },
   {
     id: 'p6',
@@ -141,7 +164,7 @@ const products: Product[] = [
     tone: '#D00000',
     available: true,
     prepMinutes: 10,
-    optionGroups: [CREMAS_GROUP, ADICIONALES_GROUP, BEBIDA_GROUP],
+    optionGroups: [PRESA_GROUP, PAPAS_GROUP, CREMAS_GROUP, ADICIONALES_GROUP, BEBIDA_GROUP],
   },
   {
     id: 'p7',
@@ -154,7 +177,7 @@ const products: Product[] = [
     available: true,
     prepMinutes: 12,
     tags: ['Popular'],
-    optionGroups: [CREMAS_GROUP, ADICIONALES_GROUP],
+    optionGroups: [PRESA_GROUP, PAPAS_GROUP, CREMAS_GROUP, ADICIONALES_GROUP],
   },
   {
     id: 'p8',
@@ -167,7 +190,7 @@ const products: Product[] = [
     available: true,
     prepMinutes: 15,
     tags: ['Nuevo'],
-    optionGroups: [CREMAS_GROUP, BEBIDA_GROUP],
+    optionGroups: [PRESA_GROUP, PAPAS_GROUP, CREMAS_GROUP, BEBIDA_GROUP],
   },
   {
     id: 'p9',
@@ -179,7 +202,7 @@ const products: Product[] = [
     tone: '#9B2226',
     available: true,
     prepMinutes: 14,
-    optionGroups: [CREMAS_GROUP, BEBIDA_GROUP],
+    optionGroups: [PRESA_GROUP, PAPAS_GROUP, CREMAS_GROUP, BEBIDA_GROUP],
   },
   {
     id: 'p10',
@@ -617,7 +640,7 @@ export function createSeed(): AppState {
     settings: {
       name: 'Chifa-Pollería Lopez',
       slogan: 'El mejor pollo de Cañete',
-      address: 'Cañete, Lima, Perú',
+      address: 'Chocos Imperial, Cañete',
       phone: '962 797 752',
       ruc: '20000000001',
       igvRate: 0.18,
@@ -625,7 +648,7 @@ export function createSeed(): AppState {
       deliveryFee: 5,
     },
     branches: [
-      { id: 'main', name: 'Local Principal', address: 'Cañete, Lima, Perú', phone: '962 797 752', active: true },
+      { id: 'main', name: 'Local Principal', address: 'Chocos Imperial, Cañete', phone: '962 797 752', active: true },
       { id: 'branch2', name: 'Local 2 - Centro', address: 'Av. 28 de Julio, Cañete', phone: '962 797 753', active: true },
     ],
     nextOrderNumber: 124,

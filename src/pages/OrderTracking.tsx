@@ -16,12 +16,13 @@ import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
 import { API_URL } from '../lib/api'
 import { soles } from '../lib/format'
-import { ensureWebNotifications, notifyWeb } from '../lib/webNotify'
+import { getCustomerHomeUrl, getCustomerSession } from '../lib/customerSession'
+import { APP_NAME, siteUrl } from '../lib/paths'
 import { connectRealtime, onRealtimeEvent } from '../lib/realtime'
 import { buildNavigationUrl } from '../lib/mapsNav'
 import { getPlataforma, mapsAppLabel, platformLabel } from '../lib/platform'
 import { useDeviceLocation } from '../hooks/useDeviceLocation'
-import { getCustomerHome, getCustomerSession } from '../lib/customerSession'
+import { ensureWebNotifications, notifyWeb } from '../lib/webNotify'
 
 const STORE: [number, number] = [-13.1083, -76.0114]
 const TILE = 'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png'
@@ -146,7 +147,7 @@ export function OrderTracking() {
       setLoading(false)
       return
     }
-    if (!API_URL) {
+    if (!import.meta.env.DEV && !API_URL) {
       setError('API no configurada')
       setLoading(false)
       return
@@ -253,17 +254,23 @@ export function OrderTracking() {
   }
 
   if (error || !order) {
-    const home = getCustomerSession() ? getCustomerHome() : '/web'
-    return <Navigate to={home} replace />
+    return <Navigate to={APP_NAME === 'cliente' ? '/?tab=pedidos' : '/'} replace />
   }
 
-  const home = getCustomerHome()
+  const homeHref = getCustomerSession() ? getCustomerHomeUrl() : siteUrl('web', '/')
+  const backToPedidos = APP_NAME === 'cliente'
   return (
     <div className="min-h-dvh bg-[#f6f7f9]">
       <header className="bg-[#1a3d1a] px-4 pb-8 pt-5 text-white">
-        <Link to={home} className="mb-4 inline-flex items-center gap-2 text-sm text-green-100/80">
-          <ArrowLeft size={16} /> Volver al inicio
-        </Link>
+        {backToPedidos ? (
+          <Link to="/?tab=pedidos" className="mb-4 inline-flex items-center gap-2 text-sm text-green-100/80">
+            <ArrowLeft size={16} /> Volver a mis pedidos
+          </Link>
+        ) : (
+          <a href={homeHref} className="mb-4 inline-flex items-center gap-2 text-sm text-green-100/80">
+            <ArrowLeft size={16} /> Volver al inicio
+          </a>
+        )}
         <p className="text-xs font-bold tracking-widest text-[#ffd700] uppercase">Seguimiento en vivo</p>
         <h1 className="mt-1 text-2xl font-black">Pedido #{order.number}</h1>
         <p className="mt-1 text-sm text-green-100/80">Hola {order.customerName}</p>
@@ -326,7 +333,7 @@ export function OrderTracking() {
           ) : null}
         </section>
 
-        {isDelivery && order.status !== 'cancelado' && order.status !== 'entregado' ? (
+        {isDelivery && order.status !== 'cancelado' ? (
           <section className="overflow-hidden rounded-2xl bg-white shadow-sm ring-1 ring-black/5">
             <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-3">
               <div className="flex items-center gap-2 text-sm font-bold text-gray-800">

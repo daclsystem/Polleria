@@ -1,6 +1,5 @@
 import { useState } from 'react'
 import { apiFetch } from '../lib/apiClient'
-import { DEFAULT_OTP_FALLBACK } from '../lib/authDefaults'
 
 export type OtpAccountType = 'staff' | 'customer' | 'driver'
 
@@ -34,6 +33,7 @@ export function PhoneOtpLogin({
       pin?: string
       phone?: string
       photoUrl?: string
+      isSystem?: boolean
     }
     customer?: {
       id: string
@@ -64,7 +64,14 @@ export function PhoneOtpLogin({
   const [msg, setMsg] = useState<string | null>(null)
   const [err, setErr] = useState<string | null>(null)
 
+  const digits = phone.replace(/\D/g, '')
+  const phoneOk = accountType === 'driver' ? digits.length >= 5 : digits.length >= 9
+
   const goCode = (message?: string) => {
+    if (!phoneOk) {
+      setErr('Primero escribe tu celular')
+      return
+    }
     setStep('code')
     setCode('')
     if (message) setMsg(message)
@@ -74,6 +81,10 @@ export function PhoneOtpLogin({
     e.preventDefault()
     setErr(null)
     setMsg(null)
+    if (accountType === 'driver' && digits.length < 9) {
+      goCode('Número de prueba. Escribe el código 123456.')
+      return
+    }
     setBusy(true)
     try {
       const data = await apiFetch<{
@@ -81,6 +92,7 @@ export function PhoneOtpLogin({
         message: string
         whatsappSent?: boolean
         fallbackCode?: string
+        fallbackUsed?: boolean
       }>('/api/auth/otp/request', {
         method: 'POST',
         auth: false,
@@ -91,15 +103,21 @@ export function PhoneOtpLogin({
           name: showName ? name : undefined,
         }),
       })
-      goCode(data.message)
-      if (data.fallbackCode) setCode(data.fallbackCode)
-      else if (data.whatsappSent === false) setCode(DEFAULT_OTP_FALLBACK)
-    } catch (e) {
-      // Si el request falla, igual dejamos entrar con código de respaldo
       goCode(
-        `No se pudo enviar WhatsApp. Usa el código de respaldo ${DEFAULT_OTP_FALLBACK}`,
+        data.whatsappSent === false
+          ? data.message ||
+              (data.fallbackCode
+                ? `WhatsApp no disponible. Usa el código ${data.fallbackCode}`
+                : 'No se pudo enviar el WhatsApp. Si no llega, usa 123456.')
+          : data.message || 'Te enviamos un código por WhatsApp.',
       )
-      setErr(null)
+    } catch (e) {
+      const msg = (e as Error).message || 'No se pudo enviar el código. Revisa el número e inténtalo de nuevo.'
+      if (accountType === 'driver') {
+        goCode('WhatsApp no se envió. Escribe el código 123456 para entrar.')
+        return
+      }
+      setErr(msg)
     } finally {
       setBusy(false)
     }
@@ -180,26 +198,15 @@ export function PhoneOtpLogin({
               required
             />
             <p className="mt-1.5 text-xs text-gray-400">
-              Escribe tu celular registrado. Te enviamos un código por WhatsApp. Si falla, usa el código de
-              respaldo <strong>{DEFAULT_OTP_FALLBACK}</strong>.
+              Te enviaremos un código de 6 dígitos por WhatsApp.
             </p>
           </div>
           <button
             type="submit"
-            disabled={busy}
+            disabled={busy || !phoneOk}
             className="w-full rounded-2xl bg-[#ffd700] py-4 text-lg font-black text-[#1a3d1a] shadow-lg shadow-yellow-500/20 transition hover:bg-yellow-400 disabled:opacity-60"
           >
             {busy ? 'Enviando…' : purpose === 'register' ? 'Enviar código y crear cuenta' : 'Continuar'}
-          </button>
-          <button
-            type="button"
-            disabled={busy}
-            onClick={() =>
-              goCode(`Usa el código de respaldo ${DEFAULT_OTP_FALLBACK} (WhatsApp opcional)`)
-            }
-            className="w-full text-center text-sm font-semibold text-[#1a3d1a] hover:underline"
-          >
-            Ya tengo código / WhatsApp caído
           </button>
           {onSwitchPurpose ? (
             <button type="button" onClick={onSwitchPurpose} className="w-full text-center text-sm font-semibold text-gray-500 hover:underline">
@@ -221,13 +228,7 @@ export function PhoneOtpLogin({
               required
             />
             <p className="mt-1.5 text-center text-xs text-gray-400">
-              Celular <strong>{phone}</strong>
-              {msg?.includes('respaldo') ? (
-                <>
-                  {' '}
-                  · respaldo <strong>{DEFAULT_OTP_FALLBACK}</strong>
-                </>
-              ) : null}
+              Enviado a <strong>{phone}</strong>
             </p>
           </div>
           <button

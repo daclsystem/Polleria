@@ -4,7 +4,7 @@ import { useStore } from '../store/StoreContext'
 import { copyText, formatDateTime, padOrder, soles } from '../lib/format'
 import { printTicket } from '../lib/print'
 import { filterKitchenItems } from '../lib/kitchen'
-import { customerMenuUrl, withBase } from '../lib/paths'
+import { customerMenuUrl } from '../lib/paths'
 import { PageTitle, StatusBadge } from '../components/ui'
 
 export function PedidosWeb() {
@@ -34,7 +34,7 @@ export function PedidosWeb() {
             {copied ? 'Copiado' : 'Copiar'}
           </button>
           <a
-            href={withBase('pedir')}
+            href={customerMenuUrl()}
             target="_blank"
             rel="noreferrer"
             className="inline-flex min-h-11 items-center gap-2 rounded-xl bg-ember px-3 py-2 text-sm font-semibold"

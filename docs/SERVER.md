@@ -18,7 +18,19 @@
 ssh root@116.203.70.104
 ```
 
-## API (subdominio) — YA EN PRODUCCIÓN
+## Front (dominio del negocio)
+
+| Dato | Valor |
+|------|--------|
+| Dominio | `chifapollerialopez.com` (+ `www`) |
+| Qué sirve | Web pública + sistema (POS, login, cocina, etc.) |
+| DNS | Registros **A** `@` y `www` → `116.203.70.104` |
+| Root nginx | `/opt/polleria/web` |
+| Conf | `deploy/nginx-chifapollerialopez.conf` |
+
+La API **no** va en este dominio; solo el front.
+
+## API (subdominio IndevSoft) — YA EN PRODUCCIÓN
 
 | Dato | Valor |
 |------|--------|
@@ -28,6 +40,7 @@ ssh root@116.203.70.104
 | Health | `https://apipchifapollerialopez.indevsoft.com/health` |
 | Realtime | path `/realtime` (Socket.IO) |
 | HTTPS | Let's Encrypt activo |
+| CORS / FRONT | Debe incluir `https://chifapollerialopez.com` |
 
 ### SQL Server (Docker en el mismo VPS)
 
@@ -59,8 +72,10 @@ VITE_API_URL=https://apipchifapollerialopez.indevsoft.com
 | Password dashboard | `cfecb561019f291d8a64c771` |
 | Header | `X-Api-Key` |
 | API Key | `753ce43470bc2ad5b72bce84a7080d7ec92f77a6690bff51e5e03a5cd14eb6e0` |
-| Sesión | `PolleriaLopez` (creada para este proyecto) |
+| Sesión | `PolleriaLopez` (**WORKING** — número `51967304444`) |
 | Endpoint envío | `POST /api/sendText` |
+
+**Importante:** el password del dashboard/swagger (`cfecb561019f291d8a64c771`) **no** es el `X-Api-Key`. Para la API usa la API Key de la tabla de arriba.
 
 Body ejemplo:
 

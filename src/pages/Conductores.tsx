@@ -8,6 +8,7 @@ import {
 import type { Driver } from '../types'
 import { Field, Modal, PageTitle, inputClass } from '../components/ui'
 import { uid } from '../lib/format'
+import { siteUrl } from '../lib/paths'
 
 export function Conductores() {
   const [drivers, setDrivers] = useState<Driver[]>([])
@@ -77,7 +78,7 @@ export function Conductores() {
       <div className="flex flex-wrap items-end justify-between gap-3">
         <PageTitle
           title="Conductores"
-          hint="Repartidores tipo PedidosYa. App: /conductor (login WhatsApp). Reciben deliveries y abren la ruta."
+          hint={`App del repartidor: ${siteUrl('driver')} — entra con el celular de esta lista y el código de WhatsApp (respaldo 123456).`}
         />
         <button
           className="rounded-xl bg-ember px-4 py-2 text-sm font-semibold text-white"

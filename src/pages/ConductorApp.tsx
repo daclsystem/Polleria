@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import {
   Bike,
   Camera,
@@ -15,90 +15,67 @@ import {
 } from 'lucide-react'
 import { PhoneOtpLogin } from '../components/PhoneOtpLogin'
 import { ConfirmLogout } from '../components/ConfirmLogout'
-import { Empty, PageTitle } from '../components/ui'
-import { defaultAvatarUrl, shortAccountId } from '../lib/avatar'
 import {
-  apiDriverArrived,
-  apiDriverDelivered,
+  DevicePermissionsPrompt,
+  askDevicePermissions,
+  notificationsGranted,
+  permissionsPromptSkipped,
+  skipPermissionsPrompt,
+} from '../components/DevicePermissionsPrompt'
+import { defaultAvatarUrl } from '../lib/avatar'
+import {
   apiDriverLocation,
   apiDriverMyOrders,
   apiDriverRoute,
-  apiDriverSettle,
+  apiDriverUpdateProfile,
   setApiToken,
   type DriverDeliveryOrder,
 } from '../lib/apiClient'
+import { uploadAvatar } from '../lib/minio'
 import { connectRealtime, onRealtimeEvent } from '../lib/realtime'
 import { padOrder, soles } from '../lib/format'
 import { APP_VERSION } from '../lib/version'
-import { ensureWebNotifications, notifyWeb } from '../lib/webNotify'
+import { notifyWeb } from '../lib/webNotify'
 import { useDeviceLocation } from '../hooks/useDeviceLocation'
-import { buildMultiStopUrl, buildWazeForStops, openInApp } from '../lib/mapsNav'
-import { getPlataforma, platformLabel } from '../lib/platform'
 import { uploadDeliveryPhoto } from '../lib/minio'
+import {
+  DRIVER_KEY,
+  FLOW_STEPS,
+  digitsPhone,
+  driverAction,
+  loadDriverSession,
+  whatsappPhone,
+  type DriverSession,
+} from '../lib/driverFlow'
 
-const DRIVER_KEY = 'polleria-driver-session'
+const PERMS_SKIP_KEY = 'polleria-perms-skip-driver'
 
-function digitsPhone(phone?: string | null) {
-  return String(phone || '').replace(/\D/g, '')
-}
-
-function whatsappPhone(phone?: string | null) {
-  let d = digitsPhone(phone)
-  if (d.length === 9 && d.startsWith('9')) d = `51${d}`
-  return d
-}
-
-type DriverSession = {
-  id: string
-  name: string
-  phone: string
-  vehicleInfo?: string
-  photoUrl?: string
-}
-
-function loadSession(): DriverSession | null {
-  try {
-    const raw = localStorage.getItem(DRIVER_KEY)
-    return raw ? (JSON.parse(raw) as DriverSession) : null
-  } catch {
-    return null
-  }
-}
-
-type DriverAction = 'ubicado' | 'entregado' | 'liquidar' | 'listo'
-
-function driverAction(o: DriverDeliveryOrder): DriverAction {
-  if (o.driverSettledAt) return 'listo'
-  // Si ya estaba pagado (web), repartidor no liquida - lo hace caja
-  if (o.status === 'entregado' && o.paid) return 'listo'
-  if (o.status === 'entregado') return 'liquidar'
-  if (o.driverArrivedAt) return 'entregado'
-  return 'ubicado'
-}
-
-const FLOW_STEPS = [
-  { key: 'en_camino', label: 'En camino' },
-  { key: 'ubicado', label: 'Ubicado' },
-  { key: 'entregado', label: 'Entregado' },
-  { key: 'liquidar', label: 'Liquidar' },
-] as const
+type EarningsData = { trips: number; total: number }
 
 export function ConductorApp() {
-  const [driver, setDriver] = useState<DriverSession | null>(() => loadSession())
+  const navigate = useNavigate()
+  const bootNav = useRef(false)
+  const [driver, setDriver] = useState<DriverSession | null>(() => loadDriverSession())
   const [mine, setMine] = useState<DriverDeliveryOrder[]>([])
-  const [routeUrl, setRouteUrl] = useState<string | null>(null)
-  const [wazeUrl, setWazeUrl] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   const [err, setErr] = useState<string | null>(null)
-  const [busyId, setBusyId] = useState<string | null>(null)
   const [logoutOpen, setLogoutOpen] = useState(false)
-  const [notifyOn, setNotifyOn] = useState(false)
+  const [permsOpen, setPermsOpen] = useState(false)
+  const [, setNotifyOn] = useState(() => notificationsGranted())
   const knownMine = useRef<Set<string>>(new Set())
   const primedMine = useRef(false)
-  const plataforma = getPlataforma()
+  const [tab, setTab] = useState<'entregas' | 'ganancias'>('entregas')
+  const [earnings, setEarnings] = useState<{
+    rate?: number
+    today: EarningsData
+    week: EarningsData
+    month: EarningsData
+  } | null>(null)
+  const avatarRef = useRef<HTMLInputElement>(null)
+  const [uploadingAvatar, setUploadingAvatar] = useState(false)
 
   const lastPush = useRef(0)
-  const { coords, status: locStatus, error: locError, startWatch } = useDeviceLocation({
+  const { coords, status: locStatus, error: locError, startWatch, requestOnce } = useDeviceLocation({
     auto: Boolean(driver),
     watch: Boolean(driver),
     enableHighAccuracy: true,
@@ -117,9 +94,47 @@ export function ConductorApp() {
     setApiToken(null, 'driver')
     setDriver(null)
     setMine([])
-    setRouteUrl(null)
-    setWazeUrl(null)
     setLogoutOpen(false)
+  }
+
+  const loadEarnings = useCallback(async () => {
+    if (!driver) return
+    try {
+      const r = await apiDriverMyOrders()
+      if (r.earnings) {
+        setEarnings(r.earnings)
+        return
+      }
+    } catch {
+      /* ignore */
+    }
+    const delivered = mine.filter((o) => o.status === 'entregado' || o.driverSettledAt)
+    const rate = 5
+    const fee = (o: DriverDeliveryOrder) => {
+      const n = o.deliveryFee ?? 0
+      return n > 0 ? n : rate
+    }
+    const pack = (arr: DriverDeliveryOrder[]) => ({
+      trips: arr.length,
+      total: arr.reduce((s, o) => s + fee(o), 0),
+    })
+    setEarnings({ rate, today: pack(delivered), week: pack(delivered), month: pack(delivered) })
+  }, [driver, mine])
+
+  const handleAvatarChange = async (file: File | null) => {
+    if (!file || !driver) return
+    setUploadingAvatar(true)
+    try {
+      const url = await uploadAvatar(file)
+      const r = await apiDriverUpdateProfile({ photoUrl: url })
+      const updated = { ...driver, photoUrl: r.driver.photoUrl }
+      setDriver(updated)
+      localStorage.setItem(DRIVER_KEY, JSON.stringify(updated))
+    } catch {
+      /* ignore */
+    } finally {
+      setUploadingAvatar(false)
+    }
   }
 
   const refresh = useCallback(async () => {
@@ -127,23 +142,15 @@ export function ConductorApp() {
     setLoading(true)
     setErr(null)
     try {
-      const [orders, route] = await Promise.all([apiDriverMyOrders(), apiDriverRoute()])
+      const [orders] = await Promise.all([apiDriverMyOrders(), apiDriverRoute()])
       const assigned = orders.mine || []
       setMine(assigned)
-      const activeNav = assigned.filter((o) => o.status !== 'entregado')
-      const origin = {
-        lat: route.origin?.lat,
-        lng: route.origin?.lng,
-        address: route.origin?.address,
+      if (orders.earnings) setEarnings(orders.earnings)
+      if (!bootNav.current) {
+        bootNav.current = true
+        const first = assigned.find((o) => o.status !== 'entregado' && o.status !== 'cancelado')
+        if (first) navigate(`/pedido/${first.id}`, { replace: true })
       }
-      const stops = activeNav.map((o) => ({
-        lat: o.addressLat,
-        lng: o.addressLng,
-        address: o.address,
-      }))
-      setRouteUrl(buildMultiStopUrl(origin, stops) || route.googleMapsUrl)
-      setWazeUrl(buildWazeForStops(stops))
-
       const ids = new Set(assigned.map((o) => o.id))
       if (!primedMine.current) {
         knownMine.current = ids
@@ -164,7 +171,7 @@ export function ConductorApp() {
     } finally {
       setLoading(false)
     }
-  }, [driver])
+  }, [driver, navigate])
 
   useEffect(() => {
     if (!driver) return
@@ -198,47 +205,42 @@ export function ConductorApp() {
     }
   }, [driver, refresh])
 
-  const enableNotify = async () => {
-    const ok = await ensureWebNotifications()
-    setNotifyOn(ok)
-    if (ok) notifyWeb('Conductor listo', 'Te avisamos cuando el mozo te asigne una entrega')
-  }
-
-  const runBusy = async (orderId: string, fn: () => Promise<void>) => {
-    setBusyId(orderId)
-    try {
-      await fn()
-      await refresh()
-    } catch (e) {
-      alert((e as Error).message)
-    } finally {
-      setBusyId(null)
+  useEffect(() => {
+    if (!driver) {
+      setPermsOpen(false)
+      return
     }
-  }
+    if (permissionsPromptSkipped(PERMS_SKIP_KEY)) return
+    if (notificationsGranted() && locStatus === 'granted') {
+      skipPermissionsPrompt(PERMS_SKIP_KEY)
+      setNotifyOn(true)
+      setPermsOpen(false)
+      return
+    }
+    if (locStatus === 'prompting') return
+    setPermsOpen(true)
+  }, [driver, locStatus])
 
   if (!driver) {
     return (
-      <div className="min-h-dvh bg-cream px-4 py-10 text-ink">
+      <div className="min-h-dvh bg-[#0b1f1c] px-4 py-10 text-white">
         <div className="mx-auto max-w-md">
           <div className="mb-8 text-center">
-            <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-ink text-cream">
-              <Bike size={32} />
-            </div>
-            <p className="mt-4 text-[11px] font-bold tracking-[0.18em] text-ember uppercase">Repartidor</p>
-            <h1 className="mt-1 font-display text-3xl tracking-tight">App Conductor</h1>
-            <p className="mt-2 text-sm text-ink/50">
-              En camino → Ubicado → Entregado (foto) → Liquidar cobro en base.
-            </p>
-            <p className="mt-2 font-mono text-xs text-ink/35">
-              /polleria/conductor · {platformLabel(plataforma)}
-            </p>
+            <img
+              src={`${import.meta.env.BASE_URL}logo-lopez.png`}
+              alt="Chifa-Pollería Lopez"
+              className="mx-auto h-16 w-auto rounded-2xl shadow-lg ring-2 ring-white/10"
+            />
+            <p className="mt-5 text-[11px] font-bold tracking-[0.22em] text-teal-300 uppercase">Repartidor</p>
+            <h1 className="mt-1 font-display text-4xl tracking-tight">En ruta</h1>
+            <p className="mt-2 text-sm text-white/55">Tus entregas, el mapa y el cobro en un solo lugar.</p>
           </div>
-          <div className="card p-5">
+          <div className="rounded-[1.75rem] bg-white p-5 text-ink shadow-2xl">
             <PhoneOtpLogin
               accountType="driver"
               purpose="login"
               title="Entrar"
-              hint="Usa el celular registrado en Conductores. Te llega el código por WhatsApp."
+              hint="Celular del conductor. Si no llega WhatsApp, usa 123456."
               onSuccess={async (data) => {
                 if (!data.token || !data.driver) throw new Error('Respuesta inválida')
                 setApiToken(data.token, 'driver')
@@ -251,22 +253,40 @@ export function ConductorApp() {
                 }
                 localStorage.setItem(DRIVER_KEY, JSON.stringify(session))
                 setDriver(session)
+                setPermsOpen(true)
               }}
             />
-            <p className="mt-4 text-center text-sm text-ink/45">
-              <Link to="/login" className="font-semibold text-ember hover:underline">
-                Volver al sistema del local
-              </Link>
-            </p>
           </div>
-          <p className="mt-6 text-center text-[10px] text-ink/30">v{APP_VERSION}</p>
+          <p className="mt-6 text-center text-[10px] text-white/30">v{APP_VERSION}</p>
         </div>
       </div>
     )
   }
 
   return (
-    <div className="min-h-dvh bg-cream text-ink">
+    <div className="min-h-dvh bg-[#eef3f1] text-ink">
+      <DevicePermissionsPrompt
+        open={permsOpen}
+        title="Activa ubicación y avisos"
+        hint="Necesitamos tu GPS para que el local y el cliente vean el pedido, y avisos cuando te asignen una entrega."
+        onSkip={() => {
+          skipPermissionsPrompt(PERMS_SKIP_KEY)
+          setPermsOpen(false)
+        }}
+        onActivate={async () => {
+          const r = await askDevicePermissions({
+            requestLocation: async () => {
+              startWatch()
+              return requestOnce(false)
+            },
+            notifyTitle: 'Conductor listo',
+            notifyBody: 'Te avisamos cuando el mozo te asigne una entrega.',
+          })
+          setNotifyOn(r.notifyOk)
+          skipPermissionsPrompt(PERMS_SKIP_KEY)
+          setPermsOpen(false)
+        }}
+      />
       <ConfirmLogout
         open={logoutOpen}
         name={driver.name}
@@ -277,25 +297,40 @@ export function ConductorApp() {
         onCancel={() => setLogoutOpen(false)}
         onConfirm={logout}
       />
-      <header className="surface-header sticky top-0 z-20 px-4 py-3">
+      <input
+        ref={avatarRef}
+        type="file"
+        accept="image/*"
+        className="hidden"
+        onChange={(e) => void handleAvatarChange(e.target.files?.[0] ?? null)}
+      />
+      <header className="sticky top-0 z-20 bg-[#0b1f1c] px-4 pb-3 pt-[max(0.75rem,env(safe-area-inset-top))] text-white">
         <div className="mx-auto flex max-w-lg items-center justify-between gap-3">
           <div className="flex min-w-0 items-center gap-3">
-            <img
-              src={driver.photoUrl || defaultAvatarUrl(driver.name, 'driver')}
-              alt={driver.name}
-              className="h-11 w-11 shrink-0 rounded-full object-cover ring-2 ring-ink/10"
-            />
+            <button
+              type="button"
+              disabled={uploadingAvatar}
+              onClick={() => avatarRef.current?.click()}
+              className="relative shrink-0 disabled:opacity-50"
+            >
+              <img
+                src={driver.photoUrl || defaultAvatarUrl(driver.name, 'driver')}
+                alt={driver.name}
+                className="h-12 w-12 rounded-full object-cover ring-2 ring-white/20"
+              />
+              <span className="absolute -bottom-0.5 -right-0.5 flex h-5 w-5 items-center justify-center rounded-full bg-teal-400 text-[#0b1f1c]">
+                <Camera size={10} />
+              </span>
+            </button>
             <div className="min-w-0">
-              <p className="truncate font-bold">{driver.name}</p>
-              <p className="truncate font-mono text-[10px] tracking-wider text-ink/40">
-                ID · {shortAccountId(driver.id)} · {driver.phone}
-              </p>
+              <p className="text-[11px] font-bold tracking-[0.16em] text-teal-300 uppercase">Repartidor</p>
+              <p className="truncate font-display text-xl leading-tight">{driver.name}</p>
             </div>
           </div>
           <div className="flex items-center gap-1">
             <button
               type="button"
-              className="tap rounded-xl p-2 text-ink/60 hover:bg-ink/5"
+              className="tap rounded-full p-2.5 text-white/70 hover:bg-white/10"
               onClick={() => void refresh()}
               aria-label="Actualizar"
             >
@@ -303,134 +338,149 @@ export function ConductorApp() {
             </button>
             <button
               type="button"
-              className="tap rounded-xl p-2 text-ink/60 hover:bg-ink/5"
+              className="tap rounded-full p-2.5 text-white/70 hover:bg-white/10"
               onClick={() => setLogoutOpen(true)}
             >
               <LogOut size={18} />
             </button>
           </div>
         </div>
+        <div className="mx-auto mt-3 grid max-w-lg grid-cols-2 rounded-2xl bg-white/10 p-1">
+          <button
+            type="button"
+            onClick={() => setTab('entregas')}
+            className={`rounded-xl py-2.5 text-sm font-bold ${tab === 'entregas' ? 'bg-white text-[#0b1f1c]' : 'text-white/60'}`}
+          >
+            Entregas
+          </button>
+          <button
+            type="button"
+            onClick={() => { setTab('ganancias'); void loadEarnings() }}
+            className={`rounded-xl py-2.5 text-sm font-bold ${tab === 'ganancias' ? 'bg-white text-[#0b1f1c]' : 'text-white/60'}`}
+          >
+            Ganancias
+          </button>
+        </div>
       </header>
 
       <main className="mx-auto max-w-lg space-y-5 px-4 py-5 pb-28">
-        <PageTitle
-          kicker="Entregas"
-          title="Mis pedidos"
-          hint="Secuencia obligatoria: En camino → Ubicado → Entregado con foto → Liquidar en base."
-        />
-
-        <div className="flex flex-wrap gap-2">
-          <span className="chip chip-off">{platformLabel(plataforma)}</span>
-          <span className={`chip ${locOk ? 'chip-on' : 'chip-off'}`}>
-            {locOk
-              ? `GPS OK · ${coords!.lat.toFixed(4)}, ${coords!.lng.toFixed(4)}`
-              : locStatus === 'prompting'
-                ? 'Pidiendo GPS…'
-                : 'GPS pendiente'}
-          </span>
-          {!locOk ? (
-            <button type="button" onClick={() => startWatch()} className="chip chip-on">
-              Activar ubicación
-            </button>
-          ) : null}
-          {!notifyOn ? (
-            <button type="button" onClick={() => void enableNotify()} className="chip chip-off">
-              Activar avisos
-            </button>
-          ) : (
-            <span className="chip chip-on">Avisos ON</span>
-          )}
-        </div>
-        {locError ? <p className="text-xs text-ember">{locError}</p> : null}
-
-        {err ? (
-          <div className="rounded-2xl bg-ember/10 px-4 py-3 text-sm font-medium text-ember">{err}</div>
-        ) : null}
-
-        {mine.filter((o) => o.status !== 'entregado').length > 0 && (routeUrl || wazeUrl) ? (
-          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-            {routeUrl ? (
-              <a
-                href={routeUrl}
-                target="_blank"
-                rel="noreferrer"
-                className="btn-primary gap-2"
-              >
-                <Navigation size={18} />
-                Google Maps
-              </a>
-            ) : null}
-            {wazeUrl ? (
-              <a
-                href={wazeUrl}
-                target="_blank"
-                rel="noreferrer"
-                className="inline-flex min-h-12 items-center justify-center gap-2 rounded-2xl bg-ink px-4 font-bold text-cream"
-              >
-                <Navigation size={18} />
-                Waze
-              </a>
-            ) : null}
+        {tab === 'ganancias' ? (
+          <div className="space-y-4">
+            <div>
+              <p className="text-[11px] font-bold tracking-[0.16em] text-teal-700 uppercase">Vas ganando</p>
+              <h2 className="font-display text-2xl tracking-tight">Mis ganancias</h2>
+              <p className="mt-1 text-sm text-ink/45">
+                Servicios entregados
+                {earnings?.rate ? ` · ${soles(earnings.rate)} por envío` : ''}.
+              </p>
+            </div>
+            {earnings ? (
+              <>
+                <div className="rounded-[1.5rem] bg-[#0b1f1c] p-5 text-white shadow-sm">
+                  <p className="text-xs font-bold tracking-wide text-teal-200 uppercase">Hoy</p>
+                  <p className="mt-1 font-display text-4xl">{soles(earnings.today.total)}</p>
+                  <p className="mt-1 text-sm text-white/65">
+                    {earnings.today.trips} {earnings.today.trips === 1 ? 'servicio' : 'servicios'}
+                  </p>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="rounded-2xl bg-white p-4 shadow-sm">
+                    <p className="text-xs font-semibold text-ink/50">Semana</p>
+                    <p className="font-display text-2xl text-teal-800">{soles(earnings.week.total)}</p>
+                    <p className="text-xs text-ink/40">{earnings.week.trips} servicios</p>
+                  </div>
+                  <div className="rounded-2xl bg-white p-4 shadow-sm">
+                    <p className="text-xs font-semibold text-ink/50">Mes</p>
+                    <p className="font-display text-2xl text-teal-800">{soles(earnings.month.total)}</p>
+                    <p className="text-xs text-ink/40">{earnings.month.trips} servicios</p>
+                  </div>
+                </div>
+              </>
+            ) : (
+              <p className="text-sm text-ink/50">Cargando…</p>
+            )}
           </div>
-        ) : null}
-
-        {mine.length === 0 ? (
-          <Empty
-            title="No hay entregas asignadas"
-            hint="El mozo o caja te asigna el delivery desde Ver pedidos."
-          />
         ) : (
-          <div className="space-y-3">
-            {mine.map((o, idx) => (
-              <DeliveryCard
-                key={o.id}
-                order={o}
-                badge={`#${idx + 1}`}
-                busy={busyId === o.id}
-                onGoogle={() => {
-                  openInApp(
-                    'google',
-                    { lat: o.addressLat, lng: o.addressLng, address: o.address },
-                    {
-                      origin: coords ? { lat: coords.lat, lng: coords.lng } : undefined,
-                    },
+          <>
+            <div className="flex items-center justify-between gap-2">
+              <div>
+                <p className="text-[11px] font-bold tracking-[0.16em] text-teal-700 uppercase">Hoy</p>
+                <h2 className="font-display text-2xl tracking-tight">Tus entregas</h2>
+              </div>
+              <button
+                type="button"
+                onClick={() => (locOk ? undefined : startWatch())}
+                className={`rounded-full px-3 py-1.5 text-[11px] font-bold ${
+                  locOk ? 'bg-teal-100 text-teal-800' : 'bg-[#0b1f1c] text-white'
+                }`}
+              >
+                {locOk ? 'GPS activo' : 'Activar GPS'}
+              </button>
+            </div>
+            {locError ? <p className="text-xs text-ember">{locError}</p> : null}
+            {err ? (
+              <div className="rounded-2xl bg-ember/10 px-4 py-3 text-sm font-medium text-ember">{err}</div>
+            ) : null}
+
+            {mine.length === 0 ? (
+              <div className="rounded-[1.75rem] bg-white px-6 py-14 text-center shadow-sm">
+                <Bike size={36} className="mx-auto text-teal-700/40" />
+                <p className="mt-4 font-display text-xl">Sin entregas</p>
+                <p className="mt-1 text-sm text-ink/45">Cuando te asignen un pedido, toca la tarjeta y se abre el mapa.</p>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {mine.map((o, idx) => {
+                  const action = driverAction(o)
+                  const step =
+                    action === 'ubicado'
+                      ? 'En camino'
+                      : action === 'entregado'
+                        ? 'Llegaste · foto'
+                        : action === 'liquidar'
+                          ? 'Cobrar'
+                          : 'Listo'
+                  return (
+                    <Link
+                      key={o.id}
+                      to={`/pedido/${o.id}`}
+                      className="card card-press block p-4"
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <p className="text-[11px] font-bold text-teal-700">
+                            #{idx + 1} · {padOrder(o.number)}
+                          </p>
+                          <p className="mt-0.5 font-display text-xl">{o.customerName}</p>
+                          <p className="mt-1 text-sm text-ink/50">{o.address}</p>
+                        </div>
+                        <span className="shrink-0 rounded-full bg-[#0b1f1c] px-2.5 py-1 text-[10px] font-bold text-white">
+                          {step}
+                        </span>
+                      </div>
+                      <div className="mt-3 flex items-center justify-between text-sm">
+                        <span className="font-extrabold text-teal-800">{soles(o.total)}</span>
+                        <span className="inline-flex items-center gap-1 font-bold text-[#0b1f1c]">
+                          Abrir mapa <Navigation size={14} />
+                        </span>
+                      </div>
+                    </Link>
                   )
-                }}
-                onWaze={() => {
-                  openInApp('waze', {
-                    lat: o.addressLat,
-                    lng: o.addressLng,
-                    address: o.address,
-                  })
-                }}
-                onArrived={() =>
-                  runBusy(o.id, async () => {
-                    await apiDriverArrived(o.id)
-                  })
-                }
-                onDelivered={(photoUrl) =>
-                  runBusy(o.id, async () => {
-                    await apiDriverDelivered(o.id, photoUrl)
-                  })
-                }
-                onSettle={(method, amount) =>
-                  runBusy(o.id, async () => {
-                    await apiDriverSettle(o.id, { method, amount })
-                  })
-                }
-              />
-            ))}
-          </div>
+                })}
+              </div>
+            )}
+          </>
         )}
       </main>
     </div>
   )
 }
 
-function DeliveryCard({
+export function DeliveryCard({
   order,
   badge,
   busy,
+  compact = false,
   onGoogle,
   onWaze,
   onArrived,
@@ -440,6 +490,7 @@ function DeliveryCard({
   order: DriverDeliveryOrder
   badge: string
   busy: boolean
+  compact?: boolean
   onGoogle: () => void
   onWaze: () => void
   onArrived: () => void
@@ -579,7 +630,7 @@ function DeliveryCard({
         </div>
       ) : null}
 
-      {action !== 'liquidar' && action !== 'listo' && canNav ? (
+      {!compact && action !== 'liquidar' && action !== 'listo' && canNav ? (
         <div className="mt-3 grid grid-cols-2 gap-2">
           <button
             type="button"
