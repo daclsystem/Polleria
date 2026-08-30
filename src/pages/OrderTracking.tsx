@@ -24,6 +24,7 @@ import { getPlataforma, mapsAppLabel, platformLabel } from '../lib/platform'
 import { useDeviceLocation } from '../hooks/useDeviceLocation'
 import { ensureWebNotifications, notifyWeb } from '../lib/webNotify'
 import { ThemeToggle } from '../components/ThemeToggle'
+import { OrderContactCard } from '../components/OrderContactCard'
 
 const STORE: [number, number] = [-13.1083, -76.0114]
 const TILE = 'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png'
@@ -42,6 +43,11 @@ type TrackOrder = {
   paid: boolean
   driverId?: string
   driverName?: string
+  driverPhone?: string
+  driverPhotoUrl?: string
+  driverVehicle?: string
+  driverPlate?: string
+  localWhatsapp?: string
   driverLat?: number
   driverLng?: number
   createdAt: string
@@ -327,14 +333,27 @@ export function OrderTracking() {
             {new Date(order.updatedAt).toLocaleTimeString('es-PE', { hour: '2-digit', minute: '2-digit' })}
           </p>
           {isDelivery && order.driverName ? (
-            <p className="mt-2 rounded-xl bg-teal-50 px-3 py-2 text-sm font-semibold text-teal-800">
-              Repartidor: {order.driverName}
-            </p>
-          ) : isDelivery && order.status === 'listo' && !hasDriver ? (
-            <p className="mt-2 rounded-xl bg-amber-50 px-3 py-2 text-sm font-semibold text-amber-800">
-              Esperando asignación de repartidor
-            </p>
-          ) : null}
+            <div className="mt-3">
+              <OrderContactCard
+                localWhatsapp={order.localWhatsapp}
+                driverName={order.driverName}
+                driverPhone={order.driverPhone}
+                driverPhotoUrl={order.driverPhotoUrl}
+                driverVehicle={order.driverVehicle}
+                driverPlate={order.driverPlate}
+                orderNumber={order.number}
+              />
+            </div>
+          ) : (
+            <div className="mt-3 space-y-2">
+              {isDelivery && order.status === 'listo' && !hasDriver ? (
+                <p className="rounded-xl bg-amber-50 px-3 py-2 text-sm font-semibold text-amber-800">
+                  Esperando asignación de repartidor
+                </p>
+              ) : null}
+              <OrderContactCard localWhatsapp={order.localWhatsapp} orderNumber={order.number} />
+            </div>
+          )}
         </section>
 
         {isDelivery && order.status !== 'cancelado' ? (

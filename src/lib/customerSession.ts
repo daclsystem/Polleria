@@ -1,5 +1,5 @@
 import type { Customer } from '../types'
-import { setApiToken } from './apiClient'
+import { apiLogout, setApiToken } from './apiClient'
 import { siteUrl } from './paths'
 
 export const CUST_SESSION_KEY = 'polleria-customer-session'
@@ -91,6 +91,7 @@ export function setCustomerSession(
 }
 
 export function clearCustomerSession() {
+  void apiLogout('customer')
   localStorage.removeItem(CUST_SESSION_KEY)
   localStorage.removeItem(LEGACY_KEY)
   localStorage.removeItem(HOME_KEY)

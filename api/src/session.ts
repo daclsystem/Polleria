@@ -25,7 +25,9 @@ export async function rotateSession(scope: AccountScope, userId: string): Promis
 
 /** true si el JWT sigue siendo la sesión activa de esa cuenta */
 export async function sessionIsActive(user: AuthUser): Promise<boolean> {
-  if (!user?.id || !user.sessionId) return false
+  if (!user?.id) return false
+  // Token viejo sin sessionId: no echar. Solo se cierra al login en otro equipo o al republicar.
+  if (!user.sessionId) return true
   const scope: AccountScope =
     user.accountType === 'driver' || user.role === 'driver'
       ? 'driver'
@@ -41,6 +43,7 @@ export async function sessionIsActive(user: AuthUser): Promise<boolean> {
     .query(`SELECT ActiveSessionId FROM ${table} WHERE Id = @id`)
 
   const current = r.recordset[0]?.ActiveSessionId
-  if (!current) return true // cuentas viejas sin sesión: permitir hasta el próximo login
+  // NULL = se cerraron todas (republicar / logout). El token con sessionId ya no vale.
+  if (!current) return false
   return String(current).toLowerCase() === String(user.sessionId).toLowerCase()
 }

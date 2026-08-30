@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   apiCreateDriver,
   apiDeleteDriver,
@@ -9,6 +9,8 @@ import type { Driver } from '../types'
 import { Field, Modal, PageTitle, inputClass } from '../components/ui'
 import { uid } from '../lib/format'
 import { siteUrl } from '../lib/paths'
+import { uploadAvatar } from '../lib/minio'
+import { splitVehicle } from '../lib/vehicle'
 
 export function Conductores() {
   const [drivers, setDrivers] = useState<Driver[]>([])
@@ -47,6 +49,8 @@ export function Conductores() {
         phone: editing.phone.trim(),
         active: editing.active !== false,
         vehicleInfo: editing.vehicleInfo || undefined,
+        plate: editing.plate || undefined,
+        photoUrl: editing.photoUrl || undefined,
       }
       if (isNew) {
         await apiCreateDriver(payload)
@@ -89,7 +93,8 @@ export function Conductores() {
               name: '',
               phone: '',
               active: true,
-              vehicleInfo: '',
+              vehicleInfo: 'Moto',
+              plate: '',
             })
           }}
         >
@@ -123,7 +128,15 @@ export function Conductores() {
               <div className="min-w-0">
                 <p className="font-semibold">{d.name}</p>
                 <p className="text-sm text-ink/45">{d.phone}</p>
-                {d.vehicleInfo ? <p className="text-xs text-ink/35">{d.vehicleInfo}</p> : null}
+                {(() => {
+                  const v = splitVehicle(d.vehicleInfo, d.plate)
+                  return (
+                    <p className="text-xs text-ink/35">
+                      {v.vehicle}
+                      {v.plate ? ` · Placa ${v.plate}` : ''}
+                    </p>
+                  )
+                })()}
               </div>
             </div>
             <div className="flex items-center gap-3">
@@ -173,7 +186,7 @@ export function Conductores() {
                 required
               />
             </Field>
-            <Field label="Teléfono WhatsApp *">
+            <Field label="WhatsApp del repartidor *">
               <input
                 className={inputClass}
                 value={editing.phone}
@@ -182,12 +195,21 @@ export function Conductores() {
                 required
               />
             </Field>
-            <Field label="Vehículo / placa">
+            <DriverPhotoField editing={editing} setEditing={setEditing} />
+            <Field label="Moto / vehículo">
               <input
                 className={inputClass}
                 value={editing.vehicleInfo || ''}
                 onChange={(e) => setEditing({ ...editing, vehicleInfo: e.target.value })}
-                placeholder="Moto · ABC-123"
+                placeholder="Moto Honda"
+              />
+            </Field>
+            <Field label="Placa">
+              <input
+                className={inputClass}
+                value={editing.plate || ''}
+                onChange={(e) => setEditing({ ...editing, plate: e.target.value.toUpperCase() })}
+                placeholder="ABC-123"
               />
             </Field>
             <label className="flex items-center gap-2 text-sm">
@@ -207,6 +229,50 @@ export function Conductores() {
           </form>
         ) : null}
       </Modal>
+    </div>
+  )
+}
+
+function DriverPhotoField({
+  editing,
+  setEditing,
+}: {
+  editing: Driver
+  setEditing: (d: Driver) => void
+}) {
+  const ref = useRef<HTMLInputElement>(null)
+  const [busy, setBusy] = useState(false)
+  return (
+    <div className="flex items-center gap-3">
+      <button type="button" onClick={() => ref.current?.click()} className="shrink-0" disabled={busy}>
+        <img
+          src={
+            editing.photoUrl ||
+            `https://ui-avatars.com/api/?name=${encodeURIComponent(editing.name || 'R')}&background=0f766e&color=ffffff&size=128&bold=true`
+          }
+          alt=""
+          className="h-16 w-16 rounded-full object-cover ring-2 ring-ink/10"
+        />
+      </button>
+      <div className="min-w-0 text-sm">
+        <p className="font-semibold">Foto del repartidor</p>
+        <p className="text-xs text-ink/45">La ve el cliente en seguimiento. Toca para cambiar.</p>
+      </div>
+      <input
+        ref={ref}
+        type="file"
+        accept="image/*"
+        className="hidden"
+        onChange={(e) => {
+          const file = e.target.files?.[0]
+          e.target.value = ''
+          if (!file) return
+          setBusy(true)
+          void uploadAvatar(file)
+            .then((url) => setEditing({ ...editing, photoUrl: url }))
+            .finally(() => setBusy(false))
+        }}
+      />
     </div>
   )
 }

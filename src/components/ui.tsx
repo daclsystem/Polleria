@@ -6,7 +6,7 @@ export function StatusBadge({ status }: { status: OrderStatus }) {
     nuevo: 'bg-ember/12 text-ember ring-ember/15',
     en_cocina: 'bg-amber-50 text-amber-800 ring-amber-100',
     listo: 'bg-emerald-50 text-emerald-800 ring-emerald-100',
-    entregado: 'bg-stone-50 text-stone-600 ring-stone-100',
+    entregado: 'bg-ink/[0.06] text-ink/70 ring-ink/15',
     cancelado: 'bg-rose-50 text-rose-700 ring-rose-100',
   }
   return (

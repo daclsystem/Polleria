@@ -174,7 +174,7 @@ export function Layout() {
         }}
       />
       <aside
-        className={`fixed inset-y-0 left-0 z-40 w-[min(18.5rem,88vw)] flame-bg text-cream transition-[width,transform] duration-200 lg:static lg:translate-x-0 ${
+        className={`fixed inset-y-0 left-0 z-40 w-[min(18.5rem,88vw)] flame-bg text-white transition-[width,transform] duration-200 lg:static lg:translate-x-0 ${
           open ? 'translate-x-0' : '-translate-x-full'
         } ${collapsed ? 'lg:w-[4.25rem]' : 'lg:w-[17.5rem]'}`}
       >
@@ -186,7 +186,7 @@ export function Layout() {
           >
             <div className={`min-w-0 ${collapsed ? 'lg:hidden' : ''}`}>
               <p className="font-display text-[1.4rem] leading-none tracking-tight">Chifa-Pollería</p>
-              <p className="mt-1 text-[11px] font-medium tracking-[0.18em] text-cream/45 uppercase">Lopez</p>
+              <p className="mt-1 text-[11px] font-medium tracking-[0.18em] text-white/45 uppercase">Lopez</p>
             </div>
             {collapsed ? (
               <p className="hidden font-display text-lg text-gold lg:block" title="Chifa-Pollería Lopez">
@@ -198,7 +198,7 @@ export function Layout() {
             </button>
             <button
               type="button"
-              className="tap hidden rounded-xl p-2 text-cream/70 hover:bg-white/10 hover:text-cream lg:inline-flex"
+              className="tap hidden rounded-xl p-2 text-white/70 hover:bg-white/10 hover:text-white lg:inline-flex"
               onClick={() => setCollapsed((v) => !v)}
               aria-label={collapsed ? 'Expandir menú' : 'Contraer menú'}
               title={collapsed ? 'Expandir' : 'Contraer'}
@@ -213,7 +213,7 @@ export function Layout() {
               return (
                 <div key={group.title}>
                   <p
-                    className={`mb-1.5 px-3 text-[10px] font-bold tracking-[0.16em] text-cream/35 uppercase ${
+                    className={`mb-1.5 px-3 text-[10px] font-bold tracking-[0.16em] text-white/40 uppercase ${
                       collapsed ? 'lg:hidden' : ''
                     }`}
                   >
@@ -235,7 +235,7 @@ export function Layout() {
                             } ${
                               isActive
                                 ? 'bg-ember text-white shadow-lg shadow-ember/25'
-                                : 'text-cream/75 hover:bg-white/6 hover:text-cream'
+                                : 'text-white/75 hover:bg-white/6 hover:text-white'
                             }`
                           }
                         >
@@ -279,8 +279,8 @@ export function Layout() {
               </button>
               <div className={`min-w-0 ${collapsed ? 'lg:hidden' : ''}`}>
                 <p className="truncate text-sm font-semibold">{user?.name}</p>
-                <p className="text-xs text-cream/50">{user ? ROLE_LABEL[user.role] : ''}</p>
-                <p className="mt-0.5 font-mono text-[10px] tracking-wider text-cream/35">
+                <p className="text-xs text-white/50">{user ? ROLE_LABEL[user.role] : ''}</p>
+                <p className="mt-0.5 font-mono text-[10px] tracking-wider text-white/40">
                   ID · {shortAccountId(user?.id)}
                 </p>
               </div>
@@ -288,14 +288,14 @@ export function Layout() {
             <button
               onClick={() => setLogoutOpen(true)}
               title="Cerrar sesión"
-              className={`mt-3 flex min-h-11 w-full items-center gap-2 rounded-2xl bg-white/8 px-3 py-2 text-sm text-cream/80 hover:bg-white/12 ${
+              className={`mt-3 flex min-h-11 w-full items-center gap-2 rounded-2xl bg-white/8 px-3 py-2 text-sm text-white/80 hover:bg-white/12 ${
                 collapsed ? 'lg:justify-center lg:gap-0 lg:px-0' : ''
               }`}
             >
               <LogOut size={16} />
               <span className={collapsed ? 'lg:hidden' : ''}>Cerrar sesión</span>
             </button>
-            <p className={`mt-3 text-center text-[10px] text-cream/30 ${collapsed ? 'lg:hidden' : ''}`}>
+            <p className={`mt-3 text-center text-[10px] text-white/35 ${collapsed ? 'lg:hidden' : ''}`}>
               v{APP_VERSION}
             </p>
           </div>
@@ -379,7 +379,7 @@ export function Layout() {
               href={customerMenuUrl()}
               target="_blank"
               rel="noreferrer"
-              className="inline-flex min-h-10 items-center gap-1.5 rounded-full bg-ink px-3.5 py-1.5 text-xs font-bold text-cream shadow-sm"
+              className="inline-flex min-h-10 items-center gap-1.5 rounded-full bg-ink px-3.5 py-1.5 text-xs font-bold text-white shadow-sm"
             >
               <ExternalLink size={13} />
               <span className="hidden sm:inline">Carta del cliente</span>

@@ -129,6 +129,11 @@ export interface Order {
   source: 'pos' | 'web'
   driverId?: string
   driverName?: string
+  driverPhone?: string
+  driverPhotoUrl?: string
+  driverVehicle?: string
+  driverPlate?: string
+  localWhatsapp?: string
   driverLat?: number
   driverLng?: number
   addressLat?: number
@@ -202,6 +207,7 @@ export interface Driver {
   phone: string
   active: boolean
   vehicleInfo?: string
+  plate?: string
   photoUrl?: string
   lat?: number
   lng?: number

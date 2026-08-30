@@ -2,7 +2,7 @@ import { createContext, useContext, useEffect, useMemo, useState, type ReactNode
 import { useStore } from '../store/StoreContext'
 import type { ModuleId, Role, User } from '../types'
 import { ROLE_MODULES } from '../types'
-import { apiFetch, getApiToken, setApiToken } from '../lib/apiClient'
+import { apiFetch, apiLogout, getApiToken, setApiToken } from '../lib/apiClient'
 import { APP_NAME, siteUrl } from '../lib/paths'
 import { defaultAvatarUrl } from '../lib/avatar'
 import { SessionReplacedDialog } from '../components/SessionReplacedDialog'
@@ -44,6 +44,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const user = apiUser
 
   const logout = () => {
+    void apiLogout('staff')
     localStorage.removeItem(STAFF_SESSION_KEY)
     localStorage.removeItem('polleria-api-user')
     setApiToken(null, 'staff')

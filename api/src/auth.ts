@@ -30,7 +30,7 @@ declare global {
 }
 
 export function signToken(user: AuthUser) {
-  return jwt.sign(user, JWT_SECRET, { expiresIn: '12h' })
+  return jwt.sign(user, JWT_SECRET, { expiresIn: '30d' })
 }
 
 export async function authRequired(req: Request, res: Response, next: NextFunction) {
@@ -123,4 +123,30 @@ authRouter.get('/me', authRequired, (req, res) => {
 /** Comprueba si la sesión sigue vigente (para el front) */
 authRouter.get('/session', authRequired, (req, res) => {
   res.json({ ok: true, user: req.user })
+})
+
+/** Cierra solo esta sesión (este dispositivo). */
+authRouter.post('/logout', authRequired, async (req, res) => {
+  try {
+    const u = req.user
+    if (u?.id && u.sessionId) {
+      const scope =
+        u.accountType === 'driver' || u.role === 'driver'
+          ? 'driver'
+          : u.accountType === 'customer' || u.role === 'customer'
+            ? 'customer'
+            : 'staff'
+      const table =
+        scope === 'driver' ? 'dbo.Drivers' : scope === 'customer' ? 'dbo.Customers' : 'dbo.Users'
+      const pool = await getPool()
+      await pool
+        .request()
+        .input('id', sql.UniqueIdentifier, u.id)
+        .input('sid', sql.UniqueIdentifier, u.sessionId)
+        .query(`UPDATE ${table} SET ActiveSessionId = NULL WHERE Id=@id AND ActiveSessionId=@sid`)
+    }
+    res.json({ ok: true })
+  } catch (e) {
+    res.status(500).json({ error: (e as Error).message })
+  }
 })

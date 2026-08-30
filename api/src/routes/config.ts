@@ -1,6 +1,7 @@
 import { Router } from 'express'
 import { getPool, sql } from '../db.js'
 import { authRequired, requireRoles } from '../auth.js'
+import { sendWhatsAppSoon } from '../lib/wspgo.js'
 
 export const configRouter = Router()
 
@@ -113,6 +114,19 @@ configRouter.put('/whatsapp', authRequired, requireRoles('admin'), async (req, r
     res.json({ ok: true })
   } catch (e) {
     res.status(500).json({ error: (e as Error).message })
+  }
+})
+
+/** Envío por el API (no desde el navegador). Responde en ~2 s; el gateway sigue si tarda. */
+configRouter.post('/whatsapp/send', authRequired, async (req, res) => {
+  const phone = String(req.body?.phone || '').trim()
+  const text = String(req.body?.text || '').trim()
+  if (!phone || !text) return res.status(400).json({ error: 'phone y text requeridos' })
+  try {
+    const r = await sendWhatsAppSoon(phone, text)
+    res.json({ ok: true, pending: r.pending })
+  } catch (e) {
+    res.status(502).json({ ok: false, error: (e as Error).message })
   }
 })
 

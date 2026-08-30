@@ -1,6 +1,6 @@
 import type { Order } from '../types'
 import { soles } from './format'
-import { apiGetWhatsappConfig, apiSaveWhatsappConfig, getApiToken } from './apiClient'
+import { apiGetWhatsappConfig, apiSaveWhatsappConfig, apiSendWhatsapp, getApiToken } from './apiClient'
 
 export interface WspgoConfig {
   enabled: boolean
@@ -123,7 +123,19 @@ export async function sendWhatsAppText(
   if (!config.enabled) return { ok: false, error: 'WhatsApp deshabilitado' }
   if (!phone) return { ok: false, error: 'Sin teléfono' }
 
+  if (getApiToken()) {
+    try {
+      const r = await apiSendWhatsapp(phone, text)
+      if (r.ok) return { ok: true }
+      return { ok: false, error: r.error || 'No se pudo enviar' }
+    } catch (e) {
+      return { ok: false, error: (e as Error).message }
+    }
+  }
+
   const base = config.baseUrl.replace(/\/$/, '')
+  const ctrl = new AbortController()
+  const timer = window.setTimeout(() => ctrl.abort(), 8000)
   try {
     const res = await fetch(`${base}/api/sendText`, {
       method: 'POST',
@@ -136,6 +148,7 @@ export async function sendWhatsAppText(
         chatId: toChatId(phone),
         text,
       }),
+      signal: ctrl.signal,
     })
     if (!res.ok) {
       const body = await res.text()
@@ -144,6 +157,8 @@ export async function sendWhatsAppText(
     return { ok: true }
   } catch (e) {
     return { ok: false, error: (e as Error).message }
+  } finally {
+    window.clearTimeout(timer)
   }
 }
 

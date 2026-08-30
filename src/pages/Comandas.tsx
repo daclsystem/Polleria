@@ -411,7 +411,23 @@ export function Comandas() {
                         }`}
                         onClick={() => setPickedDriverId(d.id)}
                       >
-                        {d.name} · {d.phone}
+                        <span className="flex min-w-0 items-center gap-2">
+                          <img
+                            src={
+                              d.photoUrl ||
+                              `https://ui-avatars.com/api/?name=${encodeURIComponent(d.name)}&background=0f766e&color=ffffff&size=64`
+                            }
+                            alt=""
+                            className="h-8 w-8 rounded-full object-cover"
+                          />
+                          <span className="min-w-0">
+                            <span className="block truncate">{d.name}</span>
+                            <span className="block text-[11px] font-medium opacity-70">
+                              {d.phone}
+                              {d.plate || d.vehicleInfo ? ` · ${d.plate || d.vehicleInfo}` : ''}
+                            </span>
+                          </span>
+                        </span>
                       </button>
                     )
                   })}

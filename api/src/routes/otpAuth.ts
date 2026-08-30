@@ -4,29 +4,16 @@ import { v4 as uuid } from 'uuid'
 import { getPool, sql } from '../db.js'
 import { signToken, type AuthUser } from '../auth.js'
 import { rotateSession } from '../session.js'
+import { normalizePhone, sendWhatsAppSoon } from '../lib/wspgo.js'
 
 export const otpAuthRouter = Router()
 
-const WSP_BASE = process.env.WSPGO_BASE_URL || 'https://iwspgo.indevsoft.com'
-const WSP_KEY = process.env.WSPGO_API_KEY || '753ce43470bc2ad5b72bce84a7080d7ec92f77a6690bff51e5e03a5cd14eb6e0'
-const WSP_SESSION = process.env.WSPGO_SESSION || 'PolleriaLopez'
 const OTP_TTL_MIN = 10
 /** Código de respaldo si WhatsApp / iwspgo está caído */
 const OTP_FALLBACK = String(process.env.OTP_FALLBACK_CODE || '123456').trim()
 
 type AccountType = 'staff' | 'customer' | 'driver'
 type Purpose = 'login' | 'register'
-
-function normalizePhone(phone: string) {
-  let digits = phone.replace(/\D/g, '')
-  if (digits.length === 9 && digits.startsWith('9')) digits = `51${digits}`
-  return digits
-}
-
-function toChatId(phone: string) {
-  const d = normalizePhone(phone)
-  return d.includes('@') ? d : `${d}@c.us`
-}
 
 function genCode() {
   return String(Math.floor(100000 + Math.random() * 900000))
@@ -44,22 +31,7 @@ async function sendWhatsAppCode(phone: string, code: string, name: string, purpo
     `*${code}*\n\n` +
     `Válido por ${OTP_TTL_MIN} minutos.`
 
-  const res = await fetch(`${WSP_BASE.replace(/\/$/, '')}/api/sendText`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'X-Api-Key': WSP_KEY,
-    },
-    body: JSON.stringify({
-      session: WSP_SESSION,
-      chatId: toChatId(phone),
-      text,
-    }),
-  })
-  if (!res.ok) {
-    const body = await res.text()
-    throw new Error(body || `WhatsApp HTTP ${res.status}`)
-  }
+  await sendWhatsAppSoon(phone, text)
 }
 
 async function findStaffByPhone(phone: string) {

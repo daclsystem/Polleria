@@ -2,30 +2,45 @@
 @source "./**/*.{html,js,ts,jsx,tsx}";
 @custom-variant dark (&:where(.dark, .dark *));
 
+/* Tokens en :root para que html.dark sí pise a Tailwind v4 (@theme solo no alcanza). */
+:root {
+  --app-ink: #0c0c0c;
+  --app-ink-soft: #1a1a1a;
+  --app-cream: #f4f5f7;
+  --app-cream-dark: #e8eaee;
+  --app-surface: #ffffff;
+  --app-ember: #1a3d1a;
+  --app-ember-hot: #143314;
+}
+
+html.dark {
+  color-scheme: dark;
+  --app-ink: #f3f6f3;
+  --app-ink-soft: #dce3dc;
+  --app-cream: #111411;
+  --app-cream-dark: #1a1f1a;
+  --app-surface: #1c221c;
+  /* Ember claro: títulos, precios y kickers se leen sobre fondo oscuro */
+  --app-ember: #8fd48f;
+  --app-ember-hot: #a6e0a6;
+}
+
 @theme {
   --font-sans: "Source Sans 3", ui-sans-serif, system-ui, sans-serif;
   --font-display: "Fraunces", ui-serif, Georgia, serif;
-  --color-ink: #0c0c0c;
-  --color-ink-soft: #1a1a1a;
-  --color-cream: #f4f5f7;
-  --color-cream-dark: #e8eaee;
-  --color-surface: #ffffff;
-  --color-ember: #1a3d1a;
-  --color-ember-hot: #143314;
   --color-gold: #ffd700;
   --color-brick: #c81e1e;
   --color-sage: #0f9f6e;
 }
 
-html.dark {
-  color-scheme: dark;
-  --color-ink: #eef1ee;
-  --color-ink-soft: #d5dbd5;
-  --color-cream: #121612;
-  --color-cream-dark: #1a1f1a;
-  --color-surface: #1c221c;
-  --color-ember: #2d5c2d;
-  --color-ember-hot: #3a7340;
+@theme inline {
+  --color-ink: var(--app-ink);
+  --color-ink-soft: var(--app-ink-soft);
+  --color-cream: var(--app-cream);
+  --color-cream-dark: var(--app-cream-dark);
+  --color-surface: var(--app-surface);
+  --color-ember: var(--app-ember);
+  --color-ember-hot: var(--app-ember-hot);
 }
 
 html,
@@ -66,6 +81,14 @@ body {
     radial-gradient(900px 420px at 0% 0%, rgba(26, 61, 26, 0.32), transparent 55%),
     radial-gradient(700px 360px at 100% 10%, rgba(255, 215, 0, 0.14), transparent 50%),
     #0c0c0c;
+  color: #f4f5f7;
+}
+
+/* En dark, cream/ink se invierten; el menú sigue siendo negro: el texto debe quedar claro. */
+html.dark .flame-bg {
+  --app-cream: #f4f5f7;
+  --app-ink: #f4f5f7;
+  --app-ember: #2d5c2d;
 }
 
 .card {
@@ -167,6 +190,25 @@ html.dark .card {
 
 .btn-primary:hover {
   background: var(--color-ember-hot);
+}
+
+html.dark .btn-primary,
+html.dark .chip-on {
+  background: #2d5c2d;
+  color: #fff;
+}
+html.dark .btn-primary:hover {
+  background: #3a7340;
+}
+
+/* Botones/paneles bg-ink: siguen oscuros; el texto cream/ink de dentro queda claro. */
+html.dark .bg-ink,
+html.dark .bg-ink\/90,
+html.dark .bg-ink\/80 {
+  background-color: #0c0c0c;
+  --app-cream: #f4f5f7;
+  --app-ink: #f4f5f7;
+  color: #f4f5f7;
 }
 
 .btn-primary:active {
@@ -280,12 +322,13 @@ html.dark .h-scroll::-webkit-scrollbar-thumb {
   background: #3d463d;
 }
 
-/* —— Dark mode: superficies y textos hardcoded (system + web) —— */
+/* —— Dark mode: superficies y textos hardcoded (system, web, cliente, driver) —— */
 html.dark .bg-white {
   background-color: var(--color-surface);
 }
+html.dark .bg-white\/80,
 html.dark .bg-white\/70 {
-  background-color: color-mix(in oklab, var(--color-surface) 70%, transparent);
+  background-color: color-mix(in oklab, var(--color-surface) 80%, transparent);
 }
 html.dark .bg-gray-50,
 html.dark .bg-\[\#f3f7f3\],
@@ -301,17 +344,23 @@ html.dark .bg-gray-100 {
 html.dark .bg-gray-200 {
   background-color: #323a32;
 }
-html.dark .bg-stone-50 {
+html.dark .bg-stone-50,
+html.dark .bg-stone-200 {
   background-color: #1f241f;
 }
 html.dark .hover\:bg-gray-100:hover,
-html.dark .hover\:bg-gray-200:hover {
+html.dark .hover\:bg-gray-200:hover,
+html.dark .hover\:bg-ember\/8:hover {
   background-color: #2c332c;
 }
 
 html.dark .text-gray-900,
 html.dark .text-gray-800,
-html.dark .text-gray-700 {
+html.dark .text-gray-700,
+html.dark .text-stone-600,
+html.dark .text-stone-700,
+html.dark .text-neutral-800,
+html.dark .text-black {
   color: var(--color-ink);
 }
 html.dark .text-gray-600 {
@@ -322,15 +371,37 @@ html.dark .text-gray-500 {
 }
 html.dark .text-gray-400,
 html.dark .text-gray-300 {
-  color: color-mix(in oklab, var(--color-ink) 42%, transparent);
+  color: color-mix(in oklab, var(--color-ink) 45%, transparent);
+}
+
+html.dark .text-\[\#1a3d1a\],
+html.dark .text-\[\#0c2210\],
+html.dark .text-\[\#0b1f1c\] {
+  color: #8fd48f;
+}
+
+html.dark .bg-white\/95,
+html.dark .bg-white\/95.text-\[\#0b1f1c\] {
+  background-color: rgba(255, 255, 255, 0.95);
+  color: #0b1f1c;
+}
+
+/* Oro / botón amarillo: el texto verde oscuro se queda (contraste). */
+html.dark .bg-\[\#ffd700\].text-\[\#1a3d1a\],
+html.dark .bg-gold.text-\[\#1a3d1a\],
+html.dark .bg-\[\#ffd700\],
+html.dark .bg-gold {
+  color: #143314;
 }
 
 html.dark .border-gray-100,
 html.dark .border-gray-200,
 html.dark .ring-gray-100,
-html.dark .ring-1.ring-gray-100 {
-  border-color: rgba(255, 255, 255, 0.08);
-  --tw-ring-color: rgba(255, 255, 255, 0.08);
+html.dark .ring-1.ring-gray-100,
+html.dark .ring-ink\/5,
+html.dark .ring-ink\/10 {
+  border-color: rgba(255, 255, 255, 0.1);
+  --tw-ring-color: rgba(255, 255, 255, 0.1);
 }
 
 html.dark .bg-amber-50 {
@@ -343,7 +414,9 @@ html.dark .bg-emerald-50 {
   background-color: rgba(6, 78, 59, 0.35);
 }
 html.dark .text-emerald-800,
-html.dark .text-green-700 {
+html.dark .text-emerald-700,
+html.dark .text-green-700,
+html.dark .text-green-200 {
   color: #6ee7b7;
 }
 html.dark .bg-rose-50,
@@ -369,6 +442,17 @@ html.dark .border-red-200 {
   border-color: rgba(248, 113, 113, 0.3);
 }
 
+html.dark .bg-teal-50,
+html.dark .bg-teal-100 {
+  background-color: rgba(13, 148, 136, 0.22);
+}
+html.dark .text-teal-950,
+html.dark .text-teal-900,
+html.dark .text-teal-800,
+html.dark .text-teal-700 {
+  color: #5eead4;
+}
+
 html.dark .from-green-50 {
   --tw-gradient-from: #0c1a10;
   --tw-gradient-stops: var(--tw-gradient-from), var(--tw-gradient-to);
@@ -387,6 +471,34 @@ html.dark .bg-green-50 {
 }
 html.dark .bg-green-100 {
   background-color: rgba(6, 78, 59, 0.4);
+}
+
+html.dark input:not([type='checkbox']):not([type='radio']):not([type='range']):not([type='file']),
+html.dark textarea,
+html.dark select {
+  color: var(--color-ink);
+  background-color: var(--color-surface);
+}
+html.dark input::placeholder,
+html.dark textarea::placeholder {
+  color: color-mix(in oklab, var(--color-ink) 42%, transparent);
+}
+html.dark input:-webkit-autofill,
+html.dark input:-webkit-autofill:hover,
+html.dark input:-webkit-autofill:focus {
+  -webkit-text-fill-color: var(--color-ink);
+  caret-color: var(--color-ink);
+  box-shadow: 0 0 0 1000px var(--color-surface) inset;
+}
+
+html.dark table,
+html.dark th,
+html.dark td {
+  color: var(--color-ink);
+}
+
+html.dark .divide-y > :not(:first-child) {
+  border-color: rgba(255, 255, 255, 0.08);
 }
 
 @media (min-width: 640px) {

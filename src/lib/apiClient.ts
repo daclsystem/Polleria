@@ -114,6 +114,14 @@ export async function apiLogin(email: string, password: string) {
   return data
 }
 
+export async function apiLogout(scope: TokenScope = 'staff') {
+  try {
+    await apiFetch('/api/auth/logout', { method: 'POST', scope })
+  } catch {
+    /* se limpia igual en el cliente */
+  }
+}
+
 export async function apiBootstrap() {
   return apiFetch<{
     users: unknown[]
@@ -347,6 +355,7 @@ export async function apiCreateDriver(data: {
   phone: string
   active?: boolean
   vehicleInfo?: string
+  plate?: string
   photoUrl?: string
 }) {
   return apiFetch<{ id: string; photoUrl?: string }>('/api/drivers', {
@@ -357,7 +366,7 @@ export async function apiCreateDriver(data: {
 
 export async function apiUpdateDriver(
   id: string,
-  data: { name: string; phone: string; active?: boolean; vehicleInfo?: string; photoUrl?: string },
+  data: { name: string; phone: string; active?: boolean; vehicleInfo?: string; plate?: string; photoUrl?: string },
 ) {
   return apiFetch(`/api/drivers/${id}`, {
     method: 'PUT',
@@ -550,6 +559,13 @@ export async function apiSaveWhatsappConfig(config: unknown) {
   return apiFetch('/api/config/whatsapp', {
     method: 'PUT',
     body: JSON.stringify({ config }),
+  })
+}
+
+export async function apiSendWhatsapp(phone: string, text: string) {
+  return apiFetch<{ ok: boolean; pending?: boolean; error?: string }>('/api/config/whatsapp/send', {
+    method: 'POST',
+    body: JSON.stringify({ phone, text }),
   })
 }
 

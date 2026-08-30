@@ -27,12 +27,20 @@ function mapDriver(r: Record<string, unknown>) {
     phone: r.Phone,
     active: Boolean(r.Active),
     vehicleInfo: r.VehicleInfo || undefined,
+    plate: r.Plate ? String(r.Plate) : undefined,
     photoUrl:
       r.PhotoUrl ||
       `https://ui-avatars.com/api/?name=${encodeURIComponent(name)}&background=0f766e&color=ffffff&size=128&bold=true`,
     lat: r.Lat != null ? Number(r.Lat) : undefined,
     lng: r.Lng != null ? Number(r.Lng) : undefined,
   }
+}
+
+async function ensureDriverPlate(pool: Awaited<ReturnType<typeof getPool>>) {
+  await pool.request().query(`
+    IF COL_LENGTH('dbo.Drivers', 'Plate') IS NULL
+      ALTER TABLE dbo.Drivers ADD Plate NVARCHAR(20) NULL;
+  `)
 }
 
 function mapDeliveryOrder(o: Record<string, unknown>) {
@@ -163,6 +171,7 @@ function buildGoogleMapsUrl(
 /** Staff: listar conductores */
 driversRouter.get('/', authRequired, requireRoles('admin', 'cajero', 'mozo'), async (_req, res) => {
   const pool = await getPool()
+  await ensureDriverPlate(pool)
   const r = await pool.request().query(`SELECT * FROM dbo.Drivers ORDER BY Name`)
   res.json({ drivers: r.recordset.map(mapDriver) })
 })
@@ -174,6 +183,7 @@ driversRouter.post('/', authRequired, requireRoles('admin'), async (req, res) =>
     phone: string
     active?: boolean
     vehicleInfo?: string
+    plate?: string
     photoUrl?: string
   }
   if (!body.name || !body.phone) return res.status(400).json({ error: 'name y phone requeridos' })
@@ -185,6 +195,7 @@ driversRouter.post('/', authRequired, requireRoles('admin'), async (req, res) =>
     `https://ui-avatars.com/api/?name=${encodeURIComponent(body.name)}&background=0f766e&color=ffffff&size=128&bold=true`
 
   const pool = await getPool()
+  await ensureDriverPlate(pool)
   await pool
     .request()
     .input('id', sql.UniqueIdentifier, id)
@@ -192,10 +203,11 @@ driversRouter.post('/', authRequired, requireRoles('admin'), async (req, res) =>
     .input('phone', sql.NVarChar, phone)
     .input('active', sql.Bit, body.active !== false)
     .input('vehicle', sql.NVarChar, body.vehicleInfo || null)
+    .input('plate', sql.NVarChar, body.plate ? String(body.plate).trim().toUpperCase() : null)
     .input('photo', sql.NVarChar, photo)
     .query(`
-      INSERT INTO dbo.Drivers (Id, Name, Phone, Active, VehicleInfo, PhotoUrl)
-      VALUES (@id, @name, @phone, @active, @vehicle, @photo)
+      INSERT INTO dbo.Drivers (Id, Name, Phone, Active, VehicleInfo, Plate, PhotoUrl)
+      VALUES (@id, @name, @phone, @active, @vehicle, @plate, @photo)
     `)
   res.status(201).json({ id, photoUrl: photo })
 })
@@ -206,6 +218,7 @@ driversRouter.put('/:id', authRequired, requireRoles('admin'), async (req, res) 
     phone: string
     active?: boolean
     vehicleInfo?: string
+    plate?: string
     photoUrl?: string
   }
   let phone = String(body.phone || '').replace(/\D/g, '')
@@ -214,6 +227,7 @@ driversRouter.put('/:id', authRequired, requireRoles('admin'), async (req, res) 
     body.photoUrl ||
     `https://ui-avatars.com/api/?name=${encodeURIComponent(body.name || 'Conductor')}&background=0f766e&color=ffffff&size=128&bold=true`
   const pool = await getPool()
+  await ensureDriverPlate(pool)
   await pool
     .request()
     .input('id', sql.UniqueIdentifier, paramId(req.params.id))
@@ -221,10 +235,11 @@ driversRouter.put('/:id', authRequired, requireRoles('admin'), async (req, res) 
     .input('phone', sql.NVarChar, phone)
     .input('active', sql.Bit, body.active !== false)
     .input('vehicle', sql.NVarChar, body.vehicleInfo || null)
+    .input('plate', sql.NVarChar, body.plate ? String(body.plate).trim().toUpperCase() : null)
     .input('photo', sql.NVarChar, photo)
     .query(`
       UPDATE dbo.Drivers
-      SET Name=@name, Phone=@phone, Active=@active, VehicleInfo=@vehicle, PhotoUrl=@photo, UpdatedAt=SYSUTCDATETIME()
+      SET Name=@name, Phone=@phone, Active=@active, VehicleInfo=@vehicle, Plate=@plate, PhotoUrl=@photo, UpdatedAt=SYSUTCDATETIME()
       WHERE Id=@id
     `)
   res.json({ ok: true })

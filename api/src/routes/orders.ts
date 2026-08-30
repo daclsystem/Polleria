@@ -87,10 +87,54 @@ async function deriveOrderStatusFromItems(orderId: string, tx?: InstanceType<typ
   return null
 }
 
+async function loadTrackExtras(driverId?: string | null) {
+  const pool = await getPool()
+  let driver: Record<string, unknown> | null = null
+  if (driverId) {
+    try {
+      await pool.request().query(`
+        IF COL_LENGTH('dbo.Drivers', 'Plate') IS NULL
+          ALTER TABLE dbo.Drivers ADD Plate NVARCHAR(20) NULL;
+      `)
+    } catch {
+      /* ignore */
+    }
+    const dr = await pool
+      .request()
+      .input('id', sql.UniqueIdentifier, driverId)
+      .query(`SELECT TOP 1 Id, Name, Phone, PhotoUrl, VehicleInfo, Plate FROM dbo.Drivers WHERE Id=@id`)
+    driver = dr.recordset[0] || null
+  }
+  let localWhatsapp = '51962797752'
+  try {
+    const cfg = await pool
+      .request()
+      .input('key', sql.NVarChar, 'web_site')
+      .query(`SELECT ConfigValue FROM dbo.AppConfig WHERE ConfigKey=@key`)
+    const raw = cfg.recordset[0]?.ConfigValue
+    if (raw) {
+      const site = JSON.parse(String(raw)) as { whatsappNumber?: string }
+      const n = String(site.whatsappNumber || '').replace(/\D/g, '')
+      if (n.length >= 9) localWhatsapp = n.length === 9 ? `51${n}` : n
+    }
+  } catch {
+    /* default */
+  }
+  return { driver, localWhatsapp }
+}
+
 function mapTrackOrder(
   order: Record<string, unknown>,
   items: unknown[],
-  driver?: { Id?: string; Name?: string; Phone?: string } | null,
+  driver?: {
+    Id?: string
+    Name?: string
+    Phone?: string
+    PhotoUrl?: string
+    VehicleInfo?: string
+    Plate?: string
+  } | null,
+  localWhatsapp?: string,
 ) {
   return {
     id: String(order.Id),
@@ -117,6 +161,11 @@ function mapTrackOrder(
     deliveryFee: Number(order.DeliveryFee || 0),
     driverId: order.DriverId ? String(order.DriverId) : undefined,
     driverName: driver?.Name ? String(driver.Name) : undefined,
+    driverPhone: driver?.Phone ? String(driver.Phone) : undefined,
+    driverPhotoUrl: driver?.PhotoUrl ? String(driver.PhotoUrl) : undefined,
+    driverVehicle: driver?.VehicleInfo ? String(driver.VehicleInfo) : undefined,
+    driverPlate: driver?.Plate ? String(driver.Plate) : undefined,
+    localWhatsapp: localWhatsapp || undefined,
     driverLat: order.DriverLat != null ? Number(order.DriverLat) : undefined,
     driverLng: order.DriverLng != null ? Number(order.DriverLng) : undefined,
     createdAt: new Date(order.CreatedAt as string).toISOString(),
@@ -175,19 +224,10 @@ ordersRouter.get('/track/:id', async (req, res) => {
       }
     }
 
-    let driver: { Id?: string; Name?: string; Phone?: string } | null = null
-    if (order.DriverId) {
-      const pool = await getPool()
-      const dr = await pool
-        .request()
-        .input('id', sql.UniqueIdentifier, String(order.DriverId))
-        .query(`SELECT TOP 1 Id, Name, Phone FROM dbo.Drivers WHERE Id=@id`)
-      driver = dr.recordset[0] || null
-    }
-
+    const extras = await loadTrackExtras(order.DriverId ? String(order.DriverId) : null)
     const isDelivery = order.Type === 'delivery' || order.Type === 'web'
     res.json({
-      order: mapTrackOrder(order, order.items as unknown[], driver),
+      order: mapTrackOrder(order, order.items as unknown[], extras.driver, extras.localWhatsapp),
       steps: isDelivery
         ? [
             { key: 'nuevo', label: 'Pedido recibido' },
@@ -230,8 +270,9 @@ ordersRouter.get('/track', async (req, res) => {
 
     const order = await loadOrder(String(row.Id))
     if (!order) return res.status(404).json({ error: 'Pedido no encontrado' })
+    const extras = await loadTrackExtras(order.DriverId ? String(order.DriverId) : null)
     res.json({
-      order: mapTrackOrder(order, order.items as unknown[]),
+      order: mapTrackOrder(order, order.items as unknown[], extras.driver, extras.localWhatsapp),
       steps: [
         { key: 'nuevo', label: 'Pedido recibido' },
         { key: 'en_cocina', label: 'Preparando' },

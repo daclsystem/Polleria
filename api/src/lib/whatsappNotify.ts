@@ -1,20 +1,7 @@
 import { getPool, sql } from '../db.js'
+import { normalizePhone, sendWhatsAppText } from './wspgo.js'
 
-const WSP_BASE = process.env.WSPGO_BASE_URL || 'https://iwspgo.indevsoft.com'
-const WSP_KEY = process.env.WSPGO_API_KEY || '753ce43470bc2ad5b72bce84a7080d7ec92f77a6690bff51e5e03a5cd14eb6e0'
-const WSP_SESSION = process.env.WSPGO_SESSION || 'PolleriaLopez'
 const FRONT_URL = (process.env.FRONT_PUBLIC_URL || 'https://chifapollerialopez.com').replace(/\/$/, '')
-
-function normalizePhone(phone: string) {
-  let digits = phone.replace(/\D/g, '')
-  if (digits.length === 9 && digits.startsWith('9')) digits = `51${digits}`
-  return digits
-}
-
-function toChatId(phone: string) {
-  const d = normalizePhone(phone)
-  return d.includes('@') ? d : `${d}@c.us`
-}
 
 function soles(n: number) {
   return `S/ ${Number(n).toFixed(2)}`
@@ -26,21 +13,28 @@ export function trackingUrl(orderId: string, phone?: string) {
 }
 
 async function sendText(phone: string, text: string) {
-  const res = await fetch(`${WSP_BASE.replace(/\/$/, '')}/api/sendText`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'X-Api-Key': WSP_KEY,
-    },
-    body: JSON.stringify({
-      session: WSP_SESSION,
-      chatId: toChatId(phone),
-      text,
-    }),
-  })
-  if (!res.ok) {
-    const body = await res.text().catch(() => '')
-    throw new Error(body || `WhatsApp HTTP ${res.status}`)
+  await sendWhatsAppText(phone, text)
+}
+
+type WaCfg = {
+  enabled?: boolean
+  notifyPhone?: string
+  autoNotifyLocal?: boolean
+  autoNotifyCustomer?: boolean
+}
+
+async function loadWaConfig(): Promise<WaCfg> {
+  try {
+    const pool = await getPool()
+    const r = await pool
+      .request()
+      .input('key', sql.NVarChar, 'whatsapp')
+      .query(`SELECT ConfigValue FROM dbo.AppConfig WHERE ConfigKey=@key`)
+    const raw = r.recordset[0]?.ConfigValue
+    if (!raw) return {}
+    return JSON.parse(String(raw)) as WaCfg
+  } catch {
+    return {}
   }
 }
 
@@ -88,40 +82,66 @@ const STATUS_MSG: Record<string, string> = {
   cancelado: '❌ *Cancelado*\nTu pedido fue cancelado. Si tienes dudas, escríbenos.',
 }
 
-/** Aviso al crear pedido: detalle + tracking (mensaje 1/3) — solo delivery / cliente web */
+/** Aviso al crear pedido: local + cliente (cliente solo delivery / web). En paralelo. */
 export async function notifyOrderCreatedServer(order: OrderLike) {
-  if (!shouldNotifyCustomerWhatsApp(order)) {
-    return { sent: false, reason: 'solo delivery o pedido del cliente (app/web)' }
-  }
+  const cfg = await loadWaConfig()
+  if (cfg.enabled === false) return { sent: false, reason: 'whatsapp deshabilitado' }
 
   const phone = String(order.CustomerPhone || '')
-  if (!phone) return { sent: false, reason: 'sin teléfono' }
-
-  const track = trackingUrl(String(order.Id), phone)
+  const track = phone ? trackingUrl(String(order.Id), phone) : ''
   const pago = order.CodPaymentMethod || 'contra entrega'
-  const text =
-    `🍗 *Chifa-Pollería Lopez*\n` +
-    `¡Hola ${order.CustomerName}! Tu pedido *#${order.Number}* fue recibido.\n\n` +
-    `*Detalle:*\n${detalle(order)}\n\n` +
-    `Total: *${soles(Number(order.Total))}*\n` +
-    `Pago: ${pago}\n` +
-    `${tipoLabel(String(order.Type), order.Address)}\n\n` +
-    `📍 *Sigue tu pedido aquí:*\n${track}\n\n` +
-    `Te avisaremos cuando esté *listo* y cuando se *entregue*.`
+  const jobs: Promise<unknown>[] = []
 
-  await sendText(phone, text)
-
-  try {
-    const pool = await getPool()
-    await pool
-      .request()
-      .input('id', sql.UniqueIdentifier, order.Id)
-      .query(`UPDATE dbo.Orders SET WhatsAppNotifiedAt = SYSUTCDATETIME() WHERE Id = @id`)
-  } catch {
-    /* ignore */
+  if (cfg.autoNotifyLocal !== false && cfg.notifyPhone) {
+    const localText =
+      `🔔 *Nuevo pedido #${order.Number}*\n` +
+      `Cliente: ${order.CustomerName}\n` +
+      `Tel: ${phone || '—'}\n` +
+      `${tipoLabel(String(order.Type), order.Address)}\n` +
+      `Total: *${soles(Number(order.Total))}*\n` +
+      `Pago: ${pago}\n\n` +
+      `${detalle(order)}`
+    jobs.push(sendText(cfg.notifyPhone, localText))
   }
 
-  return { sent: true, track }
+  const notifyCustomer =
+    cfg.autoNotifyCustomer !== false && shouldNotifyCustomerWhatsApp(order) && Boolean(phone)
+  if (notifyCustomer) {
+    const text =
+      `🍗 *Chifa-Pollería Lopez*\n` +
+      `¡Hola ${order.CustomerName}! Tu pedido *#${order.Number}* fue recibido.\n\n` +
+      `*Detalle:*\n${detalle(order)}\n\n` +
+      `Total: *${soles(Number(order.Total))}*\n` +
+      `Pago: ${pago}\n` +
+      `${tipoLabel(String(order.Type), order.Address)}\n\n` +
+      `📍 *Sigue tu pedido aquí:*\n${track}\n\n` +
+      `Te avisaremos cuando esté *listo* y cuando se *entregue*.`
+    jobs.push(sendText(phone, text))
+  }
+
+  if (!jobs.length) {
+    return { sent: false, reason: 'nada que enviar' }
+  }
+
+  const results = await Promise.allSettled(jobs)
+  const ok = results.some((r) => r.status === 'fulfilled')
+  for (const r of results) {
+    if (r.status === 'rejected') console.warn('[whatsapp] create', r.reason)
+  }
+
+  if (ok && notifyCustomer) {
+    try {
+      const pool = await getPool()
+      await pool
+        .request()
+        .input('id', sql.UniqueIdentifier, order.Id)
+        .query(`UPDATE dbo.Orders SET WhatsAppNotifiedAt = SYSUTCDATETIME() WHERE Id = @id`)
+    } catch {
+      /* ignore */
+    }
+  }
+
+  return { sent: ok, track: track || undefined }
 }
 
 /**

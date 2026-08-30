@@ -1,24 +1,11 @@
 import { Router } from 'express'
 import bcrypt from 'bcryptjs'
 import { getPool, sql } from '../db.js'
+import { normalizePhone, sendWhatsAppSoon } from '../lib/wspgo.js'
 
 export const recoverRouter = Router()
 
-const WSP_BASE = process.env.WSPGO_BASE_URL || 'https://iwspgo.indevsoft.com'
-const WSP_KEY = process.env.WSPGO_API_KEY || '753ce43470bc2ad5b72bce84a7080d7ec92f77a6690bff51e5e03a5cd14eb6e0'
-const WSP_SESSION = process.env.WSPGO_SESSION || 'PolleriaLopez'
 const OTP_TTL_MIN = 10
-
-function normalizePhone(phone: string) {
-  let digits = phone.replace(/\D/g, '')
-  if (digits.length === 9 && digits.startsWith('9')) digits = `51${digits}`
-  return digits
-}
-
-function toChatId(phone: string) {
-  const d = normalizePhone(phone)
-  return d.includes('@') ? d : `${d}@c.us`
-}
 
 function genCode() {
   return String(Math.floor(100000 + Math.random() * 900000))
@@ -31,22 +18,7 @@ async function sendWhatsAppCode(phone: string, code: string, name: string) {
     `*${code}*\n\n` +
     `Válido por ${OTP_TTL_MIN} minutos. Si no pediste esto, ignora el mensaje.`
 
-  const res = await fetch(`${WSP_BASE.replace(/\/$/, '')}/api/sendText`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'X-Api-Key': WSP_KEY,
-    },
-    body: JSON.stringify({
-      session: WSP_SESSION,
-      chatId: toChatId(phone),
-      text,
-    }),
-  })
-  if (!res.ok) {
-    const body = await res.text()
-    throw new Error(body || `WhatsApp HTTP ${res.status}`)
-  }
+  await sendWhatsAppSoon(phone, text)
 }
 
 type AccountType = 'staff' | 'customer'

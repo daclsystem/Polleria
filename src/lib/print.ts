@@ -145,17 +145,35 @@ function esc(s: string) {
     .replaceAll('"', '&quot;')
 }
 
+function standaloneBar() {
+  return `
+  <div class="noprint standalone-bar" id="standalone-bar">
+    <p>Vista previa</p>
+    <button type="button" class="print" onclick="window.print()">Imprimir</button>
+    <button type="button" onclick="goBackToSystem()">Cerrar</button>
+  </div>
+  <script>
+    function goBackToSystem() {
+      try { if (window.parent && window.parent !== window && window.parent.closePrintPreview) { window.parent.closePrintPreview(); return; } } catch (e) {}
+      try { window.close(); } catch (e) {}
+      if (window.opener) { window.close(); return; }
+      if (history.length > 1) { history.back(); return; }
+    }
+  </script>`
+}
+
 function ticketShell(title: string, inner: string, width = '80mm') {
   return `<!DOCTYPE html>
 <html lang="es">
 <head>
   <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>${esc(title)}</title>
   <style>
     @page { size: ${width} auto; margin: 4mm; }
     html, body { margin: 0; padding: 0; background: #fff; color: #111; }
     body { font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace; font-size: 12px; }
-    .sheet { width: 72mm; margin: 0 auto; }
+    .sheet { width: 72mm; margin: 0 auto; padding: 12px 0 24px; }
     .center { text-align: center; }
     .brand { font-size: 16px; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; }
     .muted { color: #444; }
@@ -166,17 +184,24 @@ function ticketShell(title: string, inner: string, width = '80mm') {
     .big { font-size: 18px; font-weight: 800; }
     .cut { text-align: center; font-size: 10px; margin-top: 10px; }
     h1, h2, p { margin: 0 0 4px; }
+    .standalone-bar {
+      display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
+      padding: 12px 14px; padding-top: max(12px, env(safe-area-inset-top));
+      background: #0c0c0c; color: #fff; font-family: system-ui, sans-serif;
+    }
+    .standalone-bar[hidden] { display: none !important; }
+    .standalone-bar p { margin: 0; flex: 1 1 120px; font-weight: 600; font-size: 14px; }
+    .standalone-bar button {
+      min-height: 44px; border: 0; border-radius: 12px; padding: 0 16px;
+      font-weight: 700; font-size: 14px; background: #fff; color: #111; cursor: pointer;
+    }
+    .standalone-bar button.print { background: #1a3d1a; color: #fff; }
     @media print { .noprint { display: none !important; } }
   </style>
 </head>
 <body>
+  ${standaloneBar()}
   <div class="sheet">${inner}</div>
-  <script>
-    window.onload = function () {
-      window.focus();
-      window.print();
-    };
-  </script>
 </body>
 </html>`
 }
@@ -266,36 +291,124 @@ export function reportHtml(opts: {
     <p style="margin-top:24px;font-size:11px;color:#555">Impreso ${esc(formatDateTime(new Date().toISOString()))}</p>
   `
   return `<!DOCTYPE html>
-<html lang="es"><head><meta charset="UTF-8"/><title>${esc(opts.title)}</title>
+<html lang="es"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/><title>${esc(opts.title)}</title>
 <style>
   @page { size: A4; margin: 12mm; }
-  body { font-family: system-ui, sans-serif; color: #111; }
+  body { font-family: system-ui, sans-serif; color: #111; margin: 0; }
+  .report { padding: 16px; }
   td { padding: 6px; border-bottom: 1px solid #ddd; }
+  .standalone-bar {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
+    padding: 12px 14px; padding-top: max(12px, env(safe-area-inset-top));
+    background: #0c0c0c; color: #fff;
+  }
+  .standalone-bar[hidden] { display: none !important; }
+  .standalone-bar p { margin: 0; flex: 1 1 120px; font-weight: 600; font-size: 14px; }
+  .standalone-bar button {
+    min-height: 44px; border: 0; border-radius: 12px; padding: 0 16px;
+    font-weight: 700; font-size: 14px; background: #fff; color: #111; cursor: pointer;
+  }
+  .standalone-bar button.print { background: #1a3d1a; color: #fff; }
+  @media print { .noprint { display: none !important; } }
 </style></head>
-<body>${inner}
-<script>window.onload=function(){window.focus();window.print();}</script>
+<body>
+${standaloneBar()}
+<div class="report">${inner}</div>
 </body></html>`
 }
 
 // ─── Print dispatchers ──────────────────────────────────────────────────────
 
+const OVERLAY_ID = 'polleria-print-overlay'
+
+let printKeyHandler: ((e: KeyboardEvent) => void) | null = null
+
+function closePrintPreview() {
+  if (printKeyHandler) {
+    document.removeEventListener('keydown', printKeyHandler)
+    printKeyHandler = null
+  }
+  document.getElementById(OVERLAY_ID)?.remove()
+  document.documentElement.style.removeProperty('overflow')
+  document.body.style.removeProperty('overflow')
+}
+
+if (typeof window !== 'undefined') {
+  ;(window as Window & { closePrintPreview?: () => void }).closePrintPreview = closePrintPreview
+}
+
 function printHtmlFallback(html: string) {
-  const iframe = document.createElement('iframe')
-  iframe.setAttribute('aria-hidden', 'true')
-  iframe.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0;'
-  document.body.appendChild(iframe)
-  const doc = iframe.contentDocument
-  const win = iframe.contentWindow
-  if (!doc || !win) {
-    iframe.remove()
+  closePrintPreview()
+
+  const overlay = document.createElement('div')
+  overlay.id = OVERLAY_ID
+  overlay.setAttribute('role', 'dialog')
+  overlay.setAttribute('aria-modal', 'true')
+  overlay.setAttribute('aria-label', 'Vista previa de impresión')
+  overlay.innerHTML = `
+    <style>
+      #${OVERLAY_ID} {
+        position: fixed; inset: 0; z-index: 2147483000;
+        display: flex; flex-direction: column;
+        background: #111; color: #fff;
+      }
+      #${OVERLAY_ID} .polleria-print-bar {
+        flex: 0 0 auto; display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
+        padding: 12px 14px; padding-top: max(12px, env(safe-area-inset-top));
+        background: #0c0c0c; border-bottom: 1px solid rgba(255,255,255,0.12);
+      }
+      #${OVERLAY_ID} .polleria-print-bar p {
+        margin: 0; flex: 1 1 140px; font: 600 14px/1.3 system-ui, sans-serif;
+      }
+      #${OVERLAY_ID} .polleria-print-bar button {
+        min-height: 44px; border: 0; border-radius: 12px; padding: 0 16px;
+        font: 700 14px system-ui, sans-serif; cursor: pointer;
+      }
+      #${OVERLAY_ID} [data-close] { background: #fff; color: #111; }
+      #${OVERLAY_ID} [data-print] { background: #1a3d1a; color: #fff; }
+      #${OVERLAY_ID} iframe { flex: 1 1 auto; width: 100%; border: 0; background: #fff; }
+      @media print { #${OVERLAY_ID} { display: none !important; } }
+    </style>
+    <div class="polleria-print-bar">
+      <p>Vista previa</p>
+      <button type="button" data-print>Imprimir</button>
+      <button type="button" data-close>Cerrar</button>
+    </div>
+    <iframe title="Documento a imprimir"></iframe>
+    <div class="polleria-print-bar">
+      <button type="button" data-print>Imprimir</button>
+      <button type="button" data-close>Cerrar</button>
+    </div>
+  `
+
+  document.documentElement.style.overflow = 'hidden'
+  document.body.style.overflow = 'hidden'
+  document.body.appendChild(overlay)
+
+  printKeyHandler = (e: KeyboardEvent) => {
+    if (e.key === 'Escape') {
+      e.preventDefault()
+      closePrintPreview()
+    }
+  }
+  document.addEventListener('keydown', printKeyHandler)
+
+  const iframe = overlay.querySelector('iframe')
+  overlay.querySelectorAll('[data-close]').forEach((el) => {
+    el.addEventListener('click', () => closePrintPreview())
+  })
+  overlay.querySelectorAll('[data-print]').forEach((el) => {
+    el.addEventListener('click', () => iframe?.contentWindow?.print())
+  })
+
+  const doc = iframe?.contentDocument
+  if (!iframe || !doc) {
+    closePrintPreview()
     return
   }
   doc.open()
   doc.write(html)
   doc.close()
-  const cleanup = () => setTimeout(() => iframe.remove(), 800)
-  win.onafterprint = cleanup
-  setTimeout(cleanup, 8000)
 }
 
 function getPrinterConfig(settings: Settings, kind: TicketKind): PrinterConfig | null {

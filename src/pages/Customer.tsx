@@ -57,6 +57,7 @@ import type { Customer, Order, OrderItem, OrderStatus, Product } from '../types'
 import { TYPE_LABEL } from '../types'
 import { DEFAULT_WEB_SITE, mergeWebSite } from '../lib/webSite'
 import { ThemeToggle } from '../components/ThemeToggle'
+import { OrderContactCard } from '../components/OrderContactCard'
 
 const PERMS_SKIP_KEY = 'polleria-perms-skip-cliente'
 
@@ -1130,6 +1131,17 @@ function CustomerMenu() {
       {tab === 'pedidos' ? (
         <div className="mx-auto max-w-2xl">
           <PageTitle title="Mis pedidos" hint="Separa lo que está en camino de lo que ya te entregaron." />
+          <div className="mt-4">
+            <OrderContactCard
+              localWhatsapp={waNumber}
+              driverName={myOrders.find((o) => o.driverName && isOrderInProgress(o.status))?.driverName}
+              driverPhone={myOrders.find((o) => o.driverPhone && isOrderInProgress(o.status))?.driverPhone}
+              driverPhotoUrl={myOrders.find((o) => o.driverPhotoUrl && isOrderInProgress(o.status))?.driverPhotoUrl}
+              driverVehicle={myOrders.find((o) => o.driverVehicle && isOrderInProgress(o.status))?.driverVehicle}
+              driverPlate={myOrders.find((o) => o.driverPlate && isOrderInProgress(o.status))?.driverPlate}
+              orderNumber={myOrders.find((o) => isOrderInProgress(o.status))?.number}
+            />
+          </div>
           {!customer ? (
             <button
               type="button"

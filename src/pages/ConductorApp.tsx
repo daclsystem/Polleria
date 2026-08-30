@@ -29,6 +29,7 @@ import {
   apiDriverMyOrders,
   apiDriverRoute,
   apiDriverUpdateProfile,
+  apiLogout,
   setApiToken,
   type DriverDeliveryOrder,
 } from '../lib/apiClient'
@@ -93,6 +94,7 @@ export function ConductorApp() {
   const locOk = locStatus === 'granted' && Boolean(coords)
 
   const logout = () => {
+    void apiLogout('driver')
     localStorage.removeItem(DRIVER_KEY)
     setApiToken(null, 'driver')
     setDriver(null)
