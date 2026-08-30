@@ -1,7 +1,10 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import {
+  LogOut,
   MessageCircle,
   Phone,
+  QrCode,
+  RefreshCw,
   Send,
   Settings2,
   Zap,
@@ -10,10 +13,13 @@ import { useStore } from '../store/StoreContext'
 import { formatDateTime, padOrder, soles } from '../lib/format'
 import {
   DEFAULT_WSPGO,
+  fetchSessionQr,
   fetchWspgoConfig,
   getSessionStatus,
+  logoutWhatsappSession,
   saveWspgoConfig,
   sendWhatsAppText,
+  startWhatsappSession,
   type WspgoConfig,
 } from '../lib/whatsapp'
 import type { Order } from '../types'
@@ -47,6 +53,10 @@ export function WhatsApp() {
   const [phoneQuery, setPhoneQuery] = useState('')
   const [sendResult, setSendResult] = useState<string | null>(null)
   const [sessionStatus, setSessionStatus] = useState<string>('…')
+  const [qrSrc, setQrSrc] = useState<string | null>(null)
+  const [qrBusy, setQrBusy] = useState(false)
+  const [qrErr, setQrErr] = useState<string | null>(null)
+  const [wantQr, setWantQr] = useState(false)
 
   const phoneDigits = phoneQuery.replace(/\D/g, '')
   const recentOrders = state.orders
@@ -63,11 +73,66 @@ export function WhatsApp() {
     void fetchWspgoConfig().then(setConfig)
   }, [])
 
+  const refreshStatus = useCallback(async () => {
+    try {
+      const s = await getSessionStatus(config)
+      setSessionStatus(s.status)
+      return s.status
+    } catch {
+      setSessionStatus('ERROR')
+      return 'ERROR'
+    }
+  }, [config])
+
+  const loadQr = useCallback(async () => {
+    setQrBusy(true)
+    setQrErr(null)
+    try {
+      const src = await fetchSessionQr(config)
+      setQrSrc(src)
+    } catch (e) {
+      setQrSrc(null)
+      setQrErr((e as Error).message || 'No hay QR. Cierra la sesión y vuelve a intentar.')
+    } finally {
+      setQrBusy(false)
+    }
+  }, [config])
+
   useEffect(() => {
-    getSessionStatus(config)
-      .then((s) => setSessionStatus(s.status))
-      .catch(() => setSessionStatus('ERROR'))
-  }, [config.baseUrl, config.apiKey, config.session])
+    void refreshStatus()
+    const t = window.setInterval(() => void refreshStatus(), 8000)
+    return () => window.clearInterval(t)
+  }, [refreshStatus])
+
+  useEffect(() => {
+    if (sessionStatus === 'SCAN_QR_CODE' || sessionStatus === 'STARTING') {
+      void loadQr()
+      const t = window.setInterval(() => void loadQr(), 12000)
+      return () => window.clearInterval(t)
+    }
+    if (sessionStatus === 'WORKING') setQrSrc(null)
+  }, [sessionStatus, loadQr])
+
+  const handleLogoutQr = async () => {
+    if (!confirm('Se cierra WhatsApp de este local. Después escanea el QR de nuevo.')) return
+    setWantQr(true)
+    setQrBusy(true)
+    setQrErr(null)
+    try {
+      await logoutWhatsappSession(config)
+      await startWhatsappSession(config)
+      const st = await refreshStatus()
+      if (st === 'SCAN_QR_CODE' || st === 'STARTING' || st === 'STOPPED') {
+        await new Promise((r) => setTimeout(r, 1500))
+        await refreshStatus()
+        await loadQr()
+      }
+    } catch (e) {
+      setQrErr((e as Error).message || 'No se pudo cerrar la sesión')
+    } finally {
+      setQrBusy(false)
+    }
+  }
 
   const flash = (msg: string) => {
     setSendResult(msg)
@@ -127,18 +192,47 @@ export function WhatsApp() {
           <MessageCircle size={14} />
           {config.enabled ? `Sesión ${config.session}: ${sessionStatus}` : 'Deshabilitado'}
         </div>
-        {!statusOk && config.enabled ? (
-          <a
-            href="https://iwspgo.indevsoft.com/dashboard"
-            target="_blank"
-            rel="noreferrer"
-            className="text-sm font-semibold text-ember underline"
+        {config.enabled ? (
+          <button
+            type="button"
+            onClick={() => void handleLogoutQr()}
+            disabled={qrBusy}
+            className="inline-flex min-h-9 items-center gap-1.5 rounded-full bg-ink px-3 text-xs font-bold text-cream disabled:opacity-50"
           >
-            Abrir dashboard y escanear QR
-          </a>
+            <LogOut size={13} /> Cerrar y escanear QR
+          </button>
         ) : null}
         {sendResult && <span className="text-sm font-medium text-green-600">{sendResult}</span>}
       </div>
+
+      {config.enabled &&
+      (wantQr || qrSrc || qrErr || sessionStatus === 'SCAN_QR_CODE' || sessionStatus === 'STARTING') ? (
+        <div className="card mt-4 flex flex-col items-center gap-3 p-5 sm:flex-row sm:items-start">
+          <div className="flex h-52 w-52 shrink-0 items-center justify-center rounded-2xl bg-white ring-1 ring-ink/10">
+            {qrSrc ? (
+              <img src={qrSrc} alt="QR WhatsApp" className="h-48 w-48 rounded-xl" />
+            ) : (
+              <QrCode size={48} className="text-ink/25" />
+            )}
+          </div>
+          <div className="min-w-0 flex-1 space-y-2">
+            <p className="font-display text-lg">Escanea con WhatsApp</p>
+            <p className="text-sm text-ink/55">
+              En el celular: WhatsApp → Dispositivos vinculados → Vincular. El código se renueva solo.
+            </p>
+            {qrErr ? <p className="text-sm font-semibold text-brick">{qrErr}</p> : null}
+            <button
+              type="button"
+              onClick={() => void loadQr()}
+              disabled={qrBusy}
+              className="inline-flex items-center gap-1.5 rounded-xl bg-[#25d366] px-3 py-2 text-xs font-bold text-white disabled:opacity-50"
+            >
+              <RefreshCw size={13} className={qrBusy ? 'animate-spin' : ''} />
+              {qrBusy ? 'Cargando…' : 'Actualizar QR'}
+            </button>
+          </div>
+        </div>
+      ) : null}
 
       <div className="mt-5 flex gap-2 overflow-x-auto">
         {tabs.map((t) => (

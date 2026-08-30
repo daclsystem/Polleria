@@ -233,7 +233,7 @@ interface StoreApi {
   saveUser: (user: User) => void
   deleteUser: (id: string) => void
   saveInventory: (item: InventoryItem) => void
-  adjustStock: (id: string, delta: number) => void
+  adjustStock: (id: string, delta: number, extra?: { reason?: 'ingreso' | 'ajuste' | 'perdida'; notes?: string }) => void
   updateTable: (id: string, patch: Partial<Table>) => void
   saveSettings: (settings: Settings) => void
   saveBranch: (branch: Branch) => void
@@ -875,7 +875,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   )
 
   const adjustStock = useCallback(
-    (id: string, delta: number) => {
+    (id: string, delta: number, extra?: { reason?: 'ingreso' | 'ajuste' | 'perdida'; notes?: string }) => {
       requireApi()
       patchLocal((prev) => ({
         ...prev,
@@ -883,7 +883,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           i.id === id ? { ...i, stock: Math.max(0, Math.round((i.stock + delta) * 100) / 100) } : i,
         ),
       }))
-      void apiAdjustStock(id, delta)
+      void apiAdjustStock(id, delta, extra)
         .then(() => reloadFromApi())
         .catch((e) => setApiError((e as Error).message))
     },

@@ -242,10 +242,14 @@ export async function apiSaveInventory(item: InventoryItem) {
   return apiFetch<{ id: string }>('/api/inventory', { method: 'POST', body: JSON.stringify(item) })
 }
 
-export async function apiAdjustStock(id: string, delta: number) {
+export async function apiAdjustStock(
+  id: string,
+  delta: number,
+  extra?: { reason?: 'ingreso' | 'ajuste' | 'perdida'; notes?: string },
+) {
   return apiFetch(`/api/inventory/${id}/adjust`, {
     method: 'POST',
-    body: JSON.stringify({ delta }),
+    body: JSON.stringify({ delta, reason: extra?.reason, notes: extra?.notes }),
   })
 }
 
@@ -315,6 +319,10 @@ export async function apiUpdateReservationStatus(id: string, status: string) {
 
 export async function apiListCustomers() {
   return apiFetch<{ customers: Customer[] }>('/api/customers')
+}
+
+export async function apiSearchCustomers(q: string) {
+  return apiFetch<{ customers: Customer[] }>(`/api/customers/search?q=${encodeURIComponent(q)}`)
 }
 
 export async function apiUpsertCustomer(data: {

@@ -5,6 +5,7 @@ import { ROLE_MODULES } from '../types'
 import { apiFetch, getApiToken, setApiToken } from '../lib/apiClient'
 import { APP_NAME, siteUrl } from '../lib/paths'
 import { defaultAvatarUrl } from '../lib/avatar'
+import { SessionReplacedDialog } from '../components/SessionReplacedDialog'
 
 const STAFF_SESSION_KEY = 'polleria-staff-session'
 
@@ -30,6 +31,7 @@ const AuthContext = createContext<AuthApi | null>(null)
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const { state, saveUser, reloadFromApi } = useStore()
+  const [replacedMsg, setReplacedMsg] = useState<string | null>(null)
   const [apiUser, setApiUser] = useState<User | null>(() => {
     try {
       const raw = localStorage.getItem('polleria-api-user')
@@ -107,9 +109,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const onReplaced = (ev: Event) => {
       const detail = (ev as CustomEvent<{ scope?: string; message?: string }>).detail
       if (detail?.scope && detail.scope !== 'staff') return
-      alert(detail?.message || 'Tu sesión se cerró porque iniciaste en otro dispositivo')
       logout()
-      window.location.assign(siteUrl('system', '/login'))
+      setReplacedMsg(detail?.message || 'Iniciaste sesión en otro celular o computadora. Esta queda cerrada.')
     }
     window.addEventListener('polleria-session-replaced', onReplaced)
 
@@ -151,7 +152,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [user, state.users],
   )
 
-  return <AuthContext.Provider value={api}>{children}</AuthContext.Provider>
+  return (
+    <AuthContext.Provider value={api}>
+      {children}
+      <SessionReplacedDialog
+        open={Boolean(replacedMsg)}
+        message={replacedMsg || undefined}
+        onAck={() => {
+          setReplacedMsg(null)
+          window.location.assign(siteUrl('system', '/login'))
+        }}
+      />
+    </AuthContext.Provider>
+  )
 }
 
 export function useAuth() {

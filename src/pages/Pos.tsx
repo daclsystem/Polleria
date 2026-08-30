@@ -5,12 +5,12 @@ import { useAuth } from '../auth/AuthContext'
 import { useStore } from '../store/StoreContext'
 import { padOrder, soles } from '../lib/format'
 import { printTicket } from '../lib/print'
-import { apiUpsertCustomer } from '../lib/apiClient'
+import { apiSearchCustomers, apiUpsertCustomer } from '../lib/apiClient'
 import { formatDeliveryQuote, quoteDeliveryFromAddress } from '../lib/deliveryQuote'
 import { pickDeliveryBranchId } from '../lib/deliveryRanges'
 import { filterKitchenItems } from '../lib/kitchen'
 import { orderBelongsToStaff } from '../lib/realtime'
-import type { OrderItem, OrderType, PaymentMethod } from '../types'
+import type { Customer, OrderItem, OrderType, PaymentMethod } from '../types'
 import { Field, Modal, PageTitle, inputClass } from '../components/ui'
 
 const TYPES: { id: OrderType; label: string }[] = [
@@ -45,6 +45,8 @@ export function Pos() {
     isAppendMode ? (appendOrder?.customerName ?? '') : '',
   )
   const [phone, setPhone] = useState(isAppendMode ? (appendOrder?.customerPhone ?? '') : '')
+  const [custHits, setCustHits] = useState<Customer[]>([])
+  const [custOpen, setCustOpen] = useState(false)
   const [address, setAddress] = useState('')
   const [addressLat, setAddressLat] = useState<number | null>(null)
   const [addressLng, setAddressLng] = useState<number | null>(null)
@@ -95,6 +97,61 @@ export function Pos() {
       setQuoteInfo(null)
     }
   }, [type])
+
+  useEffect(() => {
+    if (isAppendMode) return
+    const nameQ = customerName.trim().toLowerCase()
+    const phoneQ = phone.replace(/\D/g, '')
+    if (nameQ.length < 2 && phoneQ.length < 3) {
+      setCustHits([])
+      return
+    }
+    const local: Customer[] = []
+    const seen = new Set<string>()
+    const push = (c: { id?: string; name: string; phone?: string; address?: string }) => {
+      const key = (c.phone || '').replace(/\D/g, '').slice(-9) || c.name.toLowerCase()
+      if (!key || seen.has(key)) return
+      seen.add(key)
+      local.push({
+        id: c.id || key,
+        name: c.name,
+        phone: c.phone || '',
+        password: '',
+        address: c.address,
+        createdAt: '',
+      })
+    }
+    for (const c of state.customers) {
+      const n = c.name.toLowerCase()
+      const p = (c.phone || '').replace(/\D/g, '')
+      if ((nameQ.length >= 2 && n.includes(nameQ)) || (phoneQ.length >= 3 && p.includes(phoneQ))) push(c)
+    }
+    for (const o of state.orders) {
+      const n = o.customerName.toLowerCase()
+      const p = (o.customerPhone || '').replace(/\D/g, '')
+      if ((nameQ.length >= 2 && n.includes(nameQ)) || (phoneQ.length >= 3 && p.includes(phoneQ))) {
+        push({ name: o.customerName, phone: o.customerPhone, address: o.address, id: o.customerId })
+      }
+    }
+    setCustHits(local.slice(0, 8))
+    const q = nameQ.length >= 2 ? customerName.trim() : phoneQ
+    const t = window.setTimeout(() => {
+      void apiSearchCustomers(q)
+        .then((r) => {
+          for (const c of r.customers || []) push(c)
+          setCustHits((prev) => {
+            const map = new Map(prev.map((x) => [(x.phone || '').replace(/\D/g, '').slice(-9) || x.name, x]))
+            for (const c of r.customers || []) {
+              const k = (c.phone || '').replace(/\D/g, '').slice(-9) || c.name
+              if (!map.has(k)) map.set(k, c)
+            }
+            return [...map.values()].slice(0, 8)
+          })
+        })
+        .catch(() => undefined)
+    }, 280)
+    return () => window.clearTimeout(t)
+  }, [customerName, phone, isAppendMode, state.customers, state.orders])
   const cashNum = Number(cash) || 0
   const change = Math.max(0, cashNum - total)
   const canSend = items.length > 0 && (isAppendMode || type !== 'salon' || Boolean(tableId))
@@ -346,23 +403,67 @@ export function Pos() {
         </div>
 
         <div className="mt-4 grid gap-3 sm:grid-cols-2">
-          <input
-            className={inputClass}
-            placeholder="Nombre del cliente *"
-            value={customerName}
-            onChange={(e) => setCustomerName(e.target.value)}
-            required
-            disabled={isAppendMode}
-          />
-          <input
-            className={inputClass}
-            placeholder="Teléfono *"
-            value={phone}
-            onChange={(e) => setPhone(e.target.value)}
-            inputMode="tel"
-            required
-            disabled={isAppendMode}
-          />
+          <div className="relative">
+            <input
+              className={inputClass}
+              placeholder="Nombre del cliente *"
+              value={customerName}
+              onChange={(e) => {
+                setCustomerName(e.target.value)
+                setCustOpen(true)
+              }}
+              onFocus={() => setCustOpen(true)}
+              required
+              disabled={isAppendMode}
+              autoComplete="off"
+            />
+          </div>
+          <div className="relative">
+            <input
+              className={inputClass}
+              placeholder="Teléfono *"
+              value={phone}
+              onChange={(e) => {
+                setPhone(e.target.value)
+                setCustOpen(true)
+              }}
+              onFocus={() => setCustOpen(true)}
+              inputMode="tel"
+              required
+              disabled={isAppendMode}
+              autoComplete="off"
+            />
+          </div>
+          {!isAppendMode && custOpen && custHits.length > 0 ? (
+            <div className="sm:col-span-2 overflow-hidden rounded-2xl border border-ink/10 bg-surface shadow-lg">
+              <p className="px-3 pt-2 text-[11px] font-bold tracking-wide text-ink/40 uppercase">
+                Coincidencias
+              </p>
+              <ul className="max-h-52 overflow-y-auto py-1">
+                {custHits.map((c) => (
+                  <li key={`${c.id}-${c.phone}`}>
+                    <button
+                      type="button"
+                      className="flex w-full items-center justify-between gap-3 px-3 py-2.5 text-left hover:bg-ember/8"
+                      onClick={() => {
+                        setCustomerName(c.name)
+                        setPhone(c.phone || '')
+                        if (c.address) setAddress(c.address)
+                        setCustHits([])
+                        setCustOpen(false)
+                      }}
+                    >
+                      <span>
+                        <span className="block text-sm font-semibold">{c.name}</span>
+                        <span className="text-xs text-ink/45">{c.phone}</span>
+                      </span>
+                      {c.address ? <span className="max-w-[40%] truncate text-[11px] text-ink/35">{c.address}</span> : null}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
           {type === 'salon' ? (
             <button
               type="button"

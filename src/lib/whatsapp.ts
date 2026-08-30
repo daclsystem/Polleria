@@ -147,13 +147,52 @@ export async function sendWhatsAppText(
   }
 }
 
+function wspHeaders(config: WspgoConfig, extra?: HeadersInit) {
+  return { 'X-Api-Key': config.apiKey, ...extra }
+}
+
 export async function getSessionStatus(config: WspgoConfig = loadWspgoConfig()) {
   const base = config.baseUrl.replace(/\/$/, '')
   const res = await fetch(`${base}/api/sessions/${encodeURIComponent(config.session)}`, {
-    headers: { 'X-Api-Key': config.apiKey },
+    headers: wspHeaders(config),
   })
   if (!res.ok) throw new Error(`Sesión HTTP ${res.status}`)
   return res.json() as Promise<{ name: string; status: string }>
+}
+
+export async function fetchSessionQr(config: WspgoConfig = loadWspgoConfig()) {
+  const base = config.baseUrl.replace(/\/$/, '')
+  const res = await fetch(`${base}/api/${encodeURIComponent(config.session)}/auth/qr`, {
+    headers: wspHeaders(config, { Accept: 'application/json' }),
+  })
+  if (!res.ok) throw new Error(`QR HTTP ${res.status}`)
+  const data = (await res.json()) as { mimetype?: string; data?: string }
+  if (!data?.data) throw new Error('El QR aún no está listo')
+  return `data:${data.mimetype || 'image/png'};base64,${data.data}`
+}
+
+export async function logoutWhatsappSession(config: WspgoConfig = loadWspgoConfig()) {
+  const base = config.baseUrl.replace(/\/$/, '')
+  const res = await fetch(`${base}/api/sessions/${encodeURIComponent(config.session)}/logout`, {
+    method: 'POST',
+    headers: wspHeaders(config),
+  })
+  if (!res.ok) {
+    const body = await res.text()
+    throw new Error(body || `Logout HTTP ${res.status}`)
+  }
+}
+
+export async function startWhatsappSession(config: WspgoConfig = loadWspgoConfig()) {
+  const base = config.baseUrl.replace(/\/$/, '')
+  const res = await fetch(`${base}/api/sessions/${encodeURIComponent(config.session)}/start`, {
+    method: 'POST',
+    headers: wspHeaders(config),
+  })
+  if (!res.ok && res.status !== 422) {
+    const body = await res.text()
+    throw new Error(body || `Start HTTP ${res.status}`)
+  }
 }
 
 /** Avisos automáticos al crear pedido */

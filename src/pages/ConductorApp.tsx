@@ -15,6 +15,7 @@ import {
 } from 'lucide-react'
 import { PhoneOtpLogin } from '../components/PhoneOtpLogin'
 import { ConfirmLogout } from '../components/ConfirmLogout'
+import { SessionReplacedDialog } from '../components/SessionReplacedDialog'
 import {
   DevicePermissionsPrompt,
   askDevicePermissions,
@@ -61,6 +62,7 @@ export function ConductorApp() {
   const [loading, setLoading] = useState(false)
   const [err, setErr] = useState<string | null>(null)
   const [logoutOpen, setLogoutOpen] = useState(false)
+  const [replacedMsg, setReplacedMsg] = useState<string | null>(null)
   const [permsOpen, setPermsOpen] = useState(false)
   const [, setNotifyOn] = useState(() => notificationsGranted())
   const knownMine = useRef<Set<string>>(new Set())
@@ -192,10 +194,10 @@ export function ConductorApp() {
     const onReplaced = (ev: Event) => {
       const detail = (ev as CustomEvent<{ scope?: string; message?: string }>).detail
       if (detail?.scope && detail.scope !== 'driver') return
-      alert(detail?.message || 'Sesión de conductor cerrada: iniciaste en otro dispositivo')
       localStorage.removeItem(DRIVER_KEY)
       setApiToken(null, 'driver')
       setDriver(null)
+      setReplacedMsg(detail?.message || 'Iniciaste sesión en otro celular. Esta queda cerrada.')
     }
     window.addEventListener('polleria-session-replaced', onReplaced)
     const t = window.setInterval(() => void refresh(), 30000)
@@ -239,6 +241,11 @@ export function ConductorApp() {
             <h1 className="mt-1 font-display text-4xl tracking-tight">En ruta</h1>
             <p className="mt-2 text-sm text-white/55">Tus entregas, el mapa y el cobro en un solo lugar.</p>
           </div>
+          <SessionReplacedDialog
+            open={Boolean(replacedMsg)}
+            message={replacedMsg || undefined}
+            onAck={() => setReplacedMsg(null)}
+          />
           <div className="rounded-[1.75rem] bg-white p-5 text-ink shadow-2xl">
             <PhoneOtpLogin
               accountType="driver"
@@ -290,6 +297,11 @@ export function ConductorApp() {
           skipPermissionsPrompt(PERMS_SKIP_KEY)
           setPermsOpen(false)
         }}
+      />
+      <SessionReplacedDialog
+        open={Boolean(replacedMsg)}
+        message={replacedMsg || undefined}
+        onAck={() => setReplacedMsg(null)}
       />
       <ConfirmLogout
         open={logoutOpen}

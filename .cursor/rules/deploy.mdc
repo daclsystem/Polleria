@@ -1,0 +1,11 @@
+---
+description: Quién sube front, API y base de datos
+alwaysApply: true
+---
+
+# Despliegue Polleria
+
+- **Front** (web, system, driver, cliente): el agente **compila** (`npm run build` / `build:all`). El usuario **sube** `dist/` al servidor.
+- **API y base de datos**: el agente **los sube** al VPS (`/opt/polleria/api`, SQL `23_*.sql` y siguientes). No pedir al usuario que suba back ni SQL.
+- Tras cambios de API o SQL, desplegar back+BD y avisar que el front ya se puede compilar y subir.
+- No commitear ni imprimir claves SSH, SQL ni API keys.

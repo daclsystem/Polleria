@@ -389,18 +389,55 @@ crudRouter.put('/inventory/:id', authRequired, requireRoles('admin', 'cajero'), 
 
 crudRouter.post('/inventory/:id/adjust', authRequired, requireRoles('admin', 'cajero', 'cocina'), async (req, res) => {
   const delta = Number(req.body?.delta || 0)
+  const notes = String(req.body?.notes || '').trim().slice(0, 255)
+  const rawReason = String(req.body?.reason || '').trim().toLowerCase()
+  const reason =
+    rawReason === 'perdida' || rawReason === 'pérdida'
+      ? 'perdida'
+      : delta > 0
+        ? 'ingreso'
+        : rawReason === 'ajuste' || rawReason === 'uso'
+          ? 'ajuste'
+          : delta < 0
+            ? 'ajuste'
+            : 'ajuste'
+  const id = paramId(req.params.id)
   const pool = await getPool()
+  const cur = await pool
+    .request()
+    .input('id', sql.UniqueIdentifier, id)
+    .query(`SELECT Stock FROM dbo.Inventory WHERE Id=@id`)
+  if (!cur.recordset[0]) return res.status(404).json({ error: 'Ítem no encontrado' })
+  const after = Math.max(0, Number(cur.recordset[0].Stock || 0) + delta)
   await pool
     .request()
-    .input('id', sql.UniqueIdentifier, paramId(req.params.id))
-    .input('delta', sql.Decimal(12, 3), delta)
+    .input('id', sql.UniqueIdentifier, id)
+    .input('stock', sql.Decimal(12, 3), after)
     .query(`
       UPDATE dbo.Inventory
-      SET Stock = CASE WHEN Stock + @delta < 0 THEN 0 ELSE Stock + @delta END,
-          UpdatedAt = SYSUTCDATETIME()
+      SET Stock = @stock, UpdatedAt = SYSUTCDATETIME()
       WHERE Id=@id
     `)
-  res.json({ ok: true })
+  try {
+    await pool
+      .request()
+      .input('mid', sql.UniqueIdentifier, uuid())
+      .input('iid', sql.UniqueIdentifier, id)
+      .input('delta', sql.Decimal(12, 3), delta)
+      .input('after', sql.Decimal(12, 3), after)
+      .input('reason', sql.NVarChar, reason)
+      .input('notes', sql.NVarChar, notes || null)
+      .input('uid', sql.UniqueIdentifier, req.user?.id && isGuid(req.user.id) ? req.user.id : null)
+      .query(`
+        IF OBJECT_ID(N'dbo.InventoryMovements', N'U') IS NOT NULL
+        INSERT INTO dbo.InventoryMovements
+          (Id, InventoryId, Delta, StockAfter, Reason, Notes, CreatedByUserId)
+        VALUES (@mid, @iid, @delta, @after, @reason, @notes, @uid)
+      `)
+  } catch {
+    /* kardex opcional */
+  }
+  res.json({ ok: true, stock: after, reason })
 })
 
 /* ─── Tables ─── */
@@ -599,6 +636,40 @@ function normalizePhone(phone: string) {
   if (digits.length === 9 && digits.startsWith('9')) digits = `51${digits}`
   return digits
 }
+
+crudRouter.get('/customers/search', authRequired, async (req, res) => {
+  try {
+    const q = String(req.query.q || '').trim()
+    if (q.length < 2) return res.json({ customers: [] })
+    const digits = q.replace(/\D/g, '')
+    const pool = await getPool()
+    const r = await pool
+      .request()
+      .input('q', sql.NVarChar, `%${q}%`)
+      .input('digits', sql.NVarChar, digits.length >= 3 ? `%${digits}%` : '')
+      .query(`
+        SELECT TOP 20 Id, Name, Phone, Email, Address, PhotoUrl, CreatedAt
+        FROM dbo.Customers
+        WHERE Name LIKE @q
+           OR (@digits <> '' AND REPLACE(REPLACE(REPLACE(REPLACE(Phone,' ',''),'-',''),'+',''),'(','') LIKE @digits)
+        ORDER BY Name
+      `)
+    res.json({
+      customers: r.recordset.map((c: Record<string, unknown>) => ({
+        id: String(c.Id),
+        name: c.Name,
+        phone: c.Phone,
+        email: c.Email || undefined,
+        address: c.Address || undefined,
+        photoUrl: c.PhotoUrl || defaultPhoto(String(c.Name)),
+        password: '',
+        createdAt: new Date(c.CreatedAt as string).toISOString(),
+      })),
+    })
+  } catch (e) {
+    res.status(500).json({ error: (e as Error).message })
+  }
+})
 
 crudRouter.get('/customers', authRequired, async (_req, res) => {
   try {
