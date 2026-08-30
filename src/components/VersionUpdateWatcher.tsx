@@ -103,20 +103,20 @@ export function VersionUpdateWatcher() {
         role="dialog"
         aria-modal="true"
         aria-labelledby="version-update-title"
-        className="w-full max-w-sm rounded-3xl bg-white p-6 text-center shadow-2xl ring-1 ring-black/5"
+        className="w-full max-w-sm rounded-3xl bg-surface p-6 text-center text-ink shadow-2xl ring-1 ring-ink/10"
       >
         <p className="text-xs font-bold tracking-[0.2em] text-green-700 uppercase">Actualización</p>
-        <h2 id="version-update-title" className="mt-2 text-xl font-black text-gray-900">
+        <h2 id="version-update-title" className="mt-2 text-xl font-black text-ink">
           Nueva versión disponible
         </h2>
-        <p className="mt-2 text-sm text-gray-600">
-          v{APP_VERSION} → <span className="font-bold text-green-800">v{remoteVersion}</span>
+        <p className="mt-2 text-sm text-ink/60">
+          v{APP_VERSION} → <span className="font-bold text-sage">v{remoteVersion}</span>
         </p>
-        <p className="mt-4 text-sm text-gray-500">
+        <p className="mt-4 text-sm text-ink/50">
           Se actualizará automáticamente en{' '}
-          <span className="font-black text-gray-900">{seconds}</span> s…
+          <span className="font-black text-ink">{seconds}</span> s…
         </p>
-        <div className="mt-4 h-1.5 overflow-hidden rounded-full bg-gray-100">
+        <div className="mt-4 h-1.5 overflow-hidden rounded-full bg-ink/10">
           <div
             className="h-full rounded-full bg-green-600 transition-all duration-1000 ease-linear"
             style={{ width: `${((COUNTDOWN_SEC - seconds) / COUNTDOWN_SEC) * 100}%` }}

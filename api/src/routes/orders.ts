@@ -354,6 +354,7 @@ ordersRouter.post('/', async (req, res) => {
     deliveryDistanceKm?: number
     deliveryTimeMin?: number
     deliveryFee?: number
+    branchId?: string
     tableId?: string
     tableNumber?: number
     notes?: string
@@ -384,9 +385,9 @@ ordersRouter.post('/', async (req, res) => {
       const { quoteDeliveryAddress, quoteDeliveryPoint } = await import('../lib/deliveryQuote.js')
       const quoted =
         body.addressLat != null && body.addressLng != null
-          ? await quoteDeliveryPoint(Number(body.addressLat), Number(body.addressLng))
+          ? await quoteDeliveryPoint(Number(body.addressLat), Number(body.addressLng), body.branchId)
           : body.address
-            ? await quoteDeliveryAddress(String(body.address))
+            ? await quoteDeliveryAddress(String(body.address), body.branchId)
             : null
       if (quoted) {
         body.addressLat = quoted.lat

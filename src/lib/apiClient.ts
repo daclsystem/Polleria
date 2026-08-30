@@ -3,6 +3,7 @@ import { APP_NAME } from './paths'
 import type {
   Branch,
   Customer,
+  DeliveryRange,
   Driver,
   InventoryItem,
   Product,
@@ -124,6 +125,7 @@ export async function apiBootstrap() {
     customers: unknown[]
     reservations: unknown[]
     branches: unknown[]
+    deliveryRanges?: unknown[]
     nextOrderNumber: number
     source: string
   }>('/api/catalog/bootstrap')
@@ -264,6 +266,28 @@ export async function apiSaveBranch(branch: Branch) {
 
 export async function apiDeleteBranch(id: string) {
   return apiFetch(`/api/branches/${id}`, { method: 'DELETE' })
+}
+
+export async function apiGetDeliveryRanges(branchId?: string) {
+  const q = branchId ? `?branchId=${encodeURIComponent(branchId)}` : ''
+  return apiFetch<{ ranges: DeliveryRange[] }>(`/api/delivery/ranges${q}`, { auth: false })
+}
+
+export async function apiSaveDeliveryRanges(ranges: DeliveryRange[], branchId?: string) {
+  return apiFetch('/api/delivery/ranges', {
+    method: 'PUT',
+    body: JSON.stringify({
+      branchId,
+      ranges: ranges.map((r, i) => ({
+        name: r.name,
+        distanceKmFrom: r.distanceKmFrom,
+        distanceKmTo: r.distanceKmTo,
+        fee: r.fee,
+        sortOrder: r.sortOrder || i + 1,
+        active: r.active,
+      })),
+    }),
+  })
 }
 
 export async function apiCreateReservation(data: {
@@ -708,6 +732,22 @@ export async function apiCreateProductReview(data: {
     method: 'POST',
     scope: 'customer',
     body: JSON.stringify(data),
+  })
+}
+
+export type SystemPurgeTarget = 'orders' | 'users' | 'customers' | 'products'
+
+export async function apiSystemStatus() {
+  return apiFetch<{
+    ok: boolean
+    counts: { orders: number; customers: number; products: number; staff: number }
+  }>('/api/system/status')
+}
+
+export async function apiSystemPurge(targets: SystemPurgeTarget[]) {
+  return apiFetch<{ ok: boolean; cleared: string[]; message: string }>('/api/system/purge', {
+    method: 'POST',
+    body: JSON.stringify({ confirm: 'PUESTA EN MARCHA', targets }),
   })
 }
 

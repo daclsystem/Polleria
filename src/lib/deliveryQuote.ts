@@ -10,8 +10,12 @@ export type ClientDeliveryQuote = {
   address?: string
 }
 
-export async function quoteDeliveryAt(lat: number, lng: number): Promise<ClientDeliveryQuote> {
-  const q = (await apiDeliveryQuote({ lat, lng })) as {
+export async function quoteDeliveryAt(
+  lat: number,
+  lng: number,
+  branchId?: string,
+): Promise<ClientDeliveryQuote> {
+  const q = (await apiDeliveryQuote({ lat, lng, branchId })) as {
     fee?: number
     distanceKm?: number
     timeMin?: number
@@ -25,11 +29,14 @@ export async function quoteDeliveryAt(lat: number, lng: number): Promise<ClientD
   }
 }
 
-export async function quoteDeliveryFromAddress(address: string): Promise<ClientDeliveryQuote> {
+export async function quoteDeliveryFromAddress(
+  address: string,
+  branchId?: string,
+): Promise<ClientDeliveryQuote> {
   const matches = await fetchGeoPlace(address)
   const first = matches[0]
   if (!first) throw new Error('No se encontró esa dirección')
-  const q = await quoteDeliveryAt(first.lat, first.lng)
+  const q = await quoteDeliveryAt(first.lat, first.lng, branchId)
   return { ...q, address: first.address }
 }
 

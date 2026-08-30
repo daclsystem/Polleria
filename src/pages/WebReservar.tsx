@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { ArrowLeft, Calendar, Check, Clock, Users } from 'lucide-react'
 import { useStore } from '../store/StoreContext'
+import { ThemeToggle } from '../components/ThemeToggle'
 
 const TIME_SLOTS = [
   '11:00', '11:30', '12:00', '12:30', '13:00', '13:30',
@@ -67,7 +68,10 @@ export function WebReservar() {
 
   if (success) {
     return (
-      <div className="flex min-h-dvh items-center justify-center bg-gradient-to-b from-green-50 to-white p-6">
+      <div className="relative flex min-h-dvh items-center justify-center bg-gradient-to-b from-green-50 to-white p-6">
+        <div className="absolute right-4 top-4">
+          <ThemeToggle />
+        </div>
         <div className="w-full max-w-md text-center">
           <div className="mx-auto mb-6 flex h-24 w-24 items-center justify-center rounded-full bg-green-100">
             <Check size={48} className="text-green-600" />
@@ -105,10 +109,11 @@ export function WebReservar() {
           <button onClick={() => navigate('/')} className="flex h-9 w-9 items-center justify-center rounded-full bg-white/10 text-white hover:bg-white/20">
             <ArrowLeft size={18} />
           </button>
-          <div>
+          <div className="min-w-0 flex-1">
             <h1 className="text-lg font-black text-[#ffd700]">Reservar Mesa</h1>
             <p className="text-xs text-green-300">Chifa-Pollería Lopez</p>
           </div>
+          <ThemeToggle tone="dark" />
         </div>
       </header>
 

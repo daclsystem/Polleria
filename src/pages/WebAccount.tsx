@@ -27,6 +27,7 @@ import {
   getCustomerSession,
   setCustomerSession,
 } from '../lib/customerSession'
+import { ThemeToggle } from '../components/ThemeToggle'
 
 const TILE_URL = 'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png'
 const TILE_ATTR = '&copy; CARTO &copy; OSM'
@@ -132,7 +133,10 @@ export function WebAccount() {
 
   if (!customer) {
     return (
-      <div className="flex min-h-dvh items-center justify-center bg-gradient-to-br from-green-50 via-white to-yellow-50 p-4">
+      <div className="relative flex min-h-dvh items-center justify-center bg-gradient-to-br from-green-50 via-white to-yellow-50 p-4">
+        <div className="absolute right-4 top-4">
+          <ThemeToggle />
+        </div>
         <div className="w-full max-w-md">
           <div className="mb-8 text-center">
             <button onClick={() => navigate(homePath)} className="mb-4 inline-flex items-center gap-2 text-sm font-medium text-green-700 hover:underline">
@@ -206,12 +210,15 @@ export function WebAccount() {
               </p>
             </div>
           </div>
-          <button
-            onClick={() => setLogoutOpen(true)}
-            className="flex items-center gap-2 rounded-full bg-white/10 px-4 py-2 text-sm font-medium text-white hover:bg-white/20"
-          >
-            <LogOut size={14} /> Salir
-          </button>
+          <div className="flex items-center gap-2">
+            <ThemeToggle tone="dark" />
+            <button
+              onClick={() => setLogoutOpen(true)}
+              className="flex items-center gap-2 rounded-full bg-white/10 px-4 py-2 text-sm font-medium text-white hover:bg-white/20"
+            >
+              <LogOut size={14} /> Salir
+            </button>
+          </div>
         </div>
       </header>
 

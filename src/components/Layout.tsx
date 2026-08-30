@@ -40,6 +40,7 @@ import { ConfirmLogout } from './ConfirmLogout'
 import { defaultAvatarUrl, shortAccountId } from '../lib/avatar'
 import { uploadAvatar } from '../lib/minio'
 import { apiUpdateStaffProfile } from '../lib/apiClient'
+import { ThemeToggle } from './ThemeToggle'
 
 const NAV: { to: string; label: string; hint: string; icon: LucideIcon; module: ModuleId }[] = [
   { to: '/', label: 'Inicio', hint: 'Resumen del día', icon: LayoutDashboard, module: 'dashboard' },
@@ -156,7 +157,7 @@ export function Layout() {
   }
 
   return (
-    <div className="flex h-dvh overflow-hidden bg-cream" onPointerDownCapture={() => unlockSounds()}>
+    <div className="flex h-dvh overflow-hidden bg-cream text-ink" onPointerDownCapture={() => unlockSounds()}>
       <LiveToasts />
       <ConfirmLogout
         open={logoutOpen}
@@ -338,6 +339,7 @@ export function Layout() {
             </p>
           </div>
           <div className="ml-auto flex items-center gap-2">
+            <ThemeToggle />
             {user ? (
               <div className="hidden items-center gap-2 sm:flex">
                 <img src={photo} alt="" className="h-8 w-8 rounded-full object-cover ring-1 ring-ink/10" />

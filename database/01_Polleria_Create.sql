@@ -126,6 +126,7 @@ IF OBJECT_ID(N'dbo.DeliveryRanges', N'U') IS NULL
 BEGIN
   CREATE TABLE dbo.DeliveryRanges (
     Id              UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_DeliveryRanges PRIMARY KEY DEFAULT NEWID(),
+    BranchId        UNIQUEIDENTIFIER NULL,     -- NULL = tarifa global (fallback)
     Name            NVARCHAR(80)     NOT NULL,
     DistanceKmFrom  DECIMAL(8,2)     NOT NULL, -- ej. 0
     DistanceKmTo    DECIMAL(8,2)     NULL,     -- NULL = sin límite superior
@@ -134,9 +135,11 @@ BEGIN
     Active          BIT              NOT NULL CONSTRAINT DF_DeliveryRanges_Active DEFAULT (1),
     CreatedAt       DATETIME2(0)     NOT NULL CONSTRAINT DF_DeliveryRanges_CreatedAt DEFAULT (SYSUTCDATETIME()),
     CONSTRAINT CK_DeliveryRanges_From CHECK (DistanceKmFrom >= 0),
-    CONSTRAINT CK_DeliveryRanges_Fee CHECK (Fee >= 0)
+    CONSTRAINT CK_DeliveryRanges_Fee CHECK (Fee >= 0),
+    CONSTRAINT FK_DeliveryRanges_Branch FOREIGN KEY (BranchId) REFERENCES dbo.Branches(Id)
   );
   CREATE INDEX IX_DeliveryRanges_Active_Sort ON dbo.DeliveryRanges (Active, SortOrder);
+  CREATE INDEX IX_DeliveryRanges_Branch ON dbo.DeliveryRanges (BranchId, Active, SortOrder);
 END
 GO
 

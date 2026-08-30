@@ -50,7 +50,7 @@ export function Modal({
     <div className="fixed inset-0 z-50 flex items-end justify-center p-0 sm:items-center sm:p-4">
       <button className="absolute inset-0 bg-ink/50 backdrop-blur-[3px]" onClick={onClose} aria-label="Cerrar" />
       <div
-        className={`relative max-h-[92dvh] w-full overflow-y-auto rounded-t-[1.75rem] bg-white p-5 shadow-2xl sm:rounded-[1.75rem] ${
+        className={`relative max-h-[92dvh] w-full overflow-y-auto rounded-t-[1.75rem] bg-surface p-5 text-ink shadow-2xl sm:rounded-[1.75rem] ${
           wide ? 'sm:max-w-2xl' : 'sm:max-w-md'
         }`}
       >
@@ -86,11 +86,11 @@ export function Field({
 }
 
 export const inputClass =
-  'w-full rounded-2xl border border-ink/[0.08] bg-white px-4 py-3.5 text-base shadow-sm outline-none transition placeholder:text-ink/30 focus:border-ember/35 focus:ring-4 focus:ring-ember/10 md:py-3 md:text-sm'
+  'w-full rounded-2xl border border-ink/[0.08] bg-surface px-4 py-3.5 text-base text-ink shadow-sm outline-none transition placeholder:text-ink/30 focus:border-ember/35 focus:ring-4 focus:ring-ember/10 md:py-3 md:text-sm'
 
 export function Empty({ title, hint }: { title: string; hint?: string }) {
   return (
-    <div className="rounded-[1.5rem] border border-dashed border-ink/12 bg-white/70 px-6 py-14 text-center">
+    <div className="rounded-[1.5rem] border border-dashed border-ink/12 bg-surface/70 px-6 py-14 text-center text-ink">
       <p className="font-display text-lg tracking-tight sm:text-xl">{title}</p>
       {hint ? <p className="mt-1 text-sm text-ink/45">{hint}</p> : null}
     </div>

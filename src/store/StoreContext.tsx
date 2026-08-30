@@ -89,9 +89,12 @@ function emptyApiState(): AppState {
       ruc: '',
       igvRate: 0.18,
       hours: '',
-      deliveryFee: 5,
+      deliveryFee: 3,
+      originLat: -13.064353,
+      originLng: -76.348946,
     },
     branches: [],
+    deliveryRanges: [],
     nextOrderNumber: 1001,
   }
 }
@@ -206,6 +209,7 @@ interface NewOrderInput {
   deliveryTimeMin?: number
   addressLat?: number
   addressLng?: number
+  branchId?: string
 }
 
 interface StoreApi {
@@ -318,6 +322,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         customers: data.customers as Customer[],
         reservations: data.reservations as Reservation[],
         branches: data.branches as AppState['branches'],
+        deliveryRanges: (data.deliveryRanges as AppState['deliveryRanges']) || [],
         nextOrderNumber: data.nextOrderNumber,
       }))
     } catch (e) {
@@ -504,6 +509,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           deliveryDistanceKm: input.deliveryDistanceKm,
           deliveryTimeMin: input.deliveryTimeMin,
           deliveryFee: input.deliveryFee,
+          branchId: guid(input.branchId),
           tableId: guid(input.tableId),
           tableNumber: table?.number,
           notes: input.notes,

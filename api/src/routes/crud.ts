@@ -46,6 +46,8 @@ crudRouter.post('/products', authRequired, requireRoles('admin'), async (req, re
       INSERT INTO dbo.Products (Id, Name, Description, Category, Price, OriginalPrice, Emoji, Tone, ImageUrl, Available, PrepMinutes, SendToKitchen)
       VALUES (@id, @name, @description, @category, @price, @original, @emoji, @tone, @imageUrl, @available, @prep, @kitchen)
     `)
+  await replaceProductOptions(id, p.optionGroups)
+  await replaceProductTags(id, p.tags)
   res.status(201).json({ id })
 })
 
@@ -80,6 +82,8 @@ crudRouter.put('/products/:id', authRequired, requireRoles('admin'), async (req,
         Available=@available, PrepMinutes=@prep, SendToKitchen=@kitchen, UpdatedAt=SYSUTCDATETIME()
       WHERE Id=@id
     `)
+  await replaceProductOptions(id, p.optionGroups)
+  await replaceProductTags(id, p.tags)
   res.json({ ok: true })
 })
 
@@ -91,6 +95,85 @@ crudRouter.delete('/products/:id', authRequired, requireRoles('admin'), async (r
     .query(`DELETE FROM dbo.Products WHERE Id=@id`)
   res.json({ ok: true })
 })
+
+type OptionIn = { id?: string; name?: string; price?: number }
+type GroupIn = {
+  id?: string
+  title?: string
+  required?: boolean
+  maxSelect?: number
+  options?: OptionIn[]
+}
+
+async function replaceProductOptions(productId: string, raw: unknown) {
+  if (!Array.isArray(raw)) return
+  const pool = await getPool()
+  await pool
+    .request()
+    .input('pid', sql.UniqueIdentifier, productId)
+    .query(`
+      DELETE o FROM dbo.ProductOptions o
+      INNER JOIN dbo.ProductOptionGroups g ON g.Id = o.GroupId
+      WHERE g.ProductId = @pid
+    `)
+  await pool
+    .request()
+    .input('pid', sql.UniqueIdentifier, productId)
+    .query(`DELETE FROM dbo.ProductOptionGroups WHERE ProductId = @pid`)
+
+  let gSort = 0
+  for (const g of raw as GroupIn[]) {
+    const title = String(g.title || '').trim()
+    if (!title) continue
+    const gid = isGuid(g.id) ? String(g.id) : uuid()
+    await pool
+      .request()
+      .input('id', sql.UniqueIdentifier, gid)
+      .input('pid', sql.UniqueIdentifier, productId)
+      .input('title', sql.NVarChar, title)
+      .input('req', sql.Bit, g.required ? 1 : 0)
+      .input('max', sql.Int, Math.max(1, Number(g.maxSelect || 1)))
+      .input('sort', sql.Int, gSort++)
+      .query(`
+        INSERT INTO dbo.ProductOptionGroups (Id, ProductId, Title, Required, MaxSelect, SortOrder)
+        VALUES (@id, @pid, @title, @req, @max, @sort)
+      `)
+    let oSort = 0
+    for (const opt of g.options || []) {
+      const name = String(opt.name || '').trim()
+      if (!name) continue
+      await pool
+        .request()
+        .input('id', sql.UniqueIdentifier, isGuid(opt.id) ? String(opt.id) : uuid())
+        .input('gid', sql.UniqueIdentifier, gid)
+        .input('name', sql.NVarChar, name)
+        .input('price', sql.Decimal(10, 2), Number(opt.price || 0))
+        .input('sort', sql.Int, oSort++)
+        .query(`
+          INSERT INTO dbo.ProductOptions (Id, GroupId, Name, Price, SortOrder)
+          VALUES (@id, @gid, @name, @price, @sort)
+        `)
+    }
+  }
+}
+
+async function replaceProductTags(productId: string, raw: unknown) {
+  if (!Array.isArray(raw)) return
+  const pool = await getPool()
+  await pool
+    .request()
+    .input('pid', sql.UniqueIdentifier, productId)
+    .query(`DELETE FROM dbo.ProductTags WHERE ProductId = @pid`)
+  for (const tag of raw) {
+    const t = String(tag || '').trim()
+    if (!t) continue
+    await pool
+      .request()
+      .input('pid', sql.UniqueIdentifier, productId)
+      .input('tag', sql.NVarChar, t.slice(0, 40))
+      .query(`INSERT INTO dbo.ProductTags (ProductId, Tag) VALUES (@pid, @tag)`)
+  }
+}
 
 async function assertNotSystemUser(id: string) {
   const pool = await getPool()
@@ -384,7 +467,15 @@ crudRouter.put('/settings', authRequired, requireRoles('admin'), async (req, res
 
 /* ─── Branches ─── */
 crudRouter.post('/branches', authRequired, requireRoles('admin'), async (req, res) => {
-  const b = req.body as { id?: string; name: string; address: string; phone: string; active?: boolean }
+  const b = req.body as {
+    id?: string
+    name: string
+    address: string
+    phone: string
+    active?: boolean
+    lat?: number
+    lng?: number
+  }
   if (!b.name) return res.status(400).json({ error: 'name requerido' })
   const id = isGuid(b.id) ? b.id! : uuid()
   const pool = await getPool()
@@ -395,32 +486,53 @@ crudRouter.post('/branches', authRequired, requireRoles('admin'), async (req, re
     .input('address', sql.NVarChar, b.address || '')
     .input('phone', sql.NVarChar, b.phone || '')
     .input('active', sql.Bit, b.active !== false)
+    .input('lat', sql.Decimal(10, 7), b.lat != null ? Number(b.lat) : null)
+    .input('lng', sql.Decimal(10, 7), b.lng != null ? Number(b.lng) : null)
     .query(`
-      INSERT INTO dbo.Branches (Id, Name, Address, Phone, Active)
-      VALUES (@id, @name, @address, @phone, @active)
+      INSERT INTO dbo.Branches (Id, Name, Address, Phone, Lat, Lng, Active)
+      VALUES (@id, @name, @address, @phone, @lat, @lng, @active)
     `)
   res.status(201).json({ id })
 })
 
 crudRouter.put('/branches/:id', authRequired, requireRoles('admin'), async (req, res) => {
-  const b = req.body as { name: string; address: string; phone: string; active?: boolean }
+  const b = req.body as {
+    name: string
+    address: string
+    phone: string
+    active?: boolean
+    lat?: number
+    lng?: number
+  }
+  const id = paramId(req.params.id)
   const pool = await getPool()
   await pool
     .request()
-    .input('id', sql.UniqueIdentifier, paramId(req.params.id))
+    .input('id', sql.UniqueIdentifier, id)
     .input('name', sql.NVarChar, b.name)
     .input('address', sql.NVarChar, b.address || '')
     .input('phone', sql.NVarChar, b.phone || '')
     .input('active', sql.Bit, b.active !== false)
-    .query(`UPDATE dbo.Branches SET Name=@name, Address=@address, Phone=@phone, Active=@active WHERE Id=@id`)
+    .input('lat', sql.Decimal(10, 7), b.lat != null ? Number(b.lat) : null)
+    .input('lng', sql.Decimal(10, 7), b.lng != null ? Number(b.lng) : null)
+    .query(`
+      UPDATE dbo.Branches
+      SET Name=@name, Address=@address, Phone=@phone, Active=@active, Lat=@lat, Lng=@lng
+      WHERE Id=@id
+    `)
   res.json({ ok: true })
 })
 
 crudRouter.delete('/branches/:id', authRequired, requireRoles('admin'), async (req, res) => {
   const pool = await getPool()
+  const id = paramId(req.params.id)
   await pool
     .request()
-    .input('id', sql.UniqueIdentifier, paramId(req.params.id))
+    .input('id', sql.UniqueIdentifier, id)
+    .query(`DELETE FROM dbo.DeliveryRanges WHERE BranchId = @id`)
+  await pool
+    .request()
+    .input('id', sql.UniqueIdentifier, id)
     .query(`DELETE FROM dbo.Branches WHERE Id=@id`)
   res.json({ ok: true })
 })

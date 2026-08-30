@@ -5,11 +5,15 @@ import { ConductorApp } from '../../pages/ConductorApp'
 import { DriverDeliveryMap } from '../../pages/DriverDeliveryMap'
 import { BASENAME } from '../../lib/paths'
 import { VersionUpdateWatcher } from '../../components/VersionUpdateWatcher'
+import { OfflineBanner } from '../../components/OfflineBanner'
+import { ThemeProvider } from '../../components/ThemeProvider'
 
 export default function App() {
   return (
+    <ThemeProvider>
     <StoreProvider>
       <AuthProvider>
+        <OfflineBanner />
         <VersionUpdateWatcher />
         <BrowserRouter basename={BASENAME || undefined}>
           <Routes>
@@ -20,5 +24,6 @@ export default function App() {
         </BrowserRouter>
       </AuthProvider>
     </StoreProvider>
+    </ThemeProvider>
   )
 }

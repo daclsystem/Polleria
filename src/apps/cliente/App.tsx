@@ -5,11 +5,15 @@ import { CustomerApp } from '../../pages/Customer'
 import { OrderTracking } from '../../pages/OrderTracking'
 import { BASENAME } from '../../lib/paths'
 import { VersionUpdateWatcher } from '../../components/VersionUpdateWatcher'
+import { OfflineBanner } from '../../components/OfflineBanner'
+import { ThemeProvider } from '../../components/ThemeProvider'
 
 export default function App() {
   return (
+    <ThemeProvider>
     <StoreProvider>
       <AuthProvider>
+        <OfflineBanner />
         <VersionUpdateWatcher />
         <BrowserRouter basename={BASENAME || undefined}>
           <Routes>
@@ -20,5 +24,6 @@ export default function App() {
         </BrowserRouter>
       </AuthProvider>
     </StoreProvider>
+    </ThemeProvider>
   )
 }

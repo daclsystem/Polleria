@@ -47,6 +47,7 @@ import {
   whatsappPhone,
   type DriverSession,
 } from '../lib/driverFlow'
+import { ThemeToggle } from '../components/ThemeToggle'
 
 const PERMS_SKIP_KEY = 'polleria-perms-skip-driver'
 
@@ -223,7 +224,10 @@ export function ConductorApp() {
 
   if (!driver) {
     return (
-      <div className="min-h-dvh bg-[#0b1f1c] px-4 py-10 text-white">
+      <div className="relative min-h-dvh bg-[#0b1f1c] px-4 py-10 text-white">
+        <div className="absolute right-4 top-4 z-10">
+          <ThemeToggle tone="dark" />
+        </div>
         <div className="mx-auto max-w-md">
           <div className="mb-8 text-center">
             <img
@@ -328,6 +332,7 @@ export function ConductorApp() {
             </div>
           </div>
           <div className="flex items-center gap-1">
+            <ThemeToggle tone="dark" className="h-10 w-10" />
             <button
               type="button"
               className="tap rounded-full p-2.5 text-white/70 hover:bg-white/10"

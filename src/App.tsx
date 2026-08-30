@@ -30,11 +30,15 @@ import { WebReservar } from './pages/WebReservar'
 import { OrderTracking } from './pages/OrderTracking'
 import { ConductorApp } from './pages/ConductorApp'
 import { BASENAME } from './lib/paths'
+import { OfflineBanner } from './components/OfflineBanner'
+import { ThemeProvider } from './components/ThemeProvider'
 
 export default function App() {
   return (
+    <ThemeProvider>
     <StoreProvider>
       <AuthProvider>
+        <OfflineBanner />
         <BrowserRouter basename={BASENAME}>
           <Routes>
             <Route path="/login" element={<Login />} />
@@ -209,5 +213,6 @@ export default function App() {
         </BrowserRouter>
       </AuthProvider>
     </StoreProvider>
+    </ThemeProvider>
   )
 }

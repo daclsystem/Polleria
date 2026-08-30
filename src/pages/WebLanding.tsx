@@ -40,6 +40,8 @@ import {
   type WebSiteContent,
 } from '../lib/webSite'
 import { customerMenuUrl, withBase } from '../lib/paths'
+import { pickDeliveryBranchId } from '../lib/deliveryRanges'
+import { ThemeToggle } from '../components/ThemeToggle'
 
 function HighlightIcon({ icon }: { icon: WebHighlight['icon'] }) {
   const cls = 'text-[#1a3d1a]'
@@ -151,7 +153,11 @@ export function WebLanding() {
       if (addr) setAddress(addr)
       else setAddress((prev) => prev || `Ubicación GPS (${c.lat.toFixed(5)}, ${c.lng.toFixed(5)})`)
       try {
-        const q = (await apiDeliveryQuote({ lat: c.lat, lng: c.lng })) as {
+        const q = (await apiDeliveryQuote({
+          lat: c.lat,
+          lng: c.lng,
+          branchId: pickDeliveryBranchId(state.branches),
+        })) as {
           fee?: number
           distanceKm?: number
           timeMin?: number
@@ -219,6 +225,7 @@ export function WebLanding() {
         createdBy: 'Web',
         source: 'web',
         deliveryFee: mode === 'delivery' ? deliveryFee : 0,
+        branchId: mode === 'delivery' ? pickDeliveryBranchId(state.branches) : undefined,
         deliveryDistanceKm: undefined,
       })
       setItems([])
@@ -293,6 +300,7 @@ export function WebLanding() {
             {site.sections.contact ? <a href="#contacto" className="transition hover:text-[#ffd700]">Contacto</a> : null}
           </div>
           <div className="flex items-center gap-2">
+            <ThemeToggle tone="dark" className="h-11 w-11" />
             <button
               onClick={() => goToClienteApp()}
               className="flex h-11 items-center gap-2 rounded-full border border-white/15 bg-white/5 px-4 text-sm font-bold text-white transition hover:bg-white/15"
@@ -324,13 +332,16 @@ export function WebLanding() {
           <div className="absolute right-0 top-0 flex h-full w-72 flex-col bg-[#0c2210] shadow-2xl">
             <div className="flex items-center justify-between border-b border-white/10 px-5 py-5">
               <p className="font-display text-lg font-semibold text-[#ffd700]">{site.brandName}</p>
-              <button
-                type="button"
-                onClick={() => setMobileNavOpen(false)}
-                className="flex h-10 w-10 items-center justify-center rounded-full bg-white/10 text-white"
-              >
-                <X size={18} />
-              </button>
+              <div className="flex items-center gap-2">
+                <ThemeToggle tone="dark" />
+                <button
+                  type="button"
+                  onClick={() => setMobileNavOpen(false)}
+                  className="flex h-10 w-10 items-center justify-center rounded-full bg-white/10 text-white"
+                >
+                  <X size={18} />
+                </button>
+              </div>
             </div>
             <nav className="flex-1 space-y-1 overflow-y-auto px-4 py-4">
               <a href="#inicio" onClick={() => setMobileNavOpen(false)} className="flex min-h-12 items-center rounded-xl px-3 text-sm font-semibold text-white/80 transition hover:bg-white/10 hover:text-white">

@@ -1,5 +1,6 @@
 @import "tailwindcss";
 @source "./**/*.{html,js,ts,jsx,tsx}";
+@custom-variant dark (&:where(.dark, .dark *));
 
 @theme {
   --font-sans: "Source Sans 3", ui-sans-serif, system-ui, sans-serif;
@@ -8,11 +9,23 @@
   --color-ink-soft: #1a1a1a;
   --color-cream: #f4f5f7;
   --color-cream-dark: #e8eaee;
+  --color-surface: #ffffff;
   --color-ember: #1a3d1a;
   --color-ember-hot: #143314;
   --color-gold: #ffd700;
   --color-brick: #c81e1e;
   --color-sage: #0f9f6e;
+}
+
+html.dark {
+  color-scheme: dark;
+  --color-ink: #eef1ee;
+  --color-ink-soft: #d5dbd5;
+  --color-cream: #121612;
+  --color-cream-dark: #1a1f1a;
+  --color-surface: #1c221c;
+  --color-ember: #2d5c2d;
+  --color-ember-hot: #3a7340;
 }
 
 html,
@@ -57,11 +70,18 @@ body {
 
 .card {
   border-radius: 1.35rem;
-  background: #fff;
+  background: var(--color-surface);
   border: 1px solid rgba(12, 12, 12, 0.04);
   box-shadow:
     0 1px 2px rgba(12, 12, 12, 0.04),
     0 12px 32px -18px rgba(12, 12, 12, 0.28);
+}
+
+html.dark .card {
+  border-color: rgba(255, 255, 255, 0.07);
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.25),
+    0 12px 32px -18px rgba(0, 0, 0, 0.55);
 }
 
 .card-press {
@@ -92,10 +112,10 @@ body {
 }
 
 .chip-off {
-  background: #fff;
-  color: rgba(12, 12, 12, 0.55);
+  background: var(--color-surface);
+  color: color-mix(in oklab, var(--color-ink) 55%, transparent);
   box-shadow: 0 1px 2px rgba(12, 12, 12, 0.04);
-  border: 1px solid rgba(12, 12, 12, 0.06);
+  border: 1px solid color-mix(in oklab, var(--color-ink) 8%, transparent);
 }
 
 .seg {
@@ -103,7 +123,7 @@ body {
   gap: 0.25rem;
   padding: 0.25rem;
   border-radius: 999px;
-  background: rgba(12, 12, 12, 0.05);
+  background: color-mix(in oklab, var(--color-ink) 6%, transparent);
 }
 
 .seg-btn {
@@ -112,13 +132,13 @@ body {
   padding: 0.35rem 1.1rem;
   font-size: 0.875rem;
   font-weight: 600;
-  color: rgba(12, 12, 12, 0.55);
+  color: color-mix(in oklab, var(--color-ink) 55%, transparent);
   transition: background 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
 }
 
 .seg-btn-on {
-  background: #0c0c0c;
-  color: #fff;
+  background: var(--color-ink);
+  color: var(--color-cream);
   box-shadow: 0 6px 16px -8px rgba(12, 12, 12, 0.55);
 }
 
@@ -154,15 +174,15 @@ body {
 }
 
 .surface-header {
-  background: rgba(255, 255, 255, 0.86);
-  border-bottom: 1px solid rgba(12, 12, 12, 0.06);
+  background: color-mix(in oklab, var(--color-surface) 86%, transparent);
+  border-bottom: 1px solid color-mix(in oklab, var(--color-ink) 8%, transparent);
   backdrop-filter: blur(14px);
   -webkit-backdrop-filter: blur(14px);
 }
 
 .bottom-nav {
-  background: rgba(255, 255, 255, 0.94);
-  border-top: 1px solid rgba(12, 12, 12, 0.06);
+  background: color-mix(in oklab, var(--color-surface) 94%, transparent);
+  border-top: 1px solid color-mix(in oklab, var(--color-ink) 8%, transparent);
   box-shadow: 0 -10px 30px -20px rgba(12, 12, 12, 0.35);
   backdrop-filter: blur(16px);
   -webkit-backdrop-filter: blur(16px);
@@ -176,6 +196,10 @@ body {
 ::-webkit-scrollbar-thumb {
   background: #c9ced6;
   border-radius: 99px;
+}
+
+html.dark ::-webkit-scrollbar-thumb {
+  background: #3d463d;
 }
 
 @media print {
@@ -250,4 +274,123 @@ body {
 .h-scroll::-webkit-scrollbar-thumb {
   background: #b8bdc6;
   border-radius: 99px;
+}
+
+html.dark .h-scroll::-webkit-scrollbar-thumb {
+  background: #3d463d;
+}
+
+/* —— Dark mode: superficies y textos hardcoded (system + web) —— */
+html.dark .bg-white {
+  background-color: var(--color-surface);
+}
+html.dark .bg-white\/70 {
+  background-color: color-mix(in oklab, var(--color-surface) 70%, transparent);
+}
+html.dark .bg-gray-50,
+html.dark .bg-\[\#f3f7f3\],
+html.dark .bg-\[\#f6f7f9\],
+html.dark .bg-\[\#eef3f1\],
+html.dark .bg-\[\#f6f3ee\],
+html.dark .bg-\[\#f4f5f7\] {
+  background-color: var(--color-cream);
+}
+html.dark .bg-gray-100 {
+  background-color: #262c26;
+}
+html.dark .bg-gray-200 {
+  background-color: #323a32;
+}
+html.dark .bg-stone-50 {
+  background-color: #1f241f;
+}
+html.dark .hover\:bg-gray-100:hover,
+html.dark .hover\:bg-gray-200:hover {
+  background-color: #2c332c;
+}
+
+html.dark .text-gray-900,
+html.dark .text-gray-800,
+html.dark .text-gray-700 {
+  color: var(--color-ink);
+}
+html.dark .text-gray-600 {
+  color: color-mix(in oklab, var(--color-ink) 75%, transparent);
+}
+html.dark .text-gray-500 {
+  color: color-mix(in oklab, var(--color-ink) 55%, transparent);
+}
+html.dark .text-gray-400,
+html.dark .text-gray-300 {
+  color: color-mix(in oklab, var(--color-ink) 42%, transparent);
+}
+
+html.dark .border-gray-100,
+html.dark .border-gray-200,
+html.dark .ring-gray-100,
+html.dark .ring-1.ring-gray-100 {
+  border-color: rgba(255, 255, 255, 0.08);
+  --tw-ring-color: rgba(255, 255, 255, 0.08);
+}
+
+html.dark .bg-amber-50 {
+  background-color: rgba(120, 53, 15, 0.28);
+}
+html.dark .text-amber-800 {
+  color: #fbbf24;
+}
+html.dark .bg-emerald-50 {
+  background-color: rgba(6, 78, 59, 0.35);
+}
+html.dark .text-emerald-800,
+html.dark .text-green-700 {
+  color: #6ee7b7;
+}
+html.dark .bg-rose-50,
+html.dark .bg-red-50 {
+  background-color: rgba(127, 29, 29, 0.32);
+}
+html.dark .text-rose-700,
+html.dark .text-red-700,
+html.dark .text-red-800,
+html.dark .text-red-600 {
+  color: #fca5a5;
+}
+html.dark .bg-red-100 {
+  background-color: rgba(127, 29, 29, 0.4);
+}
+html.dark .bg-emerald-100 {
+  background-color: rgba(6, 78, 59, 0.45);
+}
+html.dark .bg-amber-100 {
+  background-color: rgba(120, 53, 15, 0.4);
+}
+html.dark .border-red-200 {
+  border-color: rgba(248, 113, 113, 0.3);
+}
+
+html.dark .from-green-50 {
+  --tw-gradient-from: #0c1a10;
+  --tw-gradient-stops: var(--tw-gradient-from), var(--tw-gradient-to);
+}
+html.dark .via-white {
+  --tw-gradient-via: #121612;
+}
+html.dark .to-white {
+  --tw-gradient-to: #121612;
+}
+html.dark .to-yellow-50 {
+  --tw-gradient-to: #1a1a10;
+}
+html.dark .bg-green-50 {
+  background-color: rgba(6, 78, 59, 0.28);
+}
+html.dark .bg-green-100 {
+  background-color: rgba(6, 78, 59, 0.4);
+}
+
+@media (min-width: 640px) {
+  html.dark .sm\:bg-white {
+    background-color: var(--color-surface);
+  }
 }

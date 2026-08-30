@@ -12,19 +12,20 @@ GO
 IF NOT EXISTS (SELECT 1 FROM dbo.Settings WHERE Id = 1)
 BEGIN
   INSERT INTO dbo.Settings (
-    Id, Name, Slogan, Address, Phone, Ruc, IgvRate, Hours,
+    Id, Name, Slogan, Address, Phone, Ruc, IgvRate, Hours, DeliveryFee,
     OriginLat, OriginLng, GeoRouteApiUrl, GeoRouteToken, WhatsAppNumber, NextOrderNumber
   ) VALUES (
     1,
     N'Chifa-Pollería Lopez',
     N'El mejor pollo a la brasa del sur',
-    N'Av. Principal 123, Lima',
+    N'Chocos Imperial, Cañete',
     N'962797752',
     N'20123456789',
     0.18,
     N'Lun–Dom 11:00–23:00',
-    -12.10001777,   -- ajustar a la ubicación real del local
-    -76.9381774,
+    3.00,
+    -13.0643530,   -- https://maps.app.goo.gl/jUTXdLKmq7w3rXXv5
+    -76.3489460,
     N'https://geo.taximonterrico.com/api/v3/route/{fromLat},{fromLng}/{toLat},{toLng}/-1/{token}',
     N'demo',
     N'51962797752',
@@ -36,18 +37,14 @@ GO
 /* Rangos delivery administrables */
 IF NOT EXISTS (SELECT 1 FROM dbo.DeliveryRanges)
 BEGIN
-  INSERT INTO dbo.DeliveryRanges (Name, DistanceKmFrom, DistanceKmTo, Fee, SortOrder) VALUES
-  (N'Zona cercana',  0,  3,  5.00, 1),
-  (N'Zona media',    3,  6,  8.00, 2),
-  (N'Zona lejana',   6, 10, 12.00, 3),
-  (N'Fuera de cobertura', 10, NULL, 0.00, 4); -- Fee 0 + Active: el API debe rechazar si Fee=0 y To IS NULL (cobertura)
+  INSERT INTO dbo.DeliveryRanges (Name, DistanceKmFrom, DistanceKmTo, Fee, SortOrder, Active) VALUES
+  (N'0 a 4 km',            0,     4,  3.00, 1, 1),
+  (N'4 a 6 km',            4,     6,  6.00, 2, 1),
+  (N'6 a 8 km',            6,     8,  9.00, 3, 1),
+  (N'8 a 10 km',           8,    10, 12.00, 4, 1),
+  (N'10 a 12 km',         10,    12, 15.00, 5, 1),
+  (N'Fuera de cobertura', 12,  NULL,  0.00, 6, 0);
 END
-GO
-
-/* Marcar último rango como inactivo para “fuera de cobertura” (API valida Active=1 y Fee>0) */
-UPDATE dbo.DeliveryRanges
-SET Active = 0
-WHERE Name = N'Fuera de cobertura';
 GO
 
 /* Usuarios demo — PasswordHash = texto plano SOLO para demo; el API debe hashear (bcrypt) */
@@ -66,7 +63,7 @@ GO
 IF NOT EXISTS (SELECT 1 FROM dbo.Branches)
 BEGIN
   INSERT INTO dbo.Branches (Name, Address, Phone, Lat, Lng, Active) VALUES
-  (N'Local Principal', N'Av. Principal 123, Lima', N'962797752', -12.10001777, -76.9381774, 1);
+  (N'Local Principal', N'Chocos Imperial, Cañete', N'962797752', -13.0643530, -76.3489460, 1);
 END
 GO
 

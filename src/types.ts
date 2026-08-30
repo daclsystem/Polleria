@@ -228,6 +228,19 @@ export interface Branch {
   address: string
   phone: string
   active: boolean
+  lat?: number
+  lng?: number
+}
+
+export interface DeliveryRange {
+  id: string
+  branchId?: string
+  name: string
+  distanceKmFrom: number
+  distanceKmTo: number | null
+  fee: number
+  sortOrder: number
+  active: boolean
 }
 
 export interface AppState {
@@ -240,6 +253,7 @@ export interface AppState {
   reservations: Reservation[]
   settings: Settings
   branches: Branch[]
+  deliveryRanges?: DeliveryRange[]
   nextOrderNumber: number
 }
 

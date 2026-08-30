@@ -4,6 +4,7 @@ import { PhoneOtpLogin } from '../components/PhoneOtpLogin'
 import { ROLE_HOME, type Role } from '../types'
 import { APP_VERSION } from '../lib/version'
 import { setApiToken } from '../lib/apiClient'
+import { ThemeToggle } from '../components/ThemeToggle'
 
 export function Login() {
   const { user, loginWithSession } = useAuth()
@@ -26,7 +27,10 @@ export function Login() {
         </div>
       </div>
 
-      <div className="flex items-center justify-center bg-gray-50 px-6 py-12">
+      <div className="relative flex items-center justify-center bg-cream px-6 py-12">
+        <div className="absolute right-4 top-4">
+          <ThemeToggle />
+        </div>
         <div className="w-full max-w-md">
           <div className="mb-6 text-center lg:hidden">
             <img src={`${import.meta.env.BASE_URL}logo-lopez.png`} alt="Logo" className="mx-auto h-20 w-auto rounded-xl" />

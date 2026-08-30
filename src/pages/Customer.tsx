@@ -48,6 +48,7 @@ import {
   setCustomerSession,
 } from '../lib/customerSession'
 import { formatDeliveryQuote, quoteDeliveryAt, quoteDeliveryFromAddress } from '../lib/deliveryQuote'
+import { pickDeliveryBranchId } from '../lib/deliveryRanges'
 import { padOrder, soles } from '../lib/format'
 import { withBase } from '../lib/paths'
 import { platformLabel } from '../lib/platform'
@@ -55,6 +56,7 @@ import { useStore } from '../store/StoreContext'
 import type { Customer, Order, OrderItem, OrderStatus, Product } from '../types'
 import { TYPE_LABEL } from '../types'
 import { DEFAULT_WEB_SITE, mergeWebSite } from '../lib/webSite'
+import { ThemeToggle } from '../components/ThemeToggle'
 
 const PERMS_SKIP_KEY = 'polleria-perms-skip-cliente'
 
@@ -388,7 +390,7 @@ function CustomerMenu() {
   useEffect(() => {
     if (mode !== 'delivery' || addressLat == null || addressLng == null) return
     let cancelled = false
-    void quoteDeliveryAt(addressLat, addressLng)
+    void quoteDeliveryAt(addressLat, addressLng, pickDeliveryBranchId(state.branches))
       .then((q) => {
         if (cancelled) return
         setQuotedFee(q.fee)
@@ -406,7 +408,7 @@ function CustomerMenu() {
     return () => {
       cancelled = true
     }
-  }, [mode, addressLat, addressLng])
+  }, [mode, addressLat, addressLng, state.branches])
 
   useEffect(() => {
     if (!customer) {
@@ -550,7 +552,7 @@ function CustomerMenu() {
     let sendFee = fee
     if (mode === 'delivery' && (lat == null || lng == null || sendFee <= 0)) {
       try {
-        const q = await quoteDeliveryFromAddress(address.trim())
+        const q = await quoteDeliveryFromAddress(address.trim(), pickDeliveryBranchId(state.branches))
         lat = q.lat
         lng = q.lng
         dist = q.distanceKm
@@ -591,6 +593,7 @@ function CustomerMenu() {
         createdBy: 'Cliente',
         source: 'web',
         deliveryFee: mode === 'delivery' ? sendFee : 0,
+        branchId: mode === 'delivery' ? pickDeliveryBranchId(state.branches) : undefined,
         deliveryDistanceKm: mode === 'delivery' ? dist ?? undefined : undefined,
         deliveryTimeMin: mode === 'delivery' ? mins ?? undefined : undefined,
       })
@@ -714,7 +717,7 @@ function CustomerMenu() {
                 void (async () => {
                   setLocBusy(true)
                   try {
-                    const q = await quoteDeliveryFromAddress(address.trim())
+                    const q = await quoteDeliveryFromAddress(address.trim(), pickDeliveryBranchId(state.branches))
                     setAddressLat(q.lat)
                     setAddressLng(q.lng)
                     if (q.address) setAddress(q.address)
@@ -852,7 +855,10 @@ function CustomerMenu() {
 
   if (!customer) {
     return (
-      <div className="flex h-dvh flex-col overflow-y-auto bg-[#f6f3ee] px-4 py-8">
+      <div className="relative flex h-dvh flex-col overflow-y-auto bg-[#f6f3ee] px-4 py-8">
+        <div className="absolute right-4 top-4 z-10">
+          <ThemeToggle />
+        </div>
         <div className="mx-auto w-full max-w-md">
           <img
             src={withBase('logo-lopez.png')}
@@ -943,6 +949,7 @@ function CustomerMenu() {
           <p className="text-[10px] font-bold tracking-[0.2em] text-ember uppercase">App de pedidos</p>
         </div>
         <div className="flex items-center gap-2">
+          <ThemeToggle />
           <a
             href={`https://wa.me/${waNumber.replace(/\D/g, '')}?text=${encodeURIComponent('Hola, soy cliente de Chifa-Pollería Lopez')}`}
             target="_blank"

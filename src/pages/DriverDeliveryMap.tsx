@@ -17,6 +17,7 @@ import { padOrder } from '../lib/format'
 import { useDeviceLocation } from '../hooks/useDeviceLocation'
 import { openInApp } from '../lib/mapsNav'
 import { DeliveryCard } from './ConductorApp'
+import { ThemeToggle } from '../components/ThemeToggle'
 
 function pin(emoji: string) {
   return L.divIcon({
@@ -145,14 +146,17 @@ export function DriverDeliveryMap() {
           >
             <ArrowLeft size={16} /> Pedidos
           </Link>
-          <button
-            type="button"
-            onClick={() => void load()}
-            className="inline-flex h-11 w-11 items-center justify-center rounded-full bg-white/95 text-[#0b1f1c] shadow-lg"
-            aria-label="Actualizar"
-          >
-            <RefreshCw size={16} />
-          </button>
+          <div className="flex items-center gap-2">
+            <ThemeToggle tone="dark" className="h-11 w-11 bg-white/20 text-white hover:bg-white/30" />
+            <button
+              type="button"
+              onClick={() => void load()}
+              className="inline-flex h-11 w-11 items-center justify-center rounded-full bg-white/95 text-[#0b1f1c] shadow-lg"
+              aria-label="Actualizar"
+            >
+              <RefreshCw size={16} />
+            </button>
+          </div>
         </div>
         {order ? (
           <div className="pointer-events-none mx-auto mt-3 max-w-lg">

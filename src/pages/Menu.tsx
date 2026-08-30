@@ -1,9 +1,118 @@
 import { useMemo, useState } from 'react'
+import { Plus, Trash2 } from 'lucide-react'
 import { useStore } from '../store/StoreContext'
 import { soles, uid } from '../lib/format'
 import { uploadProductImage } from '../lib/minio'
-import type { Product } from '../types'
+import type { Product, ProductOptionGroup } from '../types'
 import { Empty, Field, Modal, PageTitle, inputClass } from '../components/ui'
+
+const OPTION_TEMPLATES: { label: string; group: ProductOptionGroup }[] = [
+  {
+    label: 'Presa',
+    group: {
+      id: uid('g'),
+      title: 'Elige tu presa',
+      required: true,
+      maxSelect: 1,
+      options: [
+        { id: uid('o'), name: 'Pecho', price: 0 },
+        { id: uid('o'), name: 'Pierna', price: 0 },
+      ],
+    },
+  },
+  {
+    label: 'Papas',
+    group: {
+      id: uid('g'),
+      title: 'Elige tus papas',
+      required: true,
+      maxSelect: 1,
+      options: [
+        { id: uid('o'), name: 'Papas regulares', price: 0 },
+        { id: uid('o'), name: 'Papas familiares', price: 4 },
+        { id: uid('o'), name: 'Sin papas', price: 0 },
+      ],
+    },
+  },
+  {
+    label: 'Cremas',
+    group: {
+      id: uid('g'),
+      title: 'Elige tus cremas',
+      required: false,
+      maxSelect: 3,
+      options: [
+        { id: uid('o'), name: 'Mayonesa', price: 0 },
+        { id: uid('o'), name: 'Ketchup', price: 0 },
+        { id: uid('o'), name: 'Ají', price: 0 },
+        { id: uid('o'), name: 'Mostaza', price: 0 },
+        { id: uid('o'), name: 'Huancaína', price: 1 },
+        { id: uid('o'), name: 'Rocoto', price: 1 },
+      ],
+    },
+  },
+  {
+    label: 'Adicionales',
+    group: {
+      id: uid('g'),
+      title: 'Adicionales',
+      required: false,
+      maxSelect: 5,
+      options: [
+        { id: uid('o'), name: 'Papas extra', price: 5 },
+        { id: uid('o'), name: 'Arroz chaufa extra', price: 7 },
+        { id: uid('o'), name: 'Ensalada extra', price: 4 },
+        { id: uid('o'), name: 'Huevo frito', price: 2.5 },
+      ],
+    },
+  },
+  {
+    label: 'Bebida',
+    group: {
+      id: uid('g'),
+      title: 'Agrega una bebida',
+      required: false,
+      maxSelect: 1,
+      options: [
+        { id: uid('o'), name: 'Inca Kola personal', price: 3.5 },
+        { id: uid('o'), name: 'Coca-Cola personal', price: 3.5 },
+        { id: uid('o'), name: 'Chicha morada', price: 4.5 },
+      ],
+    },
+  },
+  {
+    label: 'Tamaño',
+    group: {
+      id: uid('g'),
+      title: 'Elige tu tamaño',
+      required: true,
+      maxSelect: 1,
+      options: [
+        { id: uid('o'), name: 'Personal', price: 0 },
+        { id: uid('o'), name: 'Mediano', price: 4 },
+        { id: uid('o'), name: 'Familiar', price: 8 },
+      ],
+    },
+  },
+]
+
+function freshGroup(): ProductOptionGroup {
+  return {
+    id: uid('g'),
+    title: '',
+    required: false,
+    maxSelect: 1,
+    options: [{ id: uid('o'), name: '', price: 0 }],
+  }
+}
+
+function cloneTemplate(group: ProductOptionGroup): ProductOptionGroup {
+  return {
+    ...group,
+    id: uid('g'),
+    options: group.options.map((o) => ({ ...o, id: uid('o') })),
+  }
+}
 
 const empty = (): Product => ({
   id: uid('p'),
@@ -16,6 +125,8 @@ const empty = (): Product => ({
   available: true,
   prepMinutes: 10,
   sendToKitchen: true,
+  optionGroups: [],
+  tags: [],
 })
 
 function ProductThumb({ product, className = '' }: { product: Product; className?: string }) {
@@ -103,6 +214,9 @@ export function MenuPage() {
                       <p className="text-xs text-ink/45">
                         {p.category} · {soles(p.price)} ·{' '}
                         {p.sendToKitchen === false ? 'Barra' : 'Cocina'}
+                        {p.optionGroups?.length
+                          ? ` · ${p.optionGroups.length} grupo${p.optionGroups.length === 1 ? '' : 's'}`
+                          : ''}
                       </p>
                     </div>
                     <button
@@ -134,6 +248,7 @@ export function MenuPage() {
                 <th className="px-4 py-3">Plato</th>
                 <th className="px-4 py-3">Categoría</th>
                 <th className="px-4 py-3">Cocina</th>
+                <th className="px-4 py-3">Opciones</th>
                 <th className="px-4 py-3">Precio</th>
                 <th className="px-4 py-3">Estado</th>
                 <th className="px-4 py-3" />
@@ -159,6 +274,11 @@ export function MenuPage() {
                     >
                       {p.sendToKitchen === false ? 'No · barra' : 'Sí · prep'}
                     </span>
+                  </td>
+                  <td className="px-4 py-3 text-ink/55">
+                    {p.optionGroups?.length
+                      ? `${p.optionGroups.length} grupo${p.optionGroups.length === 1 ? '' : 's'}`
+                      : '—'}
                   </td>
                   <td className="px-4 py-3">{soles(p.price)}</td>
                   <td className="px-4 py-3">
@@ -187,7 +307,12 @@ export function MenuPage() {
         </>
       )}
 
-      <Modal open={!!editing} title={editing && state.products.some((p) => p.id === editing.id) ? 'Editar plato' : 'Nuevo plato'} onClose={() => setEditing(null)}>
+      <Modal
+        wide
+        open={!!editing}
+        title={editing && state.products.some((p) => p.id === editing.id) ? 'Editar plato' : 'Nuevo plato'}
+        onClose={() => setEditing(null)}
+      >
         {editing ? (
           <form
             className="space-y-3"
@@ -260,12 +385,169 @@ export function MenuPage() {
               <input type="checkbox" checked={editing.available} onChange={(e) => setEditing({ ...editing, available: e.target.checked })} />
               Disponible
             </label>
+            <Field label="Etiquetas (coma)">
+              <input
+                className={inputClass}
+                value={(editing.tags || []).join(', ')}
+                onChange={(e) =>
+                  setEditing({
+                    ...editing,
+                    tags: e.target.value
+                      .split(',')
+                      .map((t) => t.trim())
+                      .filter(Boolean),
+                  })
+                }
+                placeholder="Popular, Oferta, Nuevo"
+              />
+            </Field>
+            <OptionGroupsEditor
+              groups={editing.optionGroups || []}
+              onChange={(optionGroups) => setEditing({ ...editing, optionGroups })}
+            />
             <button className="w-full rounded-xl bg-ember py-3 font-semibold text-white" disabled={uploading}>
               Guardar
             </button>
           </form>
         ) : null}
       </Modal>
+    </div>
+  )
+}
+
+function OptionGroupsEditor({
+  groups,
+  onChange,
+}: {
+  groups: ProductOptionGroup[]
+  onChange: (groups: ProductOptionGroup[]) => void
+}) {
+  const patchGroup = (idx: number, next: ProductOptionGroup) => {
+    onChange(groups.map((g, i) => (i === idx ? next : g)))
+  }
+
+  return (
+    <div className="space-y-3 rounded-2xl border border-ink/8 bg-cream/60 p-3">
+      <div>
+        <p className="text-[11px] font-bold tracking-[0.14em] text-ink/40 uppercase">Opciones del plato</p>
+        <p className="mt-0.5 text-xs text-ink/45">
+          Lo que el cliente elige al pedir: presa, papas, cremas, extras, bebida.
+        </p>
+      </div>
+      <div className="flex flex-wrap gap-1.5">
+        {OPTION_TEMPLATES.map((t) => (
+          <button
+            key={t.label}
+            type="button"
+            className="rounded-full bg-white px-3 py-1 text-xs font-bold text-ember ring-1 ring-ink/10"
+            onClick={() => onChange([...groups, cloneTemplate(t.group)])}
+          >
+            + {t.label}
+          </button>
+        ))}
+      </div>
+      {groups.length === 0 ? (
+        <p className="rounded-xl bg-white/70 px-3 py-4 text-center text-sm text-ink/40">
+          Sin opciones. El plato se pide solo con el precio base.
+        </p>
+      ) : null}
+      {groups.map((g, gi) => (
+        <div key={g.id} className="space-y-2 rounded-2xl bg-white p-3 ring-1 ring-ink/6">
+          <div className="flex items-start gap-2">
+            <input
+              className={`${inputClass} py-2.5`}
+              value={g.title}
+              onChange={(e) => patchGroup(gi, { ...g, title: e.target.value })}
+              placeholder="Título (ej. Elige tu presa)"
+            />
+            <button
+              type="button"
+              className="tap mt-1 rounded-xl p-2 text-brick hover:bg-brick/8"
+              onClick={() => onChange(groups.filter((_, i) => i !== gi))}
+              aria-label="Quitar grupo"
+            >
+              <Trash2 size={16} />
+            </button>
+          </div>
+          <div className="flex flex-wrap items-center gap-3 text-xs">
+            <label className="inline-flex items-center gap-1.5 font-semibold">
+              <input
+                type="checkbox"
+                checked={g.required}
+                onChange={(e) => patchGroup(gi, { ...g, required: e.target.checked })}
+              />
+              Obligatorio
+            </label>
+            <label className="inline-flex items-center gap-1.5 font-semibold">
+              Máx. elegir
+              <input
+                type="number"
+                min={1}
+                className="w-16 rounded-lg border border-ink/10 px-2 py-1"
+                value={g.maxSelect}
+                onChange={(e) => patchGroup(gi, { ...g, maxSelect: Math.max(1, Number(e.target.value) || 1) })}
+              />
+            </label>
+          </div>
+          <div className="space-y-1.5">
+            {g.options.map((o, oi) => (
+              <div key={o.id} className="grid grid-cols-[1fr_5.5rem_auto] gap-2">
+                <input
+                  className={`${inputClass} py-2`}
+                  value={o.name}
+                  onChange={(e) => {
+                    const options = g.options.map((x, i) => (i === oi ? { ...x, name: e.target.value } : x))
+                    patchGroup(gi, { ...g, options })
+                  }}
+                  placeholder="Opción"
+                />
+                <input
+                  type="number"
+                  step="0.1"
+                  className={`${inputClass} py-2`}
+                  value={o.price}
+                  onChange={(e) => {
+                    const options = g.options.map((x, i) =>
+                      i === oi ? { ...x, price: Number(e.target.value) } : x,
+                    )
+                    patchGroup(gi, { ...g, options })
+                  }}
+                  title="Precio extra"
+                />
+                <button
+                  type="button"
+                  className="tap rounded-xl px-2 text-ink/35 hover:text-brick"
+                  onClick={() =>
+                    patchGroup(gi, { ...g, options: g.options.filter((_, i) => i !== oi) })
+                  }
+                  aria-label="Quitar opción"
+                >
+                  <Trash2 size={15} />
+                </button>
+              </div>
+            ))}
+            <button
+              type="button"
+              className="inline-flex items-center gap-1 text-xs font-bold text-ember"
+              onClick={() =>
+                patchGroup(gi, {
+                  ...g,
+                  options: [...g.options, { id: uid('o'), name: '', price: 0 }],
+                })
+              }
+            >
+              <Plus size={14} /> Opción
+            </button>
+          </div>
+        </div>
+      ))}
+      <button
+        type="button"
+        className="w-full rounded-xl border border-dashed border-ink/15 py-2.5 text-sm font-bold text-ink/55"
+        onClick={() => onChange([...groups, freshGroup()])}
+      >
+        + Grupo vacío
+      </button>
     </div>
   )
 }

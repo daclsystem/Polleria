@@ -23,6 +23,7 @@ import { buildNavigationUrl } from '../lib/mapsNav'
 import { getPlataforma, mapsAppLabel, platformLabel } from '../lib/platform'
 import { useDeviceLocation } from '../hooks/useDeviceLocation'
 import { ensureWebNotifications, notifyWeb } from '../lib/webNotify'
+import { ThemeToggle } from '../components/ThemeToggle'
 
 const STORE: [number, number] = [-13.1083, -76.0114]
 const TILE = 'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png'
@@ -262,15 +263,18 @@ export function OrderTracking() {
   return (
     <div className="min-h-dvh bg-[#f6f7f9]">
       <header className="bg-[#1a3d1a] px-4 pb-8 pt-5 text-white">
+        <div className="mb-4 flex items-center justify-between gap-3">
         {backToPedidos ? (
-          <Link to="/?tab=pedidos" className="mb-4 inline-flex items-center gap-2 text-sm text-green-100/80">
+          <Link to="/?tab=pedidos" className="inline-flex items-center gap-2 text-sm text-green-100/80">
             <ArrowLeft size={16} /> Volver a mis pedidos
           </Link>
         ) : (
-          <a href={homeHref} className="mb-4 inline-flex items-center gap-2 text-sm text-green-100/80">
+          <a href={homeHref} className="inline-flex items-center gap-2 text-sm text-green-100/80">
             <ArrowLeft size={16} /> Volver al inicio
           </a>
         )}
+          <ThemeToggle tone="dark" />
+        </div>
         <p className="text-xs font-bold tracking-widest text-[#ffd700] uppercase">Seguimiento en vivo</p>
         <h1 className="mt-1 text-2xl font-black">Pedido #{order.number}</h1>
         <p className="mt-1 text-sm text-green-100/80">Hola {order.customerName}</p>

@@ -7,6 +7,7 @@ import { padOrder, soles } from '../lib/format'
 import { printTicket } from '../lib/print'
 import { apiUpsertCustomer } from '../lib/apiClient'
 import { formatDeliveryQuote, quoteDeliveryFromAddress } from '../lib/deliveryQuote'
+import { pickDeliveryBranchId } from '../lib/deliveryRanges'
 import { filterKitchenItems } from '../lib/kitchen'
 import { orderBelongsToStaff } from '../lib/realtime'
 import type { OrderItem, OrderType, PaymentMethod } from '../types'
@@ -154,7 +155,7 @@ export function Pos() {
     let sendFee = deliveryFee
     if (type === 'delivery') {
       try {
-        const q = await quoteDeliveryFromAddress(address.trim())
+        const q = await quoteDeliveryFromAddress(address.trim(), pickDeliveryBranchId(state.branches))
         lat = q.lat
         lng = q.lng
         dist = q.distanceKm
@@ -192,6 +193,7 @@ export function Pos() {
         addressLat: type === 'delivery' && lat != null ? lat : undefined,
         addressLng: type === 'delivery' && lng != null ? lng : undefined,
         deliveryFee: type === 'delivery' ? sendFee : 0,
+        branchId: type === 'delivery' ? pickDeliveryBranchId(state.branches) : undefined,
         deliveryDistanceKm: type === 'delivery' ? dist ?? undefined : undefined,
         deliveryTimeMin: type === 'delivery' ? mins ?? undefined : undefined,
         tableId: type === 'salon' ? tableId : undefined,
@@ -398,7 +400,7 @@ export function Pos() {
                   void (async () => {
                     setQuoteBusy(true)
                     try {
-                      const q = await quoteDeliveryFromAddress(address.trim())
+                      const q = await quoteDeliveryFromAddress(address.trim(), pickDeliveryBranchId(state.branches))
                       setAddressLat(q.lat)
                       setAddressLng(q.lng)
                       if (q.address) setAddress(q.address)
