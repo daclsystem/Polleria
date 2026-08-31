@@ -39,6 +39,9 @@ const CHAR_MAP: Record<string, number> = {
   ñ: 0xa4, Ñ: 0xa5, ü: 0x81, Ü: 0x9a,
   '¡': 0xad, '¿': 0xa8, '°': 0xf8,
   '·': 0xfa, '€': 0xd5,
+  // Intl (es-PE) usa NBSP en "S/ 12.50"; sin esto la impresora imprime "?"
+  '\u00A0': 0x20, '\u202F': 0x20, '\u2007': 0x20, '\u2009': 0x20,
+  '\u2013': 0x2d, '\u2014': 0x2d,
 }
 
 function encodeText(text: string): number[] {
@@ -52,6 +55,13 @@ function encodeText(text: string): number[] {
     }
   }
   return bytes
+}
+
+/** Alinea `left` y `right` en un ancho fijo de caracteres, recortando si no entran. */
+export function rowText(left: string, right: string, width: number): string {
+  const gap = width - left.length - right.length
+  if (gap > 0) return left + ' '.repeat(gap) + right
+  return left.slice(0, Math.max(0, width - right.length - 1)) + ' ' + right
 }
 
 export class EscPosBuilder {
@@ -100,13 +110,8 @@ export class EscPosBuilder {
     return this.line(char.repeat(this.cols))
   }
 
-  row(left: string, right: string) {
-    const gap = this.cols - left.length - right.length
-    if (gap > 0) {
-      this.text(left + ' '.repeat(gap) + right)
-    } else {
-      this.text(left.slice(0, this.cols - right.length - 1) + ' ' + right)
-    }
+  row(left: string, right: string, width = this.cols) {
+    this.text(rowText(left, right, width))
     return this.push(LF)
   }
 

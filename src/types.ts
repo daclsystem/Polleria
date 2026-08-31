@@ -143,7 +143,7 @@ export interface Order {
   driverSettledAt?: string
 }
 
-export type PrinterDriver = 'browser' | 'usb' | 'network'
+export type PrinterDriver = 'browser' | 'usb' | 'network' | 'rawbt'
 
 export interface PrinterConfig {
   id: string

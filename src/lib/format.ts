@@ -7,14 +7,27 @@ export function soles(n: number) {
   return pe.format(n)
 }
 
+/** Montos para ticket térmico: solo ASCII, sin el NBSP de Intl que sale como "?". */
+export function solesPrint(n: number) {
+  const v = round2(n)
+  const sign = v < 0 ? '-' : ''
+  const [int, dec] = Math.abs(v).toFixed(2).split('.')
+  const grouped = int.replace(/\B(?=(\d{3})+(?!\d))/g, ',')
+  return `${sign}S/ ${grouped}.${dec}`
+}
+
 export function padOrder(n: number) {
   return `#${String(n).padStart(4, '0')}`
 }
+
+const LIMA = 'America/Lima'
 
 export function formatTime(iso: string) {
   return new Date(iso).toLocaleTimeString('es-PE', {
     hour: '2-digit',
     minute: '2-digit',
+    hour12: false,
+    timeZone: LIMA,
   })
 }
 
@@ -23,6 +36,7 @@ export function formatDate(iso: string) {
     day: '2-digit',
     month: 'short',
     year: 'numeric',
+    timeZone: LIMA,
   })
 }
 

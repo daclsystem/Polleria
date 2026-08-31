@@ -1,22 +1,29 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { MapPin, Printer, Usb, Wifi, Monitor, TestTube2, Moon, Sun, Smartphone } from 'lucide-react'
+import { MapPin, Printer, Usb, Wifi, Monitor, TestTube2, Moon, Sun, Smartphone, Share2 } from 'lucide-react'
 import { useStore } from '../store/StoreContext'
 import { useAuth } from '../auth/AuthContext'
 import type { PrinterConfig, PrinterDriver, PrinterSetup, Settings } from '../types'
-import { DEFAULT_PRINTER } from '../types'
-import { isWebUsbSupported, requestUsbPrinter } from '../lib/printer-driver'
-import { EscPosBuilder } from '../lib/escpos'
-import { sendToPrinter } from '../lib/printer-driver'
+import {
+  blockedByMixedContent,
+  isWebUsbSupported,
+  normalizeNetworkUrl,
+  RAWBT_STORE_URL,
+  requestUsbPrinter,
+  sendToPrinter,
+} from '../lib/printer-driver'
+import { renderEscPos, testTicketDoc } from '../lib/ticket-doc'
+import { prepareTicketShare, shareTicketPayload } from '../lib/share'
+import { defaultPrinterSetup, loadPrinterSetup, savePrinterSetup } from '../lib/printerStore'
 import { Field, PageTitle, inputClass } from '../components/ui'
 import { useTheme } from '../components/ThemeProvider'
 import { apiSystemPurge, apiSystemStatus, type SystemPurgeTarget } from '../lib/apiClient'
 
-function defaultSetup(): PrinterSetup {
-  return {
-    caja: { ...DEFAULT_PRINTER, id: 'caja', label: 'Impresora Caja', openDrawer: true },
-    cocina: { ...DEFAULT_PRINTER, id: 'cocina', label: 'Impresora Cocina', beepOnPrint: true },
-  }
+const DRIVER_LABEL: Record<PrinterDriver, string> = {
+  browser: 'Navegador',
+  usb: 'USB',
+  network: 'Red',
+  rawbt: 'App RawBT',
 }
 
 function PrinterCard({
@@ -28,6 +35,7 @@ function PrinterCard({
 }) {
   const [testing, setTesting] = useState(false)
   const [testResult, setTestResult] = useState<string | null>(null)
+  const [testFailed, setTestFailed] = useState(false)
 
   const set = <K extends keyof PrinterConfig>(k: K, v: PrinterConfig[K]) =>
     onChange({ ...config, [k]: v })
@@ -48,32 +56,35 @@ function PrinterCard({
   const handleTest = async () => {
     setTesting(true)
     setTestResult(null)
+    setTestFailed(false)
     try {
-      const p = new EscPosBuilder(config.cols)
-      p.center().bold().double()
-      p.line('TEST DE IMPRESION')
-      p.double(false).bold(false)
-      p.line(config.label)
-      p.separator()
-      p.left()
-      p.line('Si ves este ticket, la')
-      p.line('impresora esta configurada')
-      p.line('correctamente.')
-      p.feed(1)
-      p.center().line('Chifa-Polleria Lopez')
-      p.feed(2)
-      if (config.autoCut) p.cut()
-      if (config.openDrawer) p.openDrawer()
-      if (config.beepOnPrint) p.beep()
-
-      const result = await sendToPrinter(p.build(), config)
-      setTestResult(result.ok ? 'Impreso correctamente' : `Error: ${result.error}`)
-    } catch (e: any) {
-      setTestResult(`Error: ${e?.message ?? 'Desconocido'}`)
+      const doc = testTicketDoc(config.label, config.cols)
+      const result = await sendToPrinter(renderEscPos(doc, config), config)
+      if (result.ok) {
+        setTestResult(
+          config.driver === 'rawbt'
+            ? 'Enviado a RawBT. Si no imprimió, revisa la impresora dentro de la app.'
+            : 'Impreso correctamente',
+        )
+      } else {
+        setTestResult(result.error)
+        setTestFailed(true)
+      }
+    } catch (e) {
+      setTestResult((e as Error)?.message ?? 'Error desconocido')
+      setTestFailed(true)
     } finally {
       setTesting(false)
     }
   }
+
+  const handleShareTest = async () => {
+    const payload = await prepareTicketShare(testTicketDoc(config.label, config.cols))
+    await shareTicketPayload(payload)
+  }
+
+  const networkUrl = normalizeNetworkUrl(config.networkUrl)
+  const networkBlocked = config.driver === 'network' && blockedByMixedContent(networkUrl)
 
   return (
     <div className="rounded-2xl border border-ink/10 bg-white p-4 space-y-3">
@@ -95,10 +106,9 @@ function PrinterCard({
 
       {config.enabled && (
         <>
-          <div className="grid grid-cols-3 gap-2">
-            {(['browser', 'usb', 'network'] as PrinterDriver[]).map((d) => {
-              const Icon = d === 'usb' ? Usb : d === 'network' ? Wifi : Monitor
-              const label = d === 'browser' ? 'Navegador' : d === 'usb' ? 'USB' : 'Red'
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+            {(['browser', 'usb', 'network', 'rawbt'] as PrinterDriver[]).map((d) => {
+              const Icon = d === 'usb' ? Usb : d === 'network' ? Wifi : d === 'rawbt' ? Smartphone : Monitor
               return (
                 <button
                   key={d}
@@ -109,7 +119,7 @@ function PrinterCard({
                   }`}
                 >
                   <Icon size={14} />
-                  {label}
+                  {DRIVER_LABEL[d]}
                 </button>
               )
             })}
@@ -137,14 +147,45 @@ function PrinterCard({
           )}
 
           {config.driver === 'network' && (
-            <Field label="URL del print bridge (ej: http://192.168.1.100:9100)">
-              <input
-                className={inputClass}
-                value={config.networkUrl ?? ''}
-                onChange={(e) => set('networkUrl', e.target.value)}
-                placeholder="http://localhost:9100"
-              />
-            </Field>
+            <div className="space-y-2">
+              <Field label="IP de la impresora o URL del print-bridge">
+                <input
+                  className={inputClass}
+                  value={config.networkUrl ?? ''}
+                  onChange={(e) => set('networkUrl', e.target.value)}
+                  placeholder="192.168.18.50:9100"
+                />
+              </Field>
+              <p className="text-xs text-ink/45">Se usará {networkUrl}</p>
+              {networkBlocked && (
+                <p className="rounded-xl bg-amber-50 p-2 text-xs text-amber-700">
+                  El sistema abre por https, así que el navegador bloquea esta dirección http y el puerto
+                  9100 tampoco responde HTTP. Desde tablet elige "App RawBT"; en la PC de caja usa USB.
+                </p>
+              )}
+            </div>
+          )}
+
+          {config.driver === 'rawbt' && (
+            <div className="space-y-2 rounded-xl bg-cream/60 p-3">
+              <p className="text-xs text-ink/60">
+                Para tablet Android. Instala{' '}
+                <a href={RAWBT_STORE_URL} target="_blank" rel="noreferrer" className="font-bold text-ember underline">
+                  RawBT
+                </a>{' '}
+                y dentro de la app añade la impresora por red con la IP{' '}
+                <strong>{normalizeNetworkUrl(config.networkUrl).replace(/^https?:\/\//, '')}</strong>. El
+                sistema le envía el ticket ya listo y RawBT lo manda a la impresora.
+              </p>
+              <Field label="IP de la impresora (solo como recordatorio)">
+                <input
+                  className={inputClass}
+                  value={config.networkUrl ?? ''}
+                  onChange={(e) => set('networkUrl', e.target.value)}
+                  placeholder="192.168.18.50:9100"
+                />
+              </Field>
+            </div>
           )}
 
           <div className="grid grid-cols-2 gap-3">
@@ -191,20 +232,28 @@ function PrinterCard({
           </div>
 
           {config.driver !== 'browser' && (
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={handleTest}
-                disabled={testing}
-                className="flex items-center gap-1.5 rounded-xl bg-ember/10 px-3 py-2 text-sm font-medium text-ember disabled:opacity-50"
-              >
-                <TestTube2 size={14} />
-                {testing ? 'Imprimiendo...' : 'Imprimir prueba'}
-              </button>
+            <div className="space-y-2">
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleTest}
+                  disabled={testing}
+                  className="flex items-center gap-1.5 rounded-xl bg-ember/10 px-3 py-2 text-sm font-medium text-ember disabled:opacity-50"
+                >
+                  <TestTube2 size={14} />
+                  {testing ? 'Imprimiendo...' : 'Imprimir prueba'}
+                </button>
+                <button
+                  type="button"
+                  onClick={handleShareTest}
+                  className="flex items-center gap-1.5 rounded-xl bg-ink/8 px-3 py-2 text-sm font-medium"
+                >
+                  <Share2 size={14} />
+                  Compartir prueba
+                </button>
+              </div>
               {testResult && (
-                <span className={`text-xs ${testResult.startsWith('Error') ? 'text-red-600' : 'text-green-600'}`}>
-                  {testResult}
-                </span>
+                <p className={`text-xs ${testFailed ? 'text-red-600' : 'text-green-600'}`}>{testResult}</p>
               )}
             </div>
           )}
@@ -222,7 +271,9 @@ export function Configuracion() {
   const [printerSaved, setPrinterSaved] = useState(false)
   const [detectingLoc, setDetectingLoc] = useState(false)
 
-  const printers = form.printers ?? defaultSetup()
+  const [printers, setPrinters] = useState<PrinterSetup>(
+    () => loadPrinterSetup() ?? state.settings.printers ?? defaultPrinterSetup(),
+  )
 
   const set = (k: keyof Settings, v: string | number | undefined) => setForm({ ...form, [k]: v })
 
@@ -246,11 +297,11 @@ export function Configuracion() {
   }
 
   const setPrinter = (which: keyof PrinterSetup, config: PrinterConfig) => {
-    setForm({ ...form, printers: { ...printers, [which]: config } })
+    setPrinters((prev) => ({ ...prev, [which]: config }))
   }
 
   const savePrinters = () => {
-    saveSettings({ ...form, printers })
+    savePrinterSetup(printers)
     setPrinterSaved(true)
     setTimeout(() => setPrinterSaved(false), 2000)
   }
@@ -409,8 +460,11 @@ export function Configuracion() {
           <h2 className="font-display text-lg">Impresoras térmicas</h2>
         </div>
         <p className="text-xs text-ink/50">
-          Configura tus ticketeras ESC/POS. Si usas USB, conecta la impresora y haz clic en "Vincular".
-          Modo "Navegador" usa el diálogo de impresión del sistema.
+          Configura tus ticketeras ESC/POS. En la PC de caja usa USB (conecta y pulsa "Vincular") o Red con un
+          print-bridge. En tablet usa "App RawBT". Modo "Navegador" abre el diálogo de impresión del sistema.
+        </p>
+        <p className="text-xs text-ink/50">
+          Esta configuración se guarda solo en este equipo, porque cada caja o tablet tiene su propia impresora.
         </p>
 
         <PrinterCard config={printers.caja} onChange={(c) => setPrinter('caja', c)} />

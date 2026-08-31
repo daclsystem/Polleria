@@ -1,139 +1,13 @@
-import { formatDateTime, padOrder, soles } from './format'
-import { EscPosBuilder } from './escpos'
-import { sendToPrinter } from './printer-driver'
+import { formatDate, formatDateTime, formatTime, padOrder, solesPrint } from './format'
+import { getDeviceOS } from './platform'
+import { printRawbt, sendToPrinter } from './printer-driver'
+import { defaultPrinterSetup, loadPrinterSetup } from './printerStore'
+import { prepareTicketShare, shareTicketPayload } from './share'
+import { buildTicketDoc, renderEscPos, type TicketDoc, type TicketKind } from './ticket-doc'
 import type { Order, PrinterConfig, Settings } from '../types'
-import { PAY_LABEL, TYPE_LABEL } from '../types'
+import { DEFAULT_PRINTER, PAY_LABEL, TYPE_LABEL } from '../types'
 
-// ─── ESC/POS ticket builders ────────────────────────────────────────────────
-
-function buildCajaTicket(order: Order, settings: Settings, config: PrinterConfig): Uint8Array {
-  const p = new EscPosBuilder(config.cols)
-
-  p.center().bold().double()
-  p.line(settings.name)
-  p.double(false).bold(false)
-  p.line(settings.slogan)
-  p.line(settings.address)
-  p.line(`RUC ${settings.ruc} · ${settings.phone}`)
-  p.separator('=')
-
-  p.bold().line('TICKET DE VENTA').bold(false)
-  p.line(`${padOrder(order.number)} · ${formatDateTime(order.createdAt)}`)
-  p.left()
-  p.line(`${TYPE_LABEL[order.type]}${order.tableNumber ? ` · Mesa ${order.tableNumber}` : ''}`)
-  p.line(`Cliente: ${order.customerName}`)
-  if (order.customerPhone) p.line(`Cel: ${order.customerPhone}`)
-  if (order.address) p.line(order.address)
-  p.line(`Atendió: ${order.createdBy}`)
-  p.separator()
-
-  for (const item of order.items) {
-    p.row(`${item.qty}x ${item.name}`, soles(item.qty * item.price))
-    if (item.notes) p.line(`   ** ${item.notes}`)
-  }
-  if (order.notes) p.line(`Nota: ${order.notes}`)
-
-  p.separator()
-  p.row('Subtotal', soles(order.subtotal))
-  if (order.discount) p.row('Descuento', `- ${soles(order.discount)}`)
-  p.row(`IGV ${(settings.igvRate * 100).toFixed(0)}%`, soles(order.igv))
-  p.bold().double()
-  p.row('TOTAL', soles(order.total))
-  p.double(false).bold(false)
-
-  p.feed(1).center()
-  p.line(`${PAY_LABEL[order.paymentMethod]} · ${order.paid ? 'PAGADO' : 'POR COBRAR'}`)
-  p.feed(1)
-  p.line('Gracias por su visita')
-  p.line('- - - - -')
-  p.feed(1)
-
-  if (config.openDrawer) p.openDrawer()
-  if (config.autoCut) p.cut()
-
-  return p.build()
-}
-
-function buildCocinaTicket(order: Order, settings: Settings, config: PrinterConfig): Uint8Array {
-  const p = new EscPosBuilder(config.cols)
-
-  if (config.beepOnPrint) p.beep()
-
-  p.center().bold().double()
-  p.line(order.notes?.includes('ADICIONAL') ? 'COMANDA ADICIONAL' : 'COMANDA COCINA')
-  p.double(false)
-  p.line(settings.name)
-  p.bold(false)
-  p.separator('=')
-
-  p.bold()
-  p.line(`#${padOrder(order.number)} · ${formatDateTime(order.createdAt)}`)
-  p.bold(false)
-  p.left()
-  p.line(`${TYPE_LABEL[order.type]}${order.tableNumber ? ` · Mesa ${order.tableNumber}` : ''}`)
-  p.line(`Cliente: ${order.customerName}`)
-  p.line(`Atendió: ${order.createdBy}`)
-  p.separator()
-
-  for (const item of order.items) {
-    p.bold().wide()
-    p.line(`${item.qty}x ${item.name}`)
-    p.wide(false).bold(false)
-    if (item.notes) {
-      p.line(`   >> ${item.notes}`)
-    }
-  }
-
-  if (order.notes) {
-    p.separator()
-    p.bold().line(`NOTA: ${order.notes}`).bold(false)
-  }
-
-  p.separator()
-  p.center()
-  p.line('Preparar con receta de la casa')
-  p.feed(2)
-  if (config.autoCut) p.cut()
-
-  return p.build()
-}
-
-function buildCuentaTicket(order: Order, settings: Settings, config: PrinterConfig): Uint8Array {
-  const p = new EscPosBuilder(config.cols)
-
-  p.center().bold().double()
-  p.line(settings.name)
-  p.double(false).bold(false)
-  p.line(settings.address)
-  p.separator('=')
-
-  p.bold().line('PRE-CUENTA').bold(false)
-  p.line(`${padOrder(order.number)} · ${formatDateTime(order.createdAt)}`)
-  p.left()
-  p.line(`${TYPE_LABEL[order.type]}${order.tableNumber ? ` · Mesa ${order.tableNumber}` : ''}`)
-  p.line(`Cliente: ${order.customerName}`)
-  p.separator()
-
-  for (const item of order.items) {
-    p.row(`${item.qty}x ${item.name}`, soles(item.qty * item.price))
-  }
-
-  p.separator()
-  p.row('Subtotal', soles(order.subtotal))
-  if (order.discount) p.row('Descuento', `- ${soles(order.discount)}`)
-  p.row(`IGV ${(settings.igvRate * 100).toFixed(0)}%`, soles(order.igv))
-  p.bold().double()
-  p.row('TOTAL', soles(order.total))
-  p.double(false).bold(false)
-
-  p.feed(1).center()
-  p.line('Acérquese a caja para pagar')
-  p.line('Gracias por su preferencia')
-  p.feed(2)
-  if (config.autoCut) p.cut()
-
-  return p.build()
-}
+export type { TicketKind }
 
 // ─── HTML ticket (browser fallback) ─────────────────────────────────────────
 
@@ -153,6 +27,8 @@ function standaloneBar() {
     <button type="button" onclick="goBackToSystem()">Cerrar</button>
   </div>
   <script>
+    // Dentro del overlay del sistema la barra de arriba ya tiene los botones.
+    try { if (window.parent && window.parent !== window) { document.getElementById('standalone-bar').hidden = true; } } catch (e) {}
     function goBackToSystem() {
       try { if (window.parent && window.parent !== window && window.parent.closePrintPreview) { window.parent.closePrintPreview(); return; } } catch (e) {}
       try { window.close(); } catch (e) {}
@@ -206,9 +82,8 @@ function ticketShell(title: string, inner: string, width = '80mm') {
 </html>`
 }
 
-export type TicketKind = 'caja' | 'cocina' | 'cuenta'
-
 export function ticketHtml(order: Order, settings: Settings, kind: TicketKind) {
+  const printedAt = new Date().toISOString()
   const heading =
     kind === 'cocina' ? 'COMANDA COCINA' : kind === 'cuenta' ? 'PRE-CUENTA' : 'TICKET DE VENTA'
   const items = order.items
@@ -216,7 +91,7 @@ export function ticketHtml(order: Order, settings: Settings, kind: TicketKind) {
       const line =
         kind === 'cocina'
           ? `<div class="item"><strong>${i.qty}x</strong> ${esc(i.name)}${i.notes ? `<div class="note">** ${esc(i.notes)}</div>` : ''}</div>`
-          : `<div class="item"><div class="row"><span>${i.qty}x ${esc(i.name)}</span><span>${esc(soles(i.qty * i.price))}</span></div>${i.notes ? `<div class="note">${esc(i.notes)}</div>` : ''}</div>`
+          : `<div class="item"><div class="row"><span>${i.qty}x ${esc(i.name)}</span><span>${esc(solesPrint(i.qty * i.price))}</span></div>${i.notes ? `<div class="note">${esc(i.notes)}</div>` : ''}</div>`
       return line
     })
     .join('')
@@ -225,10 +100,10 @@ export function ticketHtml(order: Order, settings: Settings, kind: TicketKind) {
     kind === 'cocina'
       ? ''
       : `<hr class="dash" />
-        <div class="row muted"><span>Subtotal</span><span>${esc(soles(order.subtotal))}</span></div>
-        ${order.discount ? `<div class="row muted"><span>Descuento</span><span>- ${esc(soles(order.discount))}</span></div>` : ''}
-        <div class="row muted"><span>IGV ${(settings.igvRate * 100).toFixed(0)}%</span><span>${esc(soles(order.igv))}</span></div>
-        <div class="row big"><span>TOTAL</span><span>${esc(soles(order.total))}</span></div>
+        <div class="row muted"><span>Subtotal</span><span>${esc(solesPrint(order.subtotal))}</span></div>
+        ${order.discount ? `<div class="row muted"><span>Descuento</span><span>- ${esc(solesPrint(order.discount))}</span></div>` : ''}
+        <div class="row muted"><span>IGV ${(settings.igvRate * 100).toFixed(0)}%</span><span>${esc(solesPrint(order.igv))}</span></div>
+        <div class="row big"><span>TOTAL</span><span>${esc(solesPrint(order.total))}</span></div>
         <p class="center muted" style="margin-top:8px">${esc(PAY_LABEL[order.paymentMethod])} · ${order.paid ? 'PAGADO' : 'POR COBRAR'}</p>`
 
   const inner = `
@@ -240,12 +115,13 @@ export function ticketHtml(order: Order, settings: Settings, kind: TicketKind) {
     </div>
     <hr class="dash" />
     <p class="center big">${heading}</p>
-    <p class="center">${esc(padOrder(order.number))} · ${esc(formatDateTime(order.createdAt))}</p>
+    <p class="center">${esc(padOrder(order.number))} · ${esc(formatDate(printedAt))}</p>
+    <p class="center"><strong>Hora ${esc(formatTime(printedAt))}</strong></p>
     <p>${esc(TYPE_LABEL[order.type])}${order.tableNumber ? ` · Mesa ${order.tableNumber}` : ''}</p>
-    <p>Cliente: ${esc(order.customerName)}</p>
+    <p><strong>Cliente: ${esc(order.customerName || '—')}</strong></p>
     ${order.customerPhone ? `<p>Cel: ${esc(order.customerPhone)}</p>` : ''}
     ${order.address ? `<p>${esc(order.address)}</p>` : ''}
-    <p class="muted">Atendió: ${esc(order.createdBy)}</p>
+    ${order.createdBy ? `<p>Mozo: ${esc(order.createdBy)}</p>` : ''}
     <hr class="dash" />
     ${items}
     ${order.notes ? `<p class="note">Nota: ${esc(order.notes)}</p>` : ''}
@@ -320,6 +196,7 @@ ${standaloneBar()}
 // ─── Print dispatchers ──────────────────────────────────────────────────────
 
 const OVERLAY_ID = 'polleria-print-overlay'
+const TOAST_ID = 'polleria-print-toast'
 
 let printKeyHandler: ((e: KeyboardEvent) => void) | null = null
 
@@ -337,14 +214,29 @@ if (typeof window !== 'undefined') {
   ;(window as Window & { closePrintPreview?: () => void }).closePrintPreview = closePrintPreview
 }
 
-function printHtmlFallback(html: string) {
+interface PreviewOptions {
+  /** Habilita los botones "Enviar a RawBT" y "Compartir". */
+  ticket?: TicketDoc
+  /** Impresora con la que se generan los bytes ESC/POS del botón RawBT. */
+  config?: PrinterConfig
+  /** Motivo por el que no se pudo imprimir directo. */
+  error?: string
+}
+
+function printHtmlFallback(html: string, opts: PreviewOptions = {}) {
   closePrintPreview()
+  document.getElementById(TOAST_ID)?.remove()
 
   const overlay = document.createElement('div')
   overlay.id = OVERLAY_ID
   overlay.setAttribute('role', 'dialog')
   overlay.setAttribute('aria-modal', 'true')
   overlay.setAttribute('aria-label', 'Vista previa de impresión')
+  const shareBtn = opts.ticket ? '<button type="button" data-share>Compartir</button>' : ''
+  const rawbtBtn =
+    opts.ticket && getDeviceOS() === 'android'
+      ? '<button type="button" data-rawbt>Enviar a RawBT</button>'
+      : ''
   overlay.innerHTML = `
     <style>
       #${OVERLAY_ID} {
@@ -364,18 +256,29 @@ function printHtmlFallback(html: string) {
         min-height: 44px; border: 0; border-radius: 12px; padding: 0 16px;
         font: 700 14px system-ui, sans-serif; cursor: pointer;
       }
+      #${OVERLAY_ID} .polleria-print-error {
+        flex: 0 0 auto; margin: 0; padding: 10px 14px;
+        background: #7a2214; color: #fff; font: 600 13px/1.4 system-ui, sans-serif;
+      }
       #${OVERLAY_ID} [data-close] { background: #fff; color: #111; }
       #${OVERLAY_ID} [data-print] { background: #1a3d1a; color: #fff; }
+      #${OVERLAY_ID} [data-rawbt] { background: #d1541f; color: #fff; }
+      #${OVERLAY_ID} [data-share] { background: #2f3d55; color: #fff; }
       #${OVERLAY_ID} iframe { flex: 1 1 auto; width: 100%; border: 0; background: #fff; }
       @media print { #${OVERLAY_ID} { display: none !important; } }
     </style>
     <div class="polleria-print-bar">
-      <p>Vista previa</p>
+      <p data-status>Vista previa</p>
+      ${rawbtBtn}
+      ${shareBtn}
       <button type="button" data-print>Imprimir</button>
       <button type="button" data-close>Cerrar</button>
     </div>
+    ${opts.error ? `<p class="polleria-print-error">No se pudo imprimir: ${esc(opts.error)}</p>` : ''}
     <iframe title="Documento a imprimir"></iframe>
     <div class="polleria-print-bar">
+      ${rawbtBtn}
+      ${shareBtn}
       <button type="button" data-print>Imprimir</button>
       <button type="button" data-close>Cerrar</button>
     </div>
@@ -401,6 +304,27 @@ function printHtmlFallback(html: string) {
     el.addEventListener('click', () => iframe?.contentWindow?.print())
   })
 
+  if (opts.ticket) {
+    const ticket = opts.ticket
+    const status = overlay.querySelector('[data-status]')
+    // El PNG se genera ya: navigator.share exige gesto del usuario y hacerlo
+    // dentro del click lo invalidaría en iOS.
+    const payload = prepareTicketShare(ticket)
+    overlay.querySelectorAll('[data-share]').forEach((el) => {
+      el.addEventListener('click', async () => {
+        const outcome = await shareTicketPayload(await payload)
+        if (status && outcome === 'downloaded') status.textContent = 'Ticket descargado'
+      })
+    })
+    overlay.querySelectorAll('[data-rawbt]').forEach((el) => {
+      el.addEventListener('click', async () => {
+        if (status) status.textContent = 'Enviando a RawBT…'
+        await printRawbt(renderEscPos(ticket, opts.config ?? DEFAULT_PRINTER))
+        if (status) status.textContent = 'Enviado a RawBT'
+      })
+    })
+  }
+
   const doc = iframe?.contentDocument
   if (!iframe || !doc) {
     closePrintPreview()
@@ -411,33 +335,72 @@ function printHtmlFallback(html: string) {
   doc.close()
 }
 
+/**
+ * RawBT no devuelve confirmación, así que se avisa en pantalla y se deja a mano
+ * la vista previa por si la app no llegó a imprimir.
+ */
+function showRawbtToast(onFallback: () => void) {
+  document.getElementById(TOAST_ID)?.remove()
+
+  const toast = document.createElement('div')
+  toast.id = TOAST_ID
+  toast.innerHTML = `
+    <style>
+      #${TOAST_ID} {
+        position: fixed; z-index: 2147482000;
+        left: 50%; transform: translateX(-50%);
+        bottom: max(16px, env(safe-area-inset-bottom));
+        display: flex; align-items: center; gap: 12px;
+        max-width: calc(100vw - 24px);
+        padding: 10px 12px 10px 16px; border-radius: 14px;
+        background: #0c0c0c; color: #fff;
+        font: 600 13px/1.3 system-ui, sans-serif;
+        box-shadow: 0 12px 32px rgba(0,0,0,0.35);
+      }
+      #${TOAST_ID} button {
+        min-height: 36px; border: 0; border-radius: 10px; padding: 0 12px;
+        font: 700 13px system-ui, sans-serif; cursor: pointer;
+        background: #fff; color: #111;
+      }
+      @media print { #${TOAST_ID} { display: none !important; } }
+    </style>
+    <span>Ticket enviado a RawBT</span>
+    <button type="button">Ver ticket</button>
+  `
+  document.body.appendChild(toast)
+
+  const timer = setTimeout(() => toast.remove(), 6000)
+  toast.querySelector('button')?.addEventListener('click', () => {
+    clearTimeout(timer)
+    toast.remove()
+    onFallback()
+  })
+}
+
 function getPrinterConfig(settings: Settings, kind: TicketKind): PrinterConfig | null {
-  const printers = settings.printers
-  if (!printers) return null
+  const printers = loadPrinterSetup() ?? settings.printers ?? defaultPrinterSetup()
   if (kind === 'cocina') return printers.cocina?.enabled ? printers.cocina : null
   return printers.caja?.enabled ? printers.caja : null
 }
 
 export async function printTicket(order: Order, settings: Settings, kind: TicketKind) {
   const config = getPrinterConfig(settings, kind)
+  const ticket = buildTicketDoc(order, settings, kind, config?.cols ?? 48)
+  const preview = (error?: string) =>
+    printHtmlFallback(ticketHtml(order, settings, kind), { ticket, config: config ?? undefined, error })
 
   if (config && config.driver !== 'browser') {
-    let data: Uint8Array
-    if (kind === 'cocina') {
-      data = buildCocinaTicket(order, settings, config)
-    } else if (kind === 'cuenta') {
-      data = buildCuentaTicket(order, settings, config)
-    } else {
-      data = buildCajaTicket(order, settings, config)
+    const result = await sendToPrinter(renderEscPos(ticket, config), config)
+    if (result.ok) {
+      if (config.driver === 'rawbt') showRawbtToast(() => preview())
+      return
     }
 
-    const result = await sendToPrinter(data, config)
-    if (result.ok) return
-
-    console.warn(`[Print] ESC/POS falló (${result.error}), usando fallback HTML`)
+    preview(result.error)
+    return
   }
 
-  printHtmlFallback(ticketHtml(order, settings, kind))
+  preview()
 }
 
 export function printReport(html: string) {
