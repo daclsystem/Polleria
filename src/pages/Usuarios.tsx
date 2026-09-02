@@ -1,5 +1,4 @@
 import { useRef, useState } from 'react'
-import { useAuth } from '../auth/AuthContext'
 import { useStore } from '../store/StoreContext'
 import { uid } from '../lib/format'
 import { ROLE_LABEL, type Role, type User } from '../types'
@@ -12,8 +11,7 @@ import { uploadAvatar } from '../lib/minio'
 const ROLES: Role[] = ['admin', 'cajero', 'cocina', 'mozo']
 
 export function Usuarios() {
-  const { state, saveUser, deleteUser } = useStore()
-  const { user: me } = useAuth()
+  const { state, saveUser } = useStore()
   const [editing, setEditing] = useState<User | null>(null)
   const [dlg, setDlg] = useState<'confirm' | 'busy' | 'done' | null>(null)
 
@@ -68,11 +66,6 @@ export function Usuarios() {
               <button className="text-sm text-ember" onClick={() => setEditing(u)}>
                 Editar
               </button>
-              {u.id !== me?.id ? (
-                <button className="text-sm text-brick" onClick={() => deleteUser(u.id)}>
-                  Eliminar
-                </button>
-              ) : null}
             </div>
           </article>
         ))}
@@ -122,13 +115,6 @@ export function Usuarios() {
                 />
               </Field>
             </div>
-            <Field label="Contraseña">
-              <input
-                className={inputClass}
-                value={editing.password}
-                onChange={(e) => setEditing({ ...editing, password: e.target.value })}
-              />
-            </Field>
             <Field label="Rol">
               <select
                 className={inputClass}
@@ -141,13 +127,6 @@ export function Usuarios() {
                   </option>
                 ))}
               </select>
-            </Field>
-            <Field label="PIN">
-              <input
-                className={inputClass}
-                value={editing.pin}
-                onChange={(e) => setEditing({ ...editing, pin: e.target.value })}
-              />
             </Field>
             <button className="w-full rounded-xl bg-ember py-3 font-semibold text-white">Guardar</button>
           </form>

@@ -150,7 +150,7 @@ function ProductThumb({ product, className = '' }: { product: Product; className
 }
 
 export function MenuPage() {
-  const { state, saveProduct, deleteProduct } = useStore()
+  const { state, saveProduct } = useStore()
   const [q, setQ] = useState('')
   const [editing, setEditing] = useState<Product | null>(null)
   const [uploading, setUploading] = useState(false)
@@ -236,9 +236,6 @@ export function MenuPage() {
                     <button className="text-ember" onClick={() => setEditing(p)}>
                       Editar
                     </button>
-                    <button className="text-brick" onClick={() => deleteProduct(p.id)}>
-                      Quitar
-                    </button>
                   </div>
                 </div>
               </div>
@@ -296,11 +293,8 @@ export function MenuPage() {
                     </button>
                   </td>
                   <td className="px-4 py-3 text-right">
-                    <button className="mr-3 text-ember" onClick={() => setEditing(p)}>
+                    <button className="text-ember" onClick={() => setEditing(p)}>
                       Editar
-                    </button>
-                    <button className="text-brick" onClick={() => deleteProduct(p.id)}>
-                      Quitar
                     </button>
                   </td>
                 </tr>

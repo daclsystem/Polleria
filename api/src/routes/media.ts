@@ -35,6 +35,16 @@ function sanitize(name: string) {
   return name.replace(/[^a-zA-Z0-9._-]/g, '_').toLowerCase()
 }
 
+function typeFromKey(key: string, fallback: string) {
+  if (/\.png$/i.test(key)) return 'image/png'
+  if (/\.jpe?g$/i.test(key)) return 'image/jpeg'
+  if (/\.webp$/i.test(key)) return 'image/webp'
+  if (/\.gif$/i.test(key)) return 'image/gif'
+  if (/\.svg$/i.test(key)) return 'image/svg+xml'
+  if (/\.mp3$/i.test(key)) return 'audio/mpeg'
+  return fallback
+}
+
 mediaRouter.get('/config', (_req, res) => {
   res.json({
     bucket,
@@ -96,3 +106,35 @@ mediaRouter.post('/upload-public', upload.single('file'), async (req, res) => {
     res.status(500).json({ error: (e as Error).message })
   }
 })
+
+/** GET /s3/:bucket/... — el front pide la URL pública; nginx manda todo a Express. */
+export async function servePublicObject(req: import('express').Request, res: import('express').Response) {
+  const b = String(req.params.bucket || '')
+  const fromPath = req.path.replace(/^\/s3\/[^/]+\//, '')
+  const key = String(req.params[0] || fromPath || '')
+    .replace(/^\/+/, '')
+    .replace(/\.\./g, '')
+  if (b !== bucket || !key) {
+    res.status(404).json({ error: 'Archivo no encontrado' })
+    return
+  }
+  try {
+    const mc = client()
+    const stat = await mc.statObject(bucket, key)
+    const type = typeFromKey(
+      key,
+      (stat.metaData && (stat.metaData['content-type'] || stat.metaData['Content-Type'])) ||
+        'application/octet-stream',
+    )
+    res.setHeader('Content-Type', String(type))
+    res.setHeader('Cache-Control', 'public, max-age=31536000, immutable')
+    if (stat.size) res.setHeader('Content-Length', String(stat.size))
+    const stream = await mc.getObject(bucket, key)
+    stream.on('error', () => {
+      if (!res.headersSent) res.status(500).end()
+    })
+    stream.pipe(res)
+  } catch {
+    res.status(404).json({ error: 'Archivo no encontrado' })
+  }
+}

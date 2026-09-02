@@ -1,9 +1,8 @@
 import { useEffect, useState } from 'react'
-import { Trash2, TicketPercent } from 'lucide-react'
+import { TicketPercent } from 'lucide-react'
 import { Field, PageTitle, inputClass } from '../components/ui'
 import {
   apiAdminCoupons,
-  apiDeleteCoupon,
   apiSaveCoupon,
   type CouponDto,
 } from '../lib/apiClient'
@@ -86,10 +85,23 @@ export function Cupones() {
     })
   }
 
-  const remove = async (id: string) => {
-    if (!confirm('¿Desactivar este cupón?')) return
+  const toggleActive = async (c: CouponDto) => {
     try {
-      await apiDeleteCoupon(id)
+      await apiSaveCoupon(
+        {
+          code: c.code,
+          title: c.title,
+          description: c.description,
+          discountType: c.discountType,
+          discountValue: c.discountValue,
+          minSubtotal: c.minSubtotal,
+          maxDiscount: c.maxDiscount,
+          maxUsesTotal: c.maxUsesTotal,
+          maxUsesPerCustomer: c.maxUsesPerCustomer,
+          active: !c.active,
+        },
+        c.id,
+      )
       await load()
     } catch (e) {
       setError((e as Error).message)
@@ -253,10 +265,10 @@ export function Cupones() {
               </button>
               <button
                 type="button"
-                className="rounded-lg p-2 text-red-500 hover:bg-red-50"
-                onClick={() => void remove(c.id)}
+                className={`text-sm font-semibold ${c.active ? 'text-sage' : 'text-brick'}`}
+                onClick={() => void toggleActive(c)}
               >
-                <Trash2 size={16} />
+                {c.active ? 'Activo' : 'Inactivo'}
               </button>
             </div>
           </div>

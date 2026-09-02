@@ -92,21 +92,11 @@ export async function notifyOrderCreatedServer(order: OrderLike) {
   const pago = order.CodPaymentMethod || 'contra entrega'
   const jobs: Promise<unknown>[] = []
 
-  if (cfg.autoNotifyLocal !== false && cfg.notifyPhone) {
-    const localText =
-      `🔔 *Nuevo pedido #${order.Number}*\n` +
-      `Cliente: ${order.CustomerName}\n` +
-      `Tel: ${phone || '—'}\n` +
-      `${tipoLabel(String(order.Type), order.Address)}\n` +
-      `Total: *${soles(Number(order.Total))}*\n` +
-      `Pago: ${pago}\n\n` +
-      `${detalle(order)}`
-    jobs.push(sendText(cfg.notifyPhone, localText))
+  if (!phone) {
+    return { sent: false, reason: 'sin teléfono en el pedido' }
   }
 
-  const notifyCustomer =
-    cfg.autoNotifyCustomer !== false && shouldNotifyCustomerWhatsApp(order) && Boolean(phone)
-  if (notifyCustomer) {
+  if (cfg.autoNotifyCustomer !== false && shouldNotifyCustomerWhatsApp(order)) {
     const text =
       `🍗 *Chifa-Pollería Lopez*\n` +
       `¡Hola ${order.CustomerName}! Tu pedido *#${order.Number}* fue recibido.\n\n` +
@@ -129,7 +119,7 @@ export async function notifyOrderCreatedServer(order: OrderLike) {
     if (r.status === 'rejected') console.warn('[whatsapp] create', r.reason)
   }
 
-  if (ok && notifyCustomer) {
+  if (ok) {
     try {
       const pool = await getPool()
       await pool

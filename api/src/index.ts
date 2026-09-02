@@ -11,7 +11,7 @@ import { deliveryRouter } from './routes/delivery.js'
 import { geoRouter } from './routes/geo.js'
 import { systemRouter } from './routes/system.js'
 import { ordersRouter } from './routes/orders.js'
-import { mediaRouter } from './routes/media.js'
+import { mediaRouter, servePublicObject } from './routes/media.js'
 import { crudRouter } from './routes/crud.js'
 import { configRouter } from './routes/config.js'
 import { otpAuthRouter } from './routes/otpAuth.js'
@@ -65,6 +65,7 @@ app.use('/api/geo', geoRouter)
 app.use('/api/system', systemRouter)
 app.use('/api/orders', ordersRouter)
 app.use('/api/media', mediaRouter)
+app.get('/s3/:bucket/*', servePublicObject)
 app.use('/api/config', configRouter)
 app.use('/api/coupons', couponsRouter)
 app.use('/api/customer/addresses', customerAddressesRouter)

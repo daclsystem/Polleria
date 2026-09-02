@@ -101,5 +101,12 @@ export default defineConfig({
   build: {
     outDir: outDirAbs,
     emptyOutDir: true,
+    rollupOptions: {
+      output: {
+        entryFileNames: `assets/app-${readAppVersion().build.replace(/[^a-zA-Z0-9]/g, '')}.js`,
+        chunkFileNames: 'assets/[name].js',
+        assetFileNames: 'assets/[name][extname]',
+      },
+    },
   },
 })

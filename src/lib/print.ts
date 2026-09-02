@@ -420,7 +420,11 @@ export function cashCloseHtml(opts: {
   difference: number
   notes?: string
   signature?: string
-  cuantificable?: { products: { name: string; sold: number; left: number; unit: string }[]; insumos: { name: string; sold: number; left: number; unit: string }[] }
+  cuantificable?: {
+    products: { name: string; sold: number; left: number; unit: string }[]
+    insumos: { name: string; sold: number; left: number; unit: string }[]
+  }
+  stock?: { name: string; unit: string; had: number; out: number; left: number }[]
 }) {
   const diffTxt =
     Math.abs(opts.difference) < 0.01
@@ -431,16 +435,27 @@ export function cashCloseHtml(opts: {
   const sig = opts.signature
     ? `<img alt="Firma" src="${opts.signature}" style="display:block;width:100%;max-height:90px;object-fit:contain;background:#fff" />`
     : `<div style="height:72px"></div>`
+  const qn = (n: number) => (Number.isInteger(n) ? String(n) : n.toFixed(2))
   const line = (l: { name: string; sold: number; left: number; unit: string }) => {
-    const q = (n: number) => (Number.isInteger(n) ? String(n) : n.toFixed(2))
-    return `<div class="row"><span>${esc(l.name)}</span><span>Salió ${q(l.sold)} ${esc(l.unit)} · queda ${q(l.left)} ${esc(l.unit)}</span></div>`
+    return `<div class="row"><span>${esc(l.name)}</span><span>Salió ${qn(l.sold)} ${esc(l.unit)} · queda ${qn(l.left)} ${esc(l.unit)}</span></div>`
   }
   const cuantiBlock =
     opts.cuantificable && (opts.cuantificable.products.length || opts.cuantificable.insumos.length)
-      ? `<hr class="dash" /><p class="muted">Cuantificables</p>${[
+      ? `<hr class="dash" /><p class="muted">Vendidos (carta)</p>${[
           ...opts.cuantificable.products.map(line),
           ...opts.cuantificable.insumos.map(line),
         ].join('')}`
+      : ''
+  const stockBlock =
+    opts.stock && opts.stock.length
+      ? `<hr class="dash" /><p class="muted">Stock del turno</p>
+         <div class="row"><span></span><span>Había · Salió · Queda</span></div>
+         ${opts.stock
+           .map(
+             (l) =>
+               `<div class="row"><span>${esc(l.name)}</span><span>${qn(l.had)} · ${qn(l.out)} · ${qn(l.left)} ${esc(l.unit)}</span></div>`,
+           )
+           .join('')}`
       : ''
   const inner = `
     <p class="center brand">${esc(opts.settings.name)}</p>
@@ -457,6 +472,7 @@ export function cashCloseHtml(opts: {
     <div class="row"><span>Efectivo contado</span><span>${solesPrint(opts.counted)}</span></div>
     <p class="big center" style="margin-top:8px">${esc(diffTxt)}</p>
     ${opts.notes ? `<p class="note">Nota: ${esc(opts.notes)}</p>` : ''}
+    ${stockBlock}
     ${cuantiBlock}
     <hr class="dash" />
     <p class="muted">Entrega de efectivo y liquidación</p>

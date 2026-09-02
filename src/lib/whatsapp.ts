@@ -217,10 +217,6 @@ export async function notifyOrderCreated(order: Order) {
 
   const tasks: Promise<unknown>[] = []
 
-  if (config.autoNotifyLocal && config.notifyPhone) {
-    tasks.push(sendWhatsAppText(config.notifyPhone, fill(config.templates.avisoLocal, order), config))
-  }
-
   if (config.autoNotifyCustomer && order.customerPhone) {
     tasks.push(
       sendWhatsAppText(order.customerPhone, fill(config.templates.pedidoRecibido, order), config),

@@ -6,6 +6,7 @@ import {
   apiCashShift,
   type CashCloseRow,
   type CashShift,
+  type CashStockLine,
 } from '../lib/apiClient'
 import { formatDateTime, round2, soles } from '../lib/format'
 import { cashCloseHtml, printReport } from '../lib/print'
@@ -70,6 +71,59 @@ function pushLocalHistory(row: CashCloseRow) {
 
 export type CuantiLine = { name: string; sold: number; left: number; unit: string }
 
+function qtyLabel(n: number, unit: string) {
+  const v = Number.isInteger(n) ? String(n) : String(round2(n))
+  return unit ? `${v} ${unit}` : v
+}
+
+function stockFromState(
+  orders: Order[],
+  products: Product[],
+  inventory: InventoryItem[],
+  fromAt: string,
+): CashStockLine[] {
+  const fromMs = new Date(fromAt).getTime()
+  const soldBy = new Map<string, number>()
+  for (const o of orders) {
+    if (!o.paid || o.status === 'cancelado') continue
+    if (new Date(o.updatedAt || o.createdAt).getTime() < fromMs) continue
+    for (const it of o.items) {
+      if (!it.productId || it.productId === 'delivery') continue
+      soldBy.set(it.productId, (soldBy.get(it.productId) || 0) + it.qty)
+    }
+  }
+  const used = new Map<string, number>()
+  for (const p of products) {
+    const sold = soldBy.get(p.id) || 0
+    if (!sold || !p.recipes?.length) continue
+    for (const r of p.recipes) {
+      used.set(r.inventoryId, (used.get(r.inventoryId) || 0) + sold * r.qtyPerUnit)
+    }
+  }
+  return inventory.map((i) => {
+    const out = round2(used.get(i.id) || 0)
+    const left = round2(i.stock)
+    return { id: i.id, name: i.name, unit: i.unit || '', had: round2(left + out), out, left }
+  })
+}
+
+function mergeStock(api: CashStockLine[] | undefined, local: CashStockLine[]): CashStockLine[] {
+  if (!api?.length) return local
+  const loc = new Map(local.map((l) => [l.id, l]))
+  const seen = new Set<string>()
+  const rows = api.map((a) => {
+    seen.add(a.id)
+    const b = loc.get(a.id)
+    const out = round2(Math.max(a.out, b?.out || 0))
+    const extra = Math.max(0, out - a.out)
+    return { ...a, out, had: round2(a.had + extra) }
+  })
+  for (const b of local) {
+    if (!seen.has(b.id)) rows.push(b)
+  }
+  return rows
+}
+
 function cuantificableResumen(
   orders: Order[],
   products: Product[],
@@ -119,100 +173,154 @@ function cuantificableResumen(
     }))
     .filter((l) => l.sold > 0 || l.left !== 0)
   return {
-    products: productLines.filter((l) => l.sold > 0 || l.left > 0),
+    products: productLines.filter((l) => l.sold > 0),
     insumos,
   }
 }
 
-function qtyLabel(n: number, unit: string) {
-  const v = Number.isInteger(n) ? String(n) : String(round2(n))
-  return unit ? `${v} ${unit}` : v
-}
-
 function SignaturePad({ onChange }: { onChange: (dataUrl: string) => void }) {
-  const ref = useRef<HTMLCanvasElement>(null)
+  const wrapRef = useRef<HTMLDivElement>(null)
+  const canvasRef = useRef<HTMLCanvasElement>(null)
   const drawing = useRef(false)
+  const last = useRef<{ x: number; y: number } | null>(null)
 
-  const syncSize = () => {
-    const c = ref.current
-    if (!c) return
-    const dpr = window.devicePixelRatio || 1
-    const rect = c.getBoundingClientRect()
-    const snap = c.toDataURL('image/png')
-    c.width = Math.max(1, Math.round(rect.width * dpr))
-    c.height = Math.max(1, Math.round(rect.height * dpr))
-    const ctx = c.getContext('2d')
-    if (!ctx) return
-    ctx.scale(dpr, dpr)
+  const metrics = () => {
+    const wrap = wrapRef.current
+    const dpr = Math.max(1, window.devicePixelRatio || 1)
+    return { w: wrap?.clientWidth || 0, h: wrap?.clientHeight || 0, dpr }
+  }
+
+  const ctx2d = () => canvasRef.current?.getContext('2d') ?? null
+
+  const styleStroke = (ctx: CanvasRenderingContext2D, dpr: number) => {
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
     ctx.lineCap = 'round'
     ctx.lineJoin = 'round'
-    ctx.strokeStyle = '#111'
-    ctx.lineWidth = 2.2
+    ctx.strokeStyle = '#111827'
+    ctx.lineWidth = 2.4
+  }
+
+  const fit = (keep: boolean) => {
+    if (drawing.current) return
+    const c = canvasRef.current
+    if (!c) return
+    const { w, h, dpr } = metrics()
+    if (w < 8 || h < 8) return
+    const bw = Math.round(w * dpr)
+    const bh = Math.round(h * dpr)
+    if (c.width === bw && c.height === bh) return
+    const snap = keep && c.width > 1 && c.height > 1 ? c.toDataURL('image/png') : ''
+    c.width = bw
+    c.height = bh
+    const ctx = ctx2d()
+    if (!ctx) return
+    styleStroke(ctx, dpr)
     ctx.fillStyle = '#fff'
-    ctx.fillRect(0, 0, rect.width, rect.height)
-    if (snap && snap.length > 80) {
-      const img = new Image()
-      img.onload = () => ctx.drawImage(img, 0, 0, rect.width, rect.height)
-      img.src = snap
+    ctx.fillRect(0, 0, w, h)
+    if (!snap) return
+    const img = new Image()
+    img.onload = () => {
+      styleStroke(ctx, dpr)
+      ctx.drawImage(img, 0, 0, w, h)
     }
+    img.src = snap
   }
 
   useEffect(() => {
-    syncSize()
-    const onResize = () => syncSize()
-    window.addEventListener('resize', onResize)
-    return () => window.removeEventListener('resize', onResize)
+    const wrap = wrapRef.current
+    if (!wrap) return
+    const ro = new ResizeObserver(() => fit(true))
+    ro.observe(wrap)
+    const t = window.setTimeout(() => fit(false), 40)
+    return () => {
+      ro.disconnect()
+      window.clearTimeout(t)
+    }
   }, [])
 
-  const point = (e: React.PointerEvent<HTMLCanvasElement>) => {
-    const r = ref.current!.getBoundingClientRect()
+  const pos = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    const r = canvasRef.current!.getBoundingClientRect()
     return { x: e.clientX - r.left, y: e.clientY - r.top }
   }
 
   const emit = () => {
-    const c = ref.current
+    const c = canvasRef.current
     if (c) onChange(c.toDataURL('image/png'))
   }
 
   return (
     <div>
-      <canvas
-        ref={ref}
-        className="h-28 w-full touch-none rounded-xl bg-white ring-1 ring-ink/15"
-        onPointerDown={(e) => {
-          drawing.current = true
-          e.currentTarget.setPointerCapture(e.pointerId)
-          const ctx = ref.current?.getContext('2d')
-          const p = point(e)
-          ctx?.beginPath()
-          ctx?.moveTo(p.x, p.y)
-        }}
-        onPointerMove={(e) => {
-          if (!drawing.current) return
-          const ctx = ref.current?.getContext('2d')
-          const p = point(e)
-          ctx?.lineTo(p.x, p.y)
-          ctx?.stroke()
-        }}
-        onPointerUp={() => {
-          drawing.current = false
-          emit()
-        }}
-        onPointerLeave={() => {
-          if (!drawing.current) return
-          drawing.current = false
-          emit()
-        }}
-      />
+      <div
+        ref={wrapRef}
+        className="h-28 w-full overflow-hidden rounded-xl bg-white ring-1 ring-ink/15"
+      >
+        <canvas
+          ref={canvasRef}
+          className="block h-full w-full touch-none"
+          style={{ touchAction: 'none' }}
+          onPointerDown={(e) => {
+            e.preventDefault()
+            e.stopPropagation()
+            drawing.current = true
+            e.currentTarget.setPointerCapture(e.pointerId)
+            const p = pos(e)
+            last.current = p
+            const ctx = ctx2d()
+            if (!ctx) return
+            styleStroke(ctx, metrics().dpr)
+            ctx.beginPath()
+            ctx.moveTo(p.x, p.y)
+            ctx.lineTo(p.x + 0.01, p.y)
+            ctx.stroke()
+          }}
+          onPointerMove={(e) => {
+            if (!drawing.current) return
+            e.preventDefault()
+            const p = pos(e)
+            const prev = last.current
+            last.current = p
+            const ctx = ctx2d()
+            if (!ctx || !prev) return
+            styleStroke(ctx, metrics().dpr)
+            ctx.beginPath()
+            ctx.moveTo(prev.x, prev.y)
+            ctx.lineTo(p.x, p.y)
+            ctx.stroke()
+          }}
+          onPointerUp={(e) => {
+            drawing.current = false
+            last.current = null
+            try {
+              e.currentTarget.releasePointerCapture(e.pointerId)
+            } catch {
+              /* ignore */
+            }
+            emit()
+          }}
+          onPointerCancel={(e) => {
+            drawing.current = false
+            last.current = null
+            try {
+              e.currentTarget.releasePointerCapture(e.pointerId)
+            } catch {
+              /* ignore */
+            }
+            emit()
+          }}
+        />
+      </div>
       <button
         type="button"
         className="mt-1 text-xs font-semibold text-ink/45 underline"
         onClick={() => {
-          const c = ref.current
-          const ctx = c?.getContext('2d')
+          drawing.current = false
+          const c = canvasRef.current
+          const ctx = ctx2d()
+          const { w, h, dpr } = metrics()
           if (!c || !ctx) return
+          styleStroke(ctx, dpr)
           ctx.fillStyle = '#fff'
-          ctx.fillRect(0, 0, c.getBoundingClientRect().width, c.getBoundingClientRect().height)
+          ctx.fillRect(0, 0, w, h)
           onChange('')
         }}
       >
@@ -241,11 +349,11 @@ export function CajaCierre() {
     typeof localStorage !== 'undefined' ? localStorage.getItem(LAST_CLOSE_KEY) : null,
   )
   const hasSales = (shift?.ordersCount ?? liveShift.ordersCount) > 0 && (shift?.salesTotal ?? liveShift.salesTotal) > 0
-  const cuanti = cuantificableResumen(
-    state.orders,
-    state.products,
-    state.inventory,
-    shift?.fromAt || liveShift.fromAt,
+  const fromAt = shift?.fromAt || liveShift.fromAt
+  const cuanti = cuantificableResumen(state.orders, state.products, state.inventory, fromAt)
+  const stockLines: CashStockLine[] = mergeStock(
+    shift?.stock,
+    stockFromState(state.orders, state.products, state.inventory, fromAt),
   )
 
   const applyShift = (s: CashShift, api: boolean) => {
@@ -290,6 +398,7 @@ export function CajaCierre() {
         notes: notes.trim() || undefined,
         signature: signature || undefined,
         cuantificable: cuanti,
+        stock: stockLines,
       }),
     )
   }
@@ -515,35 +624,53 @@ export function CajaCierre() {
                 No hay ventas cobradas en este turno. El cierre de caja no se puede hacer.
               </p>
             ) : null}
-            {cuanti.products.length > 0 || cuanti.insumos.length > 0 ? (
+            <div className="rounded-2xl bg-cream p-3 text-sm">
+              <p className="mb-2 text-[11px] font-bold uppercase tracking-wide text-ink/40">
+                Stock del turno
+              </p>
+              {stockLines.length === 0 ? (
+                <p className="text-xs text-ink/45">No hay insumos en inventario.</p>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-[13px]">
+                    <thead>
+                      <tr className="text-[10px] font-bold uppercase tracking-wide text-ink/40">
+                        <th className="pb-1.5 pr-2 font-bold">Insumo</th>
+                        <th className="pb-1.5 px-1 text-right font-bold">Había</th>
+                        <th className="pb-1.5 px-1 text-right font-bold">Salió</th>
+                        <th className="pb-1.5 pl-1 text-right font-bold">Queda</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {stockLines.map((l) => (
+                        <tr key={l.id} className="border-t border-ink/10">
+                          <td className="py-1.5 pr-2">
+                            <span className="block max-w-[11rem] truncate">{l.name}</span>
+                            {l.unit ? <span className="text-[10px] text-ink/35">{l.unit}</span> : null}
+                          </td>
+                          <td className="py-1.5 px-1 text-right tabular-nums">{qtyLabel(l.had, '')}</td>
+                          <td className="py-1.5 px-1 text-right tabular-nums font-semibold">{qtyLabel(l.out, '')}</td>
+                          <td className="py-1.5 pl-1 text-right tabular-nums font-bold">{qtyLabel(l.left, '')}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+            {cuanti.products.length > 0 ? (
               <div className="rounded-2xl bg-cream p-3 text-sm">
                 <p className="mb-2 text-[11px] font-bold uppercase tracking-wide text-ink/40">
-                  Cuantificables del turno
+                  Vendidos en el turno
                 </p>
-                {cuanti.products.length > 0 ? (
-                  <ul className="space-y-1">
-                    {cuanti.products.map((l) => (
-                      <li key={l.name} className="flex justify-between gap-2">
-                        <span className="min-w-0 truncate">{l.name}</span>
-                        <span className="shrink-0 font-semibold">
-                          Salió {qtyLabel(l.sold, l.unit)} · queda {qtyLabel(l.left, l.unit)}
-                        </span>
-                      </li>
-                    ))}
-                  </ul>
-                ) : null}
-                {cuanti.insumos.length > 0 ? (
-                  <ul className={`${cuanti.products.length ? 'mt-2 border-t border-ink/10 pt-2' : ''} space-y-1`}>
-                    {cuanti.insumos.map((l) => (
-                      <li key={l.name} className="flex justify-between gap-2 text-ink/70">
-                        <span className="min-w-0 truncate">{l.name}</span>
-                        <span className="shrink-0">
-                          Salió {qtyLabel(l.sold, l.unit)} · queda {qtyLabel(l.left, l.unit)}
-                        </span>
-                      </li>
-                    ))}
-                  </ul>
-                ) : null}
+                <ul className="space-y-1">
+                  {cuanti.products.map((l) => (
+                    <li key={l.name} className="flex justify-between gap-2">
+                      <span className="min-w-0 truncate">{l.name}</span>
+                      <span className="shrink-0 font-semibold">{qtyLabel(l.sold, l.unit)}</span>
+                    </li>
+                  ))}
+                </ul>
               </div>
             ) : null}
             <Field label="Conteo de efectivo en caja">
@@ -569,9 +696,12 @@ export function CajaCierre() {
                 placeholder="Turno mañana, cajero…"
               />
             </Field>
-            <Field label="Firma · entrega del efectivo y liquidación">
+            <div className="space-y-1.5">
+              <p className="text-[11px] font-bold tracking-[0.14em] text-ink/40 uppercase">
+                Firma · entrega del efectivo y liquidación
+              </p>
               <SignaturePad onChange={setSignature} />
-            </Field>
+            </div>
             {err ? <p className="text-xs font-semibold text-ember">{err}</p> : null}
             <div className="grid grid-cols-2 gap-2">
               <button

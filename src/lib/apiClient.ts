@@ -218,6 +218,15 @@ export async function apiSettleCashier(orderId: string) {
   })
 }
 
+export type CashStockLine = {
+  id: string
+  name: string
+  unit: string
+  had: number
+  out: number
+  left: number
+}
+
 export type CashShift = {
   fromAt: string
   lastCloseAt: string | null
@@ -227,6 +236,7 @@ export type CashShift = {
   yape: number
   tarjeta: number
   pendingUnpaid: number
+  stock?: CashStockLine[]
 }
 
 export async function apiCashShift() {

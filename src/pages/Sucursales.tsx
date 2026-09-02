@@ -23,7 +23,7 @@ function rangesForBranch(all: DeliveryRange[] | undefined, branchId: string) {
 }
 
 export function Sucursales() {
-  const { state, deleteBranch, reloadFromApi } = useStore()
+  const { state, reloadFromApi } = useStore()
   const [editing, setEditing] = useState<Branch | null>(null)
   const [showForm, setShowForm] = useState(false)
 
@@ -49,11 +49,6 @@ export function Sucursales() {
       await apiSaveDeliveryRanges(ranges, id)
     }
     await reloadFromApi()
-  }
-
-  const handleDelete = (id: string) => {
-    if (!confirm('¿Eliminar esta sucursal y sus tarifas de envío?')) return
-    deleteBranch(id)
   }
 
   return (
@@ -101,11 +96,6 @@ export function Sucursales() {
                   >
                     <Edit size={14} className="text-ink/40" />
                   </button>
-                  {b.id !== 'main' && (
-                    <button onClick={() => handleDelete(b.id)} className="rounded-lg p-1.5 hover:bg-red-50">
-                      <Trash2 size={14} className="text-red-400" />
-                    </button>
-                  )}
                 </div>
               </div>
               <div className="mt-4 space-y-2 text-sm text-ink/60">

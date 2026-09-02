@@ -55,6 +55,71 @@ async function shiftBounds() {
   return { fromAt, lastCloseAt: lastClose ? new Date(lastClose).toISOString() : null }
 }
 
+export type CashStockLine = {
+  id: string
+  name: string
+  unit: string
+  had: number
+  out: number
+  left: number
+}
+
+function round3(n: number) {
+  return Math.round(n * 1000) / 1000
+}
+
+async function loadShiftStock(fromAt: Date): Promise<CashStockLine[]> {
+  const pool = await getPool()
+  try {
+    const exists = await pool.request().query(`
+      SELECT CASE WHEN OBJECT_ID(N'dbo.InventoryMovements', N'U') IS NULL THEN 0 ELSE 1 END AS Ok
+    `)
+    const hasMov = Number(exists.recordset[0]?.Ok) === 1
+    const q = hasMov
+      ? `
+        SELECT
+          i.Id, i.Name, i.Unit,
+          CAST(i.Stock AS DECIMAL(12,3)) AS Stock,
+          ISNULL((
+            SELECT SUM(CASE WHEN m.Delta < 0 THEN -m.Delta ELSE 0 END)
+            FROM dbo.InventoryMovements m
+            WHERE m.InventoryId = i.Id AND m.CreatedAt >= @from
+          ), 0) AS Salio,
+          ISNULL((
+            SELECT SUM(m.Delta)
+            FROM dbo.InventoryMovements m
+            WHERE m.InventoryId = i.Id AND m.CreatedAt >= @from
+          ), 0) AS DeltaNeto
+        FROM dbo.Inventory i
+        ORDER BY i.Name
+      `
+      : `
+        SELECT Id, Name, Unit,
+          CAST(Stock AS DECIMAL(12,3)) AS Stock,
+          CAST(0 AS DECIMAL(12,3)) AS Salio,
+          CAST(0 AS DECIMAL(12,3)) AS DeltaNeto
+        FROM dbo.Inventory
+        ORDER BY Name
+      `
+    const r = await pool.request().input('from', sql.DateTime2, fromAt).query(q)
+    return (r.recordset as Array<Record<string, unknown>>).map((row) => {
+      const left = Number(row.Stock || 0)
+      const out = Number(row.Salio || 0)
+      const delta = Number(row.DeltaNeto || 0)
+      return {
+        id: String(row.Id),
+        name: String(row.Name || ''),
+        unit: String(row.Unit || ''),
+        had: round3(left - delta),
+        out: round3(out),
+        left: round3(left),
+      }
+    })
+  } catch {
+    return []
+  }
+}
+
 async function loadShiftTotals(fromAt: Date) {
   const pool = await getPool()
   const payR = await pool
@@ -114,10 +179,12 @@ cashRouter.get('/shift', authRequired, requireRoles('admin', 'cajero'), async (_
   try {
     const { fromAt, lastCloseAt } = await shiftBounds()
     const totals = await loadShiftTotals(fromAt)
+    const stock = await loadShiftStock(fromAt)
     res.json({
       fromAt: fromAt.toISOString(),
       lastCloseAt,
       ...totals,
+      stock,
     })
   } catch (e) {
     res.status(500).json({ error: (e as Error).message })
