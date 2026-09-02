@@ -2,10 +2,6 @@ import { ChefHat, Clock3, Flame, ShoppingBag, Table2, UtensilsCrossed, Wallet } 
 import { Link } from 'react-router-dom'
 import { useAuth } from '../auth/AuthContext'
 import { useStore } from '../store/StoreContext'
-import { ChefHat, Clock3, Flame, ShoppingBag, Table2, UtensilsCrossed, Wallet } from 'lucide-react'
-import { Link } from 'react-router-dom'
-import { useAuth } from '../auth/AuthContext'
-import { useStore } from '../store/StoreContext'
 import { elapsedMinutes, formatTime, isSameDay, limaYmd, padOrder, soles } from '../lib/format'
 import { PageTitle, StatusBadge, TypeBadge } from '../components/ui'
 

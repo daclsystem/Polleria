@@ -14,7 +14,6 @@ import {
   Plus,
   Search,
   ShoppingCart,
-  Table2,
   TicketPercent,
   Trash2,
   User,

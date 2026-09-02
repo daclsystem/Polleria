@@ -25,7 +25,9 @@ function emit() {
 export function subscribeMass(fn: (s: MassStatus) => void) {
   listeners.add(fn)
   fn({ ...status })
-  return () => listeners.delete(fn)
+  return () => {
+    listeners.delete(fn)
+  }
 }
 
 export function downloadMassTemplate() {
