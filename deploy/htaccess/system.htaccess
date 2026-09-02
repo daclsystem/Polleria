@@ -1,3 +1,8 @@
+<IfModule mod_mime.c>
+  AddType application/javascript .js .mjs
+  AddType text/css .css
+</IfModule>
+
 <IfModule mod_rewrite.c>
   RewriteEngine On
   RewriteBase /system/
@@ -5,6 +10,10 @@
   RewriteCond %{HTTPS} !=on
   RewriteCond %{HTTP:X-Forwarded-Proto} !=https
   RewriteRule ^ https://%{HTTP_HOST}%{REQUEST_URI} [L,R=301]
+
+  # Nunca reescribir JS/CSS/imagen a index.html (eso causa el error de MIME).
+  RewriteRule ^(assets|sounds)/ - [L]
+  RewriteRule \.(js|mjs|css|png|jpe?g|gif|svg|webp|woff2?|mp3|json|map)$ - [L]
 
   RewriteRule ^index\.html$ - [L]
   RewriteCond %{REQUEST_FILENAME} !-f

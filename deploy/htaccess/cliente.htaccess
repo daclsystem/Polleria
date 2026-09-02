@@ -6,6 +6,9 @@
   RewriteCond %{HTTP:X-Forwarded-Proto} !=https
   RewriteRule ^ https://%{HTTP_HOST}%{REQUEST_URI} [L,R=301]
 
+  RewriteRule ^(assets|sounds)/ - [L]
+  RewriteRule \.(js|mjs|css|png|jpe?g|gif|svg|webp|woff2?|mp3|json|map)$ - [L]
+
   RewriteRule ^index\.html$ - [L]
   RewriteCond %{REQUEST_FILENAME} !-f
   RewriteCond %{REQUEST_FILENAME} !-d

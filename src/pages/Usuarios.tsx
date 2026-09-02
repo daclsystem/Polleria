@@ -1,11 +1,13 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { useAuth } from '../auth/AuthContext'
 import { useStore } from '../store/StoreContext'
 import { uid } from '../lib/format'
 import { ROLE_LABEL, type Role, type User } from '../types'
 import { Field, Modal, PageTitle, RoleBadge, inputClass } from '../components/ui'
 import { ConfirmProcess } from '../components/ConfirmProcess'
-import { defaultAvatarUrl, shortAccountId } from '../lib/avatar'
+import { realPhotoUrl, shortAccountId } from '../lib/avatar'
+import { PersonAvatar } from '../components/PersonAvatar'
+import { uploadAvatar } from '../lib/minio'
 
 const ROLES: Role[] = ['admin', 'cajero', 'cocina', 'mozo']
 
@@ -30,7 +32,6 @@ export function Usuarios() {
               role: 'mozo',
               active: true,
               pin: '5555',
-              photoUrl: defaultAvatarUrl('Mozo', 'staff'),
             })
           }
         >
@@ -43,10 +44,11 @@ export function Usuarios() {
           .map((u) => (
           <article key={u.id} className="flex flex-wrap items-center justify-between gap-3 rounded-2xl bg-white p-4 shadow-sm">
             <div className="flex items-center gap-3">
-              <img
-                src={u.photoUrl || defaultAvatarUrl(u.name, 'staff')}
-                alt={u.name}
-                className="h-12 w-12 rounded-full object-cover ring-1 ring-ink/10"
+              <PersonAvatar
+                name={u.name}
+                photoUrl={u.photoUrl}
+                tone="staff"
+                className="h-12 w-12 text-sm ring-1 ring-ink/10"
               />
               <div>
                 <p className="font-semibold">{u.name}</p>
@@ -84,14 +86,7 @@ export function Usuarios() {
               setDlg('confirm')
             }}
           >
-            <div className="flex items-center gap-3 rounded-2xl bg-cream px-3 py-3">
-              <img
-                src={editing.photoUrl || defaultAvatarUrl(editing.name || 'Usuario', 'staff')}
-                alt=""
-                className="h-14 w-14 rounded-full object-cover"
-              />
-              <p className="text-xs text-ink/45">Vista previa de la foto de sesión</p>
-            </div>
+            <StaffPhotoField editing={editing} setEditing={setEditing} />
             <Field label="Nombre">
               <input
                 className={inputClass}
@@ -134,14 +129,6 @@ export function Usuarios() {
                 onChange={(e) => setEditing({ ...editing, password: e.target.value })}
               />
             </Field>
-            <Field label="URL foto (opcional)">
-              <input
-                className={inputClass}
-                value={editing.photoUrl || ''}
-                onChange={(e) => setEditing({ ...editing, photoUrl: e.target.value })}
-                placeholder="https://..."
-              />
-            </Field>
             <Field label="Rol">
               <select
                 className={inputClass}
@@ -177,8 +164,7 @@ export function Usuarios() {
         onConfirm={() => {
           if (!editing) return
           setDlg('busy')
-          const photoUrl = editing.photoUrl || defaultAvatarUrl(editing.name || 'Usuario', 'staff')
-          void saveUser({ ...editing, photoUrl })
+          void saveUser({ ...editing, photoUrl: realPhotoUrl(editing.photoUrl) })
             .then(() => setDlg('done'))
             .catch((err) => {
               setDlg('confirm')
@@ -189,6 +175,49 @@ export function Usuarios() {
         onDone={() => {
           setDlg(null)
           setEditing(null)
+        }}
+      />
+    </div>
+  )
+}
+
+function StaffPhotoField({
+  editing,
+  setEditing,
+}: {
+  editing: User
+  setEditing: (u: User) => void
+}) {
+  const ref = useRef<HTMLInputElement>(null)
+  const [busy, setBusy] = useState(false)
+  return (
+    <div className="flex items-center gap-3 rounded-2xl bg-cream px-3 py-3">
+      <button type="button" onClick={() => ref.current?.click()} className="shrink-0" disabled={busy}>
+        <PersonAvatar
+          name={editing.name || 'Usuario'}
+          photoUrl={editing.photoUrl}
+          tone="staff"
+          className="h-14 w-14 text-base"
+        />
+      </button>
+      <div className="min-w-0 text-sm">
+        <p className="font-semibold">{busy ? 'Subiendo foto…' : 'Foto del usuario'}</p>
+        <p className="text-xs text-ink/45">Toca para subir a MinIO. Sin foto se muestran iniciales.</p>
+      </div>
+      <input
+        ref={ref}
+        type="file"
+        accept="image/*"
+        className="hidden"
+        onChange={(e) => {
+          const file = e.target.files?.[0]
+          e.target.value = ''
+          if (!file) return
+          setBusy(true)
+          void uploadAvatar(file)
+            .then((url) => setEditing({ ...editing, photoUrl: url }))
+            .catch((err) => alert((err as Error).message || 'No se pudo subir la foto'))
+            .finally(() => setBusy(false))
         }}
       />
     </div>

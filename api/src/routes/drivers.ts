@@ -1,6 +1,7 @@
 import { Router } from 'express'
 import { v4 as uuid } from 'uuid'
 import { getPool, sql } from '../db.js'
+import { persistablePhotoUrl } from '../photoUrl.js'
 import { authRequired, requireRoles } from '../auth.js'
 import { emitEvent, roomsForOrderStatus } from '../realtime.js'
 import { notifyOrderStatusServer } from '../lib/whatsappNotify.js'
@@ -190,9 +191,7 @@ driversRouter.post('/', authRequired, requireRoles('admin'), async (req, res) =>
   const id = isGuid(body.id) ? body.id! : uuid()
   let phone = body.phone.replace(/\D/g, '')
   if (phone.length === 9 && phone.startsWith('9')) phone = `51${phone}`
-  const photo =
-    body.photoUrl ||
-    `https://ui-avatars.com/api/?name=${encodeURIComponent(body.name)}&background=0f766e&color=ffffff&size=128&bold=true`
+  const photo = persistablePhotoUrl(body.photoUrl)
 
   const pool = await getPool()
   await ensureDriverPlate(pool)
@@ -205,7 +204,7 @@ driversRouter.post('/', authRequired, requireRoles('admin'), async (req, res) =>
     .input('active', sql.Bit, body.active !== false)
     .input('vehicle', sql.NVarChar, body.vehicleInfo || null)
     .input('plate', sql.NVarChar, body.plate ? String(body.plate).trim().toUpperCase() : null)
-    .input('photo', sql.NVarChar, photo)
+    .input('photo', sql.NVarChar(500), photo)
     .query(`
       INSERT INTO dbo.Drivers (Id, Name, Phone, Active, VehicleInfo, Plate, PhotoUrl)
       VALUES (@id, @name, @phone, @active, @vehicle, @plate, @photo)
@@ -229,9 +228,7 @@ driversRouter.put('/:id', authRequired, requireRoles('admin'), async (req, res) 
   }
   let phone = String(body.phone || '').replace(/\D/g, '')
   if (phone.length === 9 && phone.startsWith('9')) phone = `51${phone}`
-  const photo =
-    body.photoUrl ||
-    `https://ui-avatars.com/api/?name=${encodeURIComponent(body.name || 'Conductor')}&background=0f766e&color=ffffff&size=128&bold=true`
+  const photo = persistablePhotoUrl(body.photoUrl)
   const pool = await getPool()
   await ensureDriverPlate(pool)
   await pool
@@ -242,7 +239,7 @@ driversRouter.put('/:id', authRequired, requireRoles('admin'), async (req, res) 
     .input('active', sql.Bit, body.active !== false)
     .input('vehicle', sql.NVarChar, body.vehicleInfo || null)
     .input('plate', sql.NVarChar, body.plate ? String(body.plate).trim().toUpperCase() : null)
-    .input('photo', sql.NVarChar, photo)
+    .input('photo', sql.NVarChar(500), photo)
     .query(`
       UPDATE dbo.Drivers
       SET Name=@name, Phone=@phone, Active=@active, VehicleInfo=@vehicle, Plate=@plate, PhotoUrl=@photo, UpdatedAt=SYSUTCDATETIME()
@@ -729,7 +726,7 @@ driversRouter.patch('/me', authRequired, async (req, res) => {
     }
     if (photoUrl !== undefined) {
       sets.push('PhotoUrl = @photo')
-      rq.input('photo', sql.NVarChar, photoUrl || null)
+      rq.input('photo', sql.NVarChar(500), persistablePhotoUrl(photoUrl))
     }
     if (sets.length === 0) {
       return res.status(400).json({ error: 'Nada que actualizar' })

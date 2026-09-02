@@ -50,9 +50,16 @@ export function isPlaceholderAvatar(url?: string | null) {
   if (!url) return true
   return (
     url.includes('ui-avatars.com') ||
-    url.startsWith('data:image/svg+xml') ||
+    url.startsWith('data:') ||
     url.includes('googleusercontent') && url.includes('avatar')
   )
+}
+
+/** URL de foto real para persistir (MinIO). Los SVG/ui-avatars no se guardan. */
+export function realPhotoUrl(url?: string | null): string | undefined {
+  const v = (url || '').trim()
+  if (!v || isPlaceholderAvatar(v) || !/^https?:\/\//i.test(v)) return undefined
+  return v
 }
 
 /** Foto real si hay; si es placeholder o ui-avatars, regenera iniciales correctas. */

@@ -6,8 +6,6 @@ export const APP_NAME = (import.meta.env.VITE_APP || 'web') as
   | 'cliente'
 
 export const BASE_URL = import.meta.env.BASE_URL || '/'
-/** Basename para React Router ('' en raíz). */
-export const BASENAME = BASE_URL.replace(/\/$/, '')
 
 const APP_BASE: Record<typeof APP_NAME, string> = {
   web: '',
@@ -15,6 +13,9 @@ const APP_BASE: Record<typeof APP_NAME, string> = {
   driver: '/driver',
   cliente: '/cliente',
 }
+
+/** Basename de router: carpeta real de la app, no el `base` relativo del build. */
+export const BASENAME = APP_BASE[APP_NAME]
 
 /** Puertos Vite en local (cada app es un server). */
 const DEV_PORTS: Record<typeof APP_NAME, number> = {

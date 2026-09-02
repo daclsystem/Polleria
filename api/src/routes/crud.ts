@@ -2,6 +2,7 @@ import { Router } from 'express'
 import { v4 as uuid } from 'uuid'
 import bcrypt from 'bcryptjs'
 import { getPool, sql } from '../db.js'
+import { persistablePhotoUrl } from '../photoUrl.js'
 import { authRequired, requireRoles } from '../auth.js'
 
 export const crudRouter = Router()
@@ -261,9 +262,7 @@ crudRouter.post('/users', authRequired, requireRoles('admin'), async (req, res) 
   }
   const id = isGuid(u.id) ? u.id! : uuid()
   const hash = await bcrypt.hash(u.password || 'changeme', 10)
-  const photo =
-    u.photoUrl ||
-    `https://ui-avatars.com/api/?name=${encodeURIComponent(u.name)}&background=e11d2e&color=ffffff&size=128&bold=true`
+  const photo = persistablePhotoUrl(u.photoUrl)
   const pool = await getPool()
   try {
     await pool
@@ -277,7 +276,7 @@ crudRouter.post('/users', authRequired, requireRoles('admin'), async (req, res) 
     .input('pin', sql.NVarChar, u.pin || '0000')
     .input('phone', sql.NVarChar, u.phone || null)
     .input('dni', sql.NVarChar, u.dni || null)
-    .input('photo', sql.NVarChar, photo)
+    .input('photo', sql.NVarChar(500), photo)
     .query(`
       INSERT INTO dbo.Users (Id, Name, Email, PasswordHash, Role, Active, Pin, Phone, Dni, IsSystem, PhotoUrl)
       VALUES (@id, @name, @email, @hash, @role, @active, @pin, @phone, @dni, 0, @photo)
@@ -310,9 +309,7 @@ crudRouter.put('/users/:id', authRequired, requireRoles('admin'), async (req, re
     photoUrl?: string
   }
   const pool = await getPool()
-  const photo =
-    u.photoUrl ||
-    `https://ui-avatars.com/api/?name=${encodeURIComponent(u.name || 'Usuario')}&background=e11d2e&color=ffffff&size=128&bold=true`
+  const photo = persistablePhotoUrl(u.photoUrl)
   const reqDb = pool
     .request()
     .input('id', sql.UniqueIdentifier, id)
@@ -323,22 +320,28 @@ crudRouter.put('/users/:id', authRequired, requireRoles('admin'), async (req, re
     .input('pin', sql.NVarChar, u.pin || '0000')
     .input('phone', sql.NVarChar, u.phone || null)
     .input('dni', sql.NVarChar, u.dni || null)
-    .input('photo', sql.NVarChar, photo)
+    .input('photo', sql.NVarChar(500), photo)
 
-  if (u.password && u.password.length >= 4) {
-    const hash = await bcrypt.hash(u.password, 10)
-    reqDb.input('hash', sql.NVarChar, hash)
-    await reqDb.query(`
-      UPDATE dbo.Users SET Name=@name, Email=@email, PasswordHash=@hash, Role=@role,
-        Active=@active, Pin=@pin, Phone=@phone, Dni=@dni, PhotoUrl=@photo, UpdatedAt=SYSUTCDATETIME()
-      WHERE Id=@id AND ISNULL(IsSystem, 0) = 0
-    `)
-  } else {
-    await reqDb.query(`
-      UPDATE dbo.Users SET Name=@name, Email=@email, Role=@role,
-        Active=@active, Pin=@pin, Phone=@phone, Dni=@dni, PhotoUrl=@photo, UpdatedAt=SYSUTCDATETIME()
-      WHERE Id=@id AND ISNULL(IsSystem, 0) = 0
-    `)
+  try {
+    if (u.password && u.password.length >= 4) {
+      const hash = await bcrypt.hash(u.password, 10)
+      reqDb.input('hash', sql.NVarChar, hash)
+      await reqDb.query(`
+        UPDATE dbo.Users SET Name=@name, Email=@email, PasswordHash=@hash, Role=@role,
+          Active=@active, Pin=@pin, Phone=@phone, Dni=@dni, PhotoUrl=@photo, UpdatedAt=SYSUTCDATETIME()
+        WHERE Id=@id AND ISNULL(IsSystem, 0) = 0
+      `)
+    } else {
+      await reqDb.query(`
+        UPDATE dbo.Users SET Name=@name, Email=@email, Role=@role,
+          Active=@active, Pin=@pin, Phone=@phone, Dni=@dni, PhotoUrl=@photo, UpdatedAt=SYSUTCDATETIME()
+        WHERE Id=@id AND ISNULL(IsSystem, 0) = 0
+      `)
+    }
+  } catch (e) {
+    const msg = (e as Error).message || ''
+    if (/UQ_Users_Email/i.test(msg)) return res.status(409).json({ error: 'Ese correo ya está registrado' })
+    return res.status(500).json({ error: msg || 'No se pudo guardar el usuario' })
   }
   res.json({ ok: true })
 })
@@ -358,7 +361,7 @@ crudRouter.patch('/users/me', authRequired, async (req, res) => {
     }
     if (photoUrl !== undefined) {
       sets.push('PhotoUrl = @photo')
-      rq.input('photo', sql.NVarChar, photoUrl || null)
+      rq.input('photo', sql.NVarChar(500), persistablePhotoUrl(photoUrl))
     }
     if (sets.length === 0) {
       return res.status(400).json({ error: 'Nada que actualizar' })
