@@ -236,6 +236,18 @@ export function CajaCierre() {
   const [dlg, setDlg] = useState<'confirm' | 'busy' | 'done' | null>(null)
   const [diffDone, setDiffDone] = useState<number | null>(null)
 
+  const liveShift = shiftFromOrders(
+    state.orders,
+    typeof localStorage !== 'undefined' ? localStorage.getItem(LAST_CLOSE_KEY) : null,
+  )
+  const hasSales = (shift?.ordersCount ?? liveShift.ordersCount) > 0 && (shift?.salesTotal ?? liveShift.salesTotal) > 0
+  const cuanti = cuantificableResumen(
+    state.orders,
+    state.products,
+    state.inventory,
+    shift?.fromAt || liveShift.fromAt,
+  )
+
   const applyShift = (s: CashShift, api: boolean) => {
     setFromApi(api)
     setShift(s)
@@ -277,11 +289,17 @@ export function CajaCierre() {
         difference: diff,
         notes: notes.trim() || undefined,
         signature: signature || undefined,
+        cuantificable: cuanti,
       }),
     )
   }
 
   const runClose = async () => {
+    if (!hasSales) {
+      setDlg(null)
+      setErr('No hay ventas en este turno. No se puede cerrar caja.')
+      return
+    }
     if (!signature) {
       setDlg(null)
       setErr('Firma la entrega del efectivo para liquidar.')
@@ -356,19 +374,34 @@ export function CajaCierre() {
 
   return (
     <>
-      <button
-        type="button"
-        onClick={() => {
-          setNotes('')
-          setSignature('')
-          setDlg(null)
-          setTab('cierre')
-          setOpen(true)
-        }}
-        className="inline-flex min-h-10 items-center gap-2 rounded-full bg-ink px-4 py-2 text-sm font-semibold text-cream"
-      >
-        <Wallet size={16} /> Cierre de caja
-      </button>
+      <div className="flex flex-wrap items-center justify-end gap-2">
+        <button
+          type="button"
+          onClick={() => {
+            setDlg(null)
+            setTab('historial')
+            setOpen(true)
+          }}
+          className="inline-flex min-h-10 items-center gap-2 rounded-full bg-cream px-4 py-2 text-sm font-semibold text-ink"
+        >
+          <History size={16} /> Historial
+        </button>
+        <button
+          type="button"
+          disabled={!hasSales}
+          title={!hasSales ? 'No hay ventas en este turno' : undefined}
+          onClick={() => {
+            setNotes('')
+            setSignature('')
+            setDlg(null)
+            setTab('cierre')
+            setOpen(true)
+          }}
+          className="inline-flex min-h-10 items-center gap-2 rounded-full bg-ink px-4 py-2 text-sm font-semibold text-cream disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          <Wallet size={16} /> Cierre de caja
+        </button>
+      </div>
 
       <Modal open={open} title="Cierre de caja" onClose={() => setOpen(false)} wide>
         <div className="mb-3 flex gap-2">
@@ -477,6 +510,42 @@ export function CajaCierre() {
                 Aún hay {shift.pendingUnpaid} pedido{shift.pendingUnpaid === 1 ? '' : 's'} por cobrar.
               </p>
             ) : null}
+            {!hasSales ? (
+              <p className="rounded-xl bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-900">
+                No hay ventas cobradas en este turno. El cierre de caja no se puede hacer.
+              </p>
+            ) : null}
+            {cuanti.products.length > 0 || cuanti.insumos.length > 0 ? (
+              <div className="rounded-2xl bg-cream p-3 text-sm">
+                <p className="mb-2 text-[11px] font-bold uppercase tracking-wide text-ink/40">
+                  Cuantificables del turno
+                </p>
+                {cuanti.products.length > 0 ? (
+                  <ul className="space-y-1">
+                    {cuanti.products.map((l) => (
+                      <li key={l.name} className="flex justify-between gap-2">
+                        <span className="min-w-0 truncate">{l.name}</span>
+                        <span className="shrink-0 font-semibold">
+                          Salió {qtyLabel(l.sold, l.unit)} · queda {qtyLabel(l.left, l.unit)}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
+                {cuanti.insumos.length > 0 ? (
+                  <ul className={`${cuanti.products.length ? 'mt-2 border-t border-ink/10 pt-2' : ''} space-y-1`}>
+                    {cuanti.insumos.map((l) => (
+                      <li key={l.name} className="flex justify-between gap-2 text-ink/70">
+                        <span className="min-w-0 truncate">{l.name}</span>
+                        <span className="shrink-0">
+                          Salió {qtyLabel(l.sold, l.unit)} · queda {qtyLabel(l.left, l.unit)}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
+              </div>
+            ) : null}
             <Field label="Conteo de efectivo en caja">
               <input
                 className={inputClass}
@@ -507,21 +576,24 @@ export function CajaCierre() {
             <div className="grid grid-cols-2 gap-2">
               <button
                 type="button"
+                disabled={!hasSales}
                 onClick={() => printCurrent()}
-                className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-cream text-sm font-bold"
+                className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-cream text-sm font-bold disabled:opacity-40"
               >
                 <Printer size={16} /> Imprimir
               </button>
               <button
                 type="button"
+                disabled={!hasSales}
                 onClick={() => {
+                  if (!hasSales) return
                   if (!signature) {
                     setErr('Firma la entrega del efectivo para liquidar.')
                     return
                   }
                   setDlg('confirm')
                 }}
-                className="min-h-11 rounded-xl bg-ink text-sm font-bold text-cream"
+                className="min-h-11 rounded-xl bg-ink text-sm font-bold text-cream disabled:opacity-40"
               >
                 Cerrar caja
               </button>
