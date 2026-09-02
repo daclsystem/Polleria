@@ -2,12 +2,16 @@ import { ChefHat, Clock3, Flame, ShoppingBag, Table2, UtensilsCrossed, Wallet } 
 import { Link } from 'react-router-dom'
 import { useAuth } from '../auth/AuthContext'
 import { useStore } from '../store/StoreContext'
-import { elapsedMinutes, formatTime, isSameDay, padOrder, soles } from '../lib/format'
+import { ChefHat, Clock3, Flame, ShoppingBag, Table2, UtensilsCrossed, Wallet } from 'lucide-react'
+import { Link } from 'react-router-dom'
+import { useAuth } from '../auth/AuthContext'
+import { useStore } from '../store/StoreContext'
+import { elapsedMinutes, formatTime, isSameDay, limaYmd, padOrder, soles } from '../lib/format'
 import { PageTitle, StatusBadge, TypeBadge } from '../components/ui'
 
 export function Dashboard() {
   const { state } = useStore()
-  const { can, user } = useAuth()
+  const { can, actingRole } = useAuth()
   const today = state.orders.filter((o) => isSameDay(o.createdAt) && o.status !== 'cancelado')
   const sales = today.filter((o) => o.paid).reduce((s, o) => s + o.total, 0)
   const tickets = today.length
@@ -15,16 +19,18 @@ export function Dashboard() {
   const pendingPay = state.orders.filter((o) => !o.paid && o.status !== 'cancelado').length
   const avg = paidCount ? sales / paidCount : 0
   const kitchen = state.orders.filter((o) => o.status === 'nuevo' || o.status === 'en_cocina').length
-  const isCajero = user?.role === 'cajero'
+  const isCajero = actingRole === 'cajero'
 
   const days = Array.from({ length: 7 }, (_, i) => {
     const d = new Date()
     d.setDate(d.getDate() - (6 - i))
+    const key = limaYmd(d)
     const total = state.orders
-      .filter((o) => isSameDay(o.createdAt, d) && o.paid && o.status !== 'cancelado')
+      .filter((o) => limaYmd(o.createdAt) === key && o.paid && o.status !== 'cancelado')
       .reduce((s, o) => s + o.total, 0)
     return {
-      label: d.toLocaleDateString('es-PE', { weekday: 'short' }),
+      key,
+      label: d.toLocaleDateString('es-PE', { weekday: 'short', timeZone: 'America/Lima' }),
       total,
     }
   })
@@ -52,22 +58,22 @@ export function Dashboard() {
 
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         {can('pos') ? (
-          <Action to="/pos" title="Tomar pedido" hint="Salón, llevar o delivery" icon={UtensilsCrossed} accent />
+          <Action to="/pos" title="Para llevar" hint="Vienen, piden y se lo llevan" icon={UtensilsCrossed} accent />
         ) : null}
-        {can('comandas') ? (
+        {can('comandas') && actingRole === 'cajero' ? (
           <Action
             to="/comandas"
-            title={isCajero ? 'Por cobrar' : 'Ver pedidos'}
+            title="Por cobrar"
             hint={
-              isCajero
-                ? pendingPay === 1
-                  ? '1 pedido pendiente de pago'
-                  : `${pendingPay} pedidos pendientes de pago`
-                : 'Cobrar e imprimir'
+              pendingPay === 1
+                ? '1 pedido pendiente de pago'
+                : `${pendingPay} pedidos pendientes de pago`
             }
             icon={ShoppingBag}
-            accent={isCajero}
+            accent
           />
+        ) : can('pedidos-web') ? (
+          <Action to="/pedidos-web" title="Pedidos" hint="Mesa, recojo y delivery" icon={ShoppingBag} />
         ) : null}
         {can('cocina') ? (
           <Action to="/cocina" title="Ir a cocina" hint={`${kitchen} en preparación`} icon={ChefHat} />
@@ -96,26 +102,32 @@ export function Dashboard() {
       <div className="grid gap-4 lg:grid-cols-3">
         <section className="card p-4 sm:p-5 lg:col-span-2">
           <div className="mb-4 flex items-end justify-between gap-3">
-            <h2 className="font-display text-xl">Ventas 7 días</h2>
-            <Link to="/reportes" className="text-sm font-medium text-ember">
+            <h2 className="text-lg font-black tracking-tight sm:text-xl">Ventas 7 días</h2>
+            <Link to="/reportes" className="text-sm font-bold text-[#1a3d1a] dark:text-gold">
               Reportes
             </Link>
           </div>
-          <div className="flex h-40 items-end gap-2 sm:h-48 sm:gap-3">
-            {days.map((d) => (
-              <div key={d.label} className="flex flex-1 flex-col items-center gap-2">
-                <div
-                  className="w-full max-w-14 rounded-t-lg bg-linear-to-t from-ember-hot to-gold"
-                  style={{ height: `${Math.max(10, (d.total / max) * 100)}%` }}
-                  title={soles(d.total)}
-                />
-                <span className="text-[10px] uppercase text-ink/40 sm:text-[11px]">{d.label}</span>
-              </div>
-            ))}
+          <div className="flex h-44 items-end gap-1.5 sm:h-52 sm:gap-3">
+            {days.map((d) => {
+              const pct = d.total <= 0 ? 0 : Math.max(14, (d.total / max) * 100)
+              return (
+                <div key={d.key} className="flex h-full min-w-0 flex-1 flex-col items-center justify-end gap-1">
+                  <span className="max-w-full truncate text-[10px] font-bold text-ink/70">
+                    {d.total ? soles(d.total) : '—'}
+                  </span>
+                  <div
+                    className="w-full max-w-14 rounded-t-lg bg-gold"
+                    style={{ height: d.total ? `${pct}%` : '6px', opacity: d.total ? 1 : 0.3 }}
+                    title={soles(d.total)}
+                  />
+                  <span className="text-[10px] uppercase text-ink/40 sm:text-[11px]">{d.label}</span>
+                </div>
+              )
+            })}
           </div>
         </section>
         <section className="card p-4 sm:p-5">
-          <h2 className="font-display text-xl">Más pedidos</h2>
+          <h2 className="text-lg font-black tracking-tight sm:text-xl">Más pedidos</h2>
           <ul className="mt-4 space-y-3">
             {top.length === 0 ? <p className="text-sm text-ink/40">Aún no hay ventas.</p> : null}
             {top.map((p, i) => (
@@ -135,7 +147,7 @@ export function Dashboard() {
 
       <div className="grid gap-4 lg:grid-cols-3">
         <section className="card p-4 sm:p-5 lg:col-span-2">
-          <h2 className="font-display text-xl">Últimas comandas</h2>
+          <h2 className="text-lg font-black tracking-tight sm:text-xl">Últimas comandas</h2>
           <div className="mt-3 space-y-2 md:hidden">
             {recent.map((o) => (
               <div key={o.id} className="rounded-2xl bg-cream px-3 py-3">
@@ -184,7 +196,7 @@ export function Dashboard() {
           </div>
         </section>
         <section className="rounded-3xl bg-ink p-5 text-cream shadow-sm">
-          <h2 className="font-display text-xl text-gold">Stock bajo</h2>
+          <h2 className="text-lg font-black tracking-tight text-gold sm:text-xl">Stock bajo</h2>
           <ul className="mt-4 space-y-3">
             {lowStock.length === 0 ? (
               <p className="text-sm text-cream/50">Todo abastecido.</p>
@@ -226,9 +238,9 @@ function Stat({
     <div className="card p-3 sm:p-5">
       <div className="flex items-center justify-between gap-2">
         <p className="text-[10px] font-semibold tracking-wide text-ink/40 uppercase sm:text-xs">{label}</p>
-        <Icon size={16} className="text-ember" />
+        <Icon size={16} className="text-[#1a3d1a] dark:text-gold" />
       </div>
-      <p className="mt-2 font-display text-xl leading-none sm:mt-3 sm:text-3xl">{value}</p>
+      <p className="mt-2 text-xl font-black leading-none sm:mt-3 sm:text-3xl">{value}</p>
       <p className="mt-1 text-[11px] text-ink/45 sm:text-xs">{hint}</p>
     </div>
   )
@@ -250,18 +262,14 @@ function Action({
   return (
     <Link
       to={to}
-      className={`card-press flex min-h-[5.5rem] flex-col justify-between rounded-[1.35rem] p-4 ${
-        accent
-          ? 'bg-ember text-white shadow-lg shadow-ember/25'
-          : 'card'
+      className={`card-press flex min-h-[5.75rem] flex-col justify-between rounded-[1.35rem] p-4 ${
+        accent ? 'bg-gold text-[#1a3d1a] shadow-lg shadow-yellow-500/20' : 'card'
       }`}
     >
-      <Icon size={20} className={accent ? 'text-white' : 'text-ember'} />
+      <Icon size={20} className={accent ? 'text-[#1a3d1a]' : 'text-[#1a3d1a] dark:text-gold'} />
       <div>
-        <p className={`font-display text-base leading-tight sm:text-lg ${accent ? 'text-white' : ''}`}>
-          {title}
-        </p>
-        <p className={`mt-0.5 text-[11px] ${accent ? 'text-white/80' : 'text-ink/45'}`}>{hint}</p>
+        <p className="text-base font-black leading-tight sm:text-lg">{title}</p>
+        <p className={`mt-0.5 text-[11px] ${accent ? 'text-[#1a3d1a]/70' : 'text-ink/45'}`}>{hint}</p>
       </div>
     </Link>
   )

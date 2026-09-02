@@ -1,5 +1,6 @@
 import { LogOut } from 'lucide-react'
-import { defaultAvatarUrl, shortAccountId } from '../lib/avatar'
+import { shortAccountId } from '../lib/avatar'
+import { PersonAvatar } from './PersonAvatar'
 
 type Tone = 'staff' | 'customer' | 'driver'
 
@@ -23,7 +24,6 @@ export function ConfirmLogout({
   onCancel: () => void
 }) {
   if (!open) return null
-  const src = photoUrl || defaultAvatarUrl(name, tone)
   const idLabel = shortAccountId(accountId)
 
   return (
@@ -31,11 +31,7 @@ export function ConfirmLogout({
       <button type="button" className="absolute inset-0 cursor-default" aria-label="Cerrar" onClick={onCancel} />
       <div className="relative z-10 w-full max-w-sm rounded-t-3xl bg-surface p-6 text-ink shadow-2xl sm:rounded-3xl">
         <div className="flex flex-col items-center text-center">
-          <img
-            src={src}
-            alt={name}
-            className="h-20 w-20 rounded-full object-cover ring-4 ring-ember/15"
-          />
+          <PersonAvatar name={name} photoUrl={photoUrl} tone={tone} className="h-20 w-20 text-xl" />
           <p className="mt-3 text-lg font-bold text-ink">{name}</p>
           {roleLabel ? <p className="text-sm text-ink/50">{roleLabel}</p> : null}
           <p className="mt-1 font-mono text-xs font-semibold tracking-wider text-ink/40">

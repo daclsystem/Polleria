@@ -193,16 +193,36 @@ export async function deductStockForKitchenItems(
   })
 }
 
-/** Barra / gaseosa: descuenta al vender (ítems sin cocina) */
+/** Al cobrar: baja recetas de todos los ítems (pollo 0.5, gaseosa 1, etc.) con mesa y hora. */
 export async function deductStockForSaleItems(
   orderId: string,
   tx: InstanceType<typeof sql.Transaction>,
   userId?: string | null,
 ) {
+  let mesa = 'Mostrador'
+  try {
+    const meta = await new sql.Request(tx)
+      .input('orderId', sql.UniqueIdentifier, orderId)
+      .query(`
+        SELECT t.Number AS TableNumber
+        FROM dbo.Orders o
+        LEFT JOIN dbo.Tables t ON t.Id = o.TableId
+        WHERE o.Id = @orderId
+      `)
+    const n = meta.recordset[0]?.TableNumber
+    if (n != null) mesa = `Mesa ${n}`
+  } catch {
+    /* ignore */
+  }
+  const hora = new Date().toLocaleTimeString('es-PE', {
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+    timeZone: 'America/Lima',
+  })
   return deductStockForOrderItems(orderId, tx, userId, {
-    kitchenStatuses: [null],
     reason: 'venta',
-    notesPrefix: 'Venta',
+    notesPrefix: `Salida · ${mesa} · ${hora}`,
   })
 }
 

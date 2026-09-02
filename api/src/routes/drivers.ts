@@ -196,6 +196,7 @@ driversRouter.post('/', authRequired, requireRoles('admin'), async (req, res) =>
 
   const pool = await getPool()
   await ensureDriverPlate(pool)
+  try {
   await pool
     .request()
     .input('id', sql.UniqueIdentifier, id)
@@ -209,6 +210,11 @@ driversRouter.post('/', authRequired, requireRoles('admin'), async (req, res) =>
       INSERT INTO dbo.Drivers (Id, Name, Phone, Active, VehicleInfo, Plate, PhotoUrl)
       VALUES (@id, @name, @phone, @active, @vehicle, @plate, @photo)
     `)
+  } catch (e) {
+    const msg = (e as Error).message || ''
+    if (/UQ_Drivers_Phone/i.test(msg)) return res.status(409).json({ error: 'Ese celular ya está en conductores' })
+    return res.status(500).json({ error: msg || 'No se pudo crear el conductor' })
+  }
   res.status(201).json({ id, photoUrl: photo })
 })
 

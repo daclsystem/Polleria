@@ -20,6 +20,7 @@ import {
   apiDeleteProduct,
   apiDeleteUser,
   apiFetch,
+  apiGetWebsite,
   apiLoginCustomer,
   apiPayOrder,
   apiRegisterCustomer,
@@ -55,6 +56,7 @@ import { playSound } from '../lib/sounds'
 import { filterKitchenItems } from '../lib/kitchen'
 import { createSeed } from '../data/seed'
 import { APP_NAME } from '../lib/paths'
+import { rememberWebSite } from '../lib/webSite'
 import type {
   AppState,
   Branch,
@@ -225,18 +227,33 @@ interface StoreApi {
   /** Retorno a almacén */
   stockRetorno: (id: string, itemIds?: string[]) => Promise<void>
   addItemsToOrder: (id: string, newItems: OrderItem[], createdBy: string) => void
-  payOrder: (id: string, method: PaymentMethod) => void
+  payOrder: (
+    id: string,
+    input:
+      | PaymentMethod
+      | {
+          payments: Array<{ method: string; amount: number; cashTendered?: number; reference?: string }>
+          billing?: {
+            docTipo?: string
+            docNumero?: string
+            docNombre?: string
+            docEmail?: string
+            docPhone?: string
+            docAddress?: string
+          }
+        },
+  ) => Promise<void>
   cancelOrder: (id: string) => void
   updateOrder: (id: string, patch: Partial<Order>) => void
   saveProduct: (product: Product) => void
   deleteProduct: (id: string) => void
-  saveUser: (user: User) => void
+  saveUser: (user: User) => Promise<void>
   deleteUser: (id: string) => void
-  saveInventory: (item: InventoryItem) => void
+  saveInventory: (item: InventoryItem) => Promise<void>
   adjustStock: (id: string, delta: number, extra?: { reason?: 'ingreso' | 'ajuste' | 'perdida'; notes?: string }) => void
   updateTable: (id: string, patch: Partial<Table>) => void
   saveSettings: (settings: Settings) => void
-  saveBranch: (branch: Branch) => void
+  saveBranch: (branch: Branch) => Promise<void>
   deleteBranch: (id: string) => void
   registerCustomer: (data: {
     name: string
@@ -335,6 +352,12 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   reloadFromApiRef.current = reloadFromApi
 
   useEffect(() => {
+    void apiGetWebsite(false)
+      .then((w) => rememberWebSite(w.site))
+      .catch(() => undefined)
+  }, [])
+
+  useEffect(() => {
     requireApi()
 
     const startLive = () => {
@@ -349,6 +372,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       }
       document.addEventListener('visibilitychange', onVisible)
       window.addEventListener('focus', onVisible)
+      const onViewRole = () => {
+        connectRealtime(roomsForStaffRole(readStaffRole()))
+      }
+      window.addEventListener('polleria-view-role', onViewRole)
       const offEvent = onRealtimeEvent((event: RealtimeEvent, payload) => {
         if (event === 'inventory:updated') {
           const data = payload as {
@@ -422,6 +449,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         offReconnect()
         document.removeEventListener('visibilitychange', onVisible)
         window.removeEventListener('focus', onVisible)
+        window.removeEventListener('polleria-view-role', onViewRole)
         disconnectRealtime()
         setLive(false)
       }
@@ -429,12 +457,16 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
     const loadPublicCatalog = () => {
       setApiLoading(true)
-      void apiFetch<{ products: Product[] }>('/api/catalog/products', { auth: false })
-        .then((data) => {
+      void Promise.all([
+        apiFetch<{ products: Product[] }>('/api/catalog/products', { auth: false }),
+        apiFetch<{ tables: Table[] }>('/api/catalog/floor', { auth: false }).catch(() => ({ tables: [] as Table[] })),
+      ])
+        .then(([data, floor]) => {
           const list = enrichProducts(data.products || [])
           setState((prev) => ({
             ...prev,
             products: list.length ? list : enrichProducts(createSeed().products),
+            tables: Array.isArray(floor.tables) && floor.tables.length ? floor.tables : prev.tables,
           }))
         })
         .catch((e) => {
@@ -569,9 +601,14 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         patchLocal((prev) => ({
           ...prev,
           orders: [created, ...prev.orders.filter((o) => o.id !== created.id)],
-          tables: prev.tables.map((t) =>
-            t.id === input.tableId ? { ...t, status: 'ocupada' as const, orderId: created.id } : t,
-          ),
+          tables: prev.tables.map((t) => {
+            if (t.id !== input.tableId) return t
+            return {
+              ...t,
+              status: t.status === 'libre' ? ('ocupada' as const) : t.status,
+              orderId: t.orderId || created.id,
+            }
+          }),
           nextOrderNumber: Math.max(prev.nextOrderNumber, realNumber + 1),
         }))
 
@@ -759,23 +796,64 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   )
 
   const payOrder = useCallback(
-    (id: string, method: PaymentMethod) => {
+    async (
+      id: string,
+      input:
+        | PaymentMethod
+        | {
+            payments: Array<{ method: string; amount: number; cashTendered?: number; reference?: string }>
+            billing?: {
+              docTipo?: string
+              docNumero?: string
+              docNombre?: string
+              docEmail?: string
+              docPhone?: string
+              docAddress?: string
+            }
+          },
+    ) => {
       requireApi()
       const current = stateRef.current.orders.find((o) => o.id === id)
       const amount = current?.total ?? 0
+      const payload =
+        typeof input === 'string'
+          ? {
+              payments: [
+                {
+                  method: input,
+                  amount,
+                  cashTendered: input === 'efectivo' ? amount : undefined,
+                },
+              ],
+            }
+          : input
+      const method = (payload.payments[0]?.method || 'efectivo') as PaymentMethod
       patchLocal((prev) => ({
         ...prev,
         orders: prev.orders.map((o) =>
           o.id === id
-            ? { ...o, paid: true, paymentMethod: method, updatedAt: new Date().toISOString() }
+            ? {
+                ...o,
+                paid: true,
+                paymentMethod: method,
+                docTipo: payload.billing?.docTipo as Order['docTipo'],
+                docNumero: payload.billing?.docNumero,
+                docNombre: payload.billing?.docNombre,
+                docEmail: payload.billing?.docEmail,
+                docPhone: payload.billing?.docPhone,
+                docAddress: payload.billing?.docAddress,
+                updatedAt: new Date().toISOString(),
+              }
             : o,
         ),
       }))
-      void apiPayOrder(id, [
-        { method, amount, cashTendered: method === 'efectivo' ? amount : undefined },
-      ])
-        .then(() => reloadFromApi())
-        .catch((e) => setApiError((e as Error).message))
+      try {
+        await apiPayOrder(id, payload.payments, payload.billing)
+        await reloadFromApi()
+      } catch (e) {
+        setApiError((e as Error).message)
+        throw e
+      }
     },
     [patchLocal, reloadFromApi],
   )
@@ -828,20 +906,17 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   )
 
   const saveUser = useCallback(
-    (user: User) => {
+    async (user: User) => {
       requireApi()
-      patchLocal((prev) => {
-        const exists = prev.users.some((u) => u.id === user.id)
-        return {
-          ...prev,
-          users: exists ? prev.users.map((u) => (u.id === user.id ? user : u)) : [...prev.users, user],
-        }
-      })
-      void apiSaveUser(user)
-        .then(() => reloadFromApi())
-        .catch((e) => setApiError((e as Error).message))
+      try {
+        await apiSaveUser(user)
+        await reloadFromApi()
+      } catch (e) {
+        setApiError((e as Error).message)
+        throw e
+      }
     },
-    [patchLocal, reloadFromApi],
+    [reloadFromApi],
   )
 
   const deleteUser = useCallback(
@@ -856,22 +931,17 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   )
 
   const saveInventory = useCallback(
-    (item: InventoryItem) => {
+    async (item: InventoryItem) => {
       requireApi()
-      patchLocal((prev) => {
-        const exists = prev.inventory.some((i) => i.id === item.id)
-        return {
-          ...prev,
-          inventory: exists
-            ? prev.inventory.map((i) => (i.id === item.id ? item : i))
-            : [...prev.inventory, item],
-        }
-      })
-      void apiSaveInventory(item)
-        .then(() => reloadFromApi())
-        .catch((e) => setApiError((e as Error).message))
+      try {
+        await apiSaveInventory(item)
+        await reloadFromApi()
+      } catch (e) {
+        setApiError((e as Error).message)
+        throw e
+      }
     },
-    [patchLocal, reloadFromApi],
+    [reloadFromApi],
   )
 
   const adjustStock = useCallback(
@@ -916,22 +986,17 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   )
 
   const saveBranch = useCallback(
-    (branch: Branch) => {
+    async (branch: Branch) => {
       requireApi()
-      patchLocal((prev) => {
-        const exists = prev.branches.some((b) => b.id === branch.id)
-        return {
-          ...prev,
-          branches: exists
-            ? prev.branches.map((b) => (b.id === branch.id ? branch : b))
-            : [...prev.branches, branch],
-        }
-      })
-      void apiSaveBranch(branch)
-        .then(() => reloadFromApi())
-        .catch((e) => setApiError((e as Error).message))
+      try {
+        await apiSaveBranch(branch)
+        await reloadFromApi()
+      } catch (e) {
+        setApiError((e as Error).message)
+        throw e
+      }
     },
-    [patchLocal, reloadFromApi],
+    [reloadFromApi],
   )
 
   const deleteBranch = useCallback(

@@ -15,8 +15,6 @@ function readAppVersion() {
   return { version, build }
 }
 
-const { version: APP_VERSION, build: APP_BUILD } = readAppVersion()
-
 type AppName = 'web' | 'system' | 'driver' | 'cliente'
 
 const APP = (process.env.VITE_APP || 'web') as AppName
@@ -38,21 +36,24 @@ const API_TARGET = (process.env.VITE_API_URL || 'https://apipchifapollerialopez.
 
 /** Escribe version.json en cada build para que el cliente detecte actualizaciones. */
 function emitVersionJson(): Plugin {
-  const payload = JSON.stringify(
-    {
-      version: APP_VERSION,
-      build: APP_BUILD,
-      app: APP,
-      builtAt: new Date().toISOString(),
-    },
-    null,
-    2,
-  )
+  const payload = () => {
+    const { version, build } = readAppVersion()
+    return JSON.stringify(
+      {
+        version,
+        build,
+        app: APP,
+        builtAt: new Date().toISOString(),
+      },
+      null,
+      2,
+    )
+  }
   return {
     name: 'emit-version-json',
     writeBundle() {
       fs.mkdirSync(outDirAbs, { recursive: true })
-      fs.writeFileSync(path.join(outDirAbs, 'version.json'), `${payload}\n`, 'utf8')
+      fs.writeFileSync(path.join(outDirAbs, 'version.json'), `${payload()}\n`, 'utf8')
     },
     configureServer(server) {
       server.middlewares.use((req, res, next) => {
@@ -60,7 +61,7 @@ function emitVersionJson(): Plugin {
         if (url === '/version.json' || url.endsWith('/version.json')) {
           res.setHeader('Content-Type', 'application/json')
           res.setHeader('Cache-Control', 'no-store')
-          res.end(payload)
+          res.end(payload())
           return
         }
         next()
@@ -85,7 +86,8 @@ export default defineConfig({
   },
   server: {
     port: cfg.port,
-    strictPort: false,
+    /** La web se queda en 5174. Si ese puerto está ocupado, falla en vez de robar el 5175 del POS. */
+    strictPort: APP === 'web',
     host: true,
     fs: {
       allow: [__dirname],

@@ -3,8 +3,9 @@ import { Plus, Trash2 } from 'lucide-react'
 import { useStore } from '../store/StoreContext'
 import { soles, uid } from '../lib/format'
 import { uploadProductImage } from '../lib/minio'
-import type { Product, ProductOptionGroup } from '../types'
+import type { Product, ProductOptionGroup, ProductRecipe } from '../types'
 import { Empty, Field, Modal, PageTitle, inputClass } from '../components/ui'
+import { ConfirmProcess } from '../components/ConfirmProcess'
 
 const OPTION_TEMPLATES: { label: string; group: ProductOptionGroup }[] = [
   {
@@ -125,6 +126,8 @@ const empty = (): Product => ({
   available: true,
   prepMinutes: 10,
   sendToKitchen: true,
+  cuantificable: false,
+  recipes: [],
   optionGroups: [],
   tags: [],
 })
@@ -153,6 +156,7 @@ export function MenuPage() {
   const [uploading, setUploading] = useState(false)
   const [uploadPct, setUploadPct] = useState(0)
   const [uploadError, setUploadError] = useState<string | null>(null)
+  const [saveDlg, setSaveDlg] = useState<'confirm' | 'busy' | 'done' | null>(null)
 
   const list = useMemo(
     () =>
@@ -318,8 +322,7 @@ export function MenuPage() {
             className="space-y-3"
             onSubmit={(e) => {
               e.preventDefault()
-              saveProduct(editing)
-              setEditing(null)
+              setSaveDlg('confirm')
             }}
           >
             <Field label="Foto (MinIO)">
@@ -385,6 +388,33 @@ export function MenuPage() {
               <input type="checkbox" checked={editing.available} onChange={(e) => setEditing({ ...editing, available: e.target.checked })} />
               Disponible
             </label>
+            <label className="flex items-start gap-3 rounded-2xl bg-cream px-3 py-3 text-sm">
+              <input
+                type="checkbox"
+                className="mt-1"
+                checked={!!editing.cuantificable}
+                onChange={(e) =>
+                  setEditing({
+                    ...editing,
+                    cuantificable: e.target.checked,
+                    recipes: e.target.checked ? editing.recipes || [] : [],
+                  })
+                }
+              />
+              <span>
+                <span className="block font-bold">Cuantificable (baja almacén)</span>
+                <span className="block text-xs text-ink/45">
+                  1/2 pollo = 0.5, gaseosa = 1. Cocina puede registrar pérdida de este producto.
+                </span>
+              </span>
+            </label>
+            {editing.cuantificable ? (
+              <RecipeEditor
+                recipes={editing.recipes || []}
+                inventory={state.inventory}
+                onChange={(recipes) => setEditing({ ...editing, recipes })}
+              />
+            ) : null}
             <Field label="Etiquetas (coma)">
               <input
                 className={inputClass}
@@ -411,6 +441,92 @@ export function MenuPage() {
           </form>
         ) : null}
       </Modal>
+      <ConfirmProcess
+        open={!!saveDlg}
+        phase={saveDlg === 'done' ? 'done' : saveDlg === 'busy' ? 'busy' : 'confirm'}
+        title="¿Guardar plato?"
+        message={<p>Se actualiza la carta, receta y opciones del producto.</p>}
+        confirmLabel="Sí, guardar"
+        doneTitle="Plato procesado"
+        doneMessage="El producto quedó guardado en la carta."
+        onConfirm={() => {
+          if (!editing) return
+          setSaveDlg('busy')
+          saveProduct(editing)
+          setSaveDlg('done')
+        }}
+        onCancel={() => setSaveDlg(null)}
+        onDone={() => {
+          setSaveDlg(null)
+          setEditing(null)
+        }}
+      />
+    </div>
+  )
+}
+
+function RecipeEditor({
+  recipes,
+  inventory,
+  onChange,
+}: {
+  recipes: ProductRecipe[]
+  inventory: { id: string; name: string; unit: string }[]
+  onChange: (recipes: ProductRecipe[]) => void
+}) {
+  const add = () => {
+    const first = inventory[0]
+    if (!first) return
+    if (recipes.some((r) => r.inventoryId === first.id)) return
+    onChange([...recipes, { inventoryId: first.id, qtyPerUnit: 1 }])
+  }
+  return (
+    <div className="space-y-2 rounded-2xl border border-ink/8 bg-white p-3">
+      <p className="text-xs font-bold text-ink/50 uppercase tracking-wide">Receta por unidad vendida</p>
+      {inventory.length === 0 ? (
+        <p className="text-xs text-ember">Crea insumos en Inventario primero.</p>
+      ) : null}
+      {recipes.map((r, idx) => (
+        <div key={`${r.inventoryId}-${idx}`} className="grid grid-cols-[1fr_5.5rem_2rem] items-center gap-2">
+          <select
+            className={inputClass}
+            value={r.inventoryId}
+            onChange={(e) =>
+              onChange(recipes.map((x, i) => (i === idx ? { ...x, inventoryId: e.target.value } : x)))
+            }
+          >
+            {inventory.map((i) => (
+              <option key={i.id} value={i.id}>
+                {i.name} ({i.unit})
+              </option>
+            ))}
+          </select>
+          <input
+            type="number"
+            min={0.01}
+            step="0.01"
+            className={inputClass}
+            value={r.qtyPerUnit}
+            onChange={(e) =>
+              onChange(recipes.map((x, i) => (i === idx ? { ...x, qtyPerUnit: Number(e.target.value) } : x)))
+            }
+          />
+          <button
+            type="button"
+            className="flex h-10 w-10 items-center justify-center rounded-lg text-brick"
+            onClick={() => onChange(recipes.filter((_, i) => i !== idx))}
+          >
+            <Trash2 size={16} />
+          </button>
+        </div>
+      ))}
+      <button
+        type="button"
+        onClick={add}
+        className="inline-flex min-h-10 items-center gap-1 rounded-xl bg-cream px-3 text-xs font-bold"
+      >
+        <Plus size={14} /> Agregar insumo
+      </button>
     </div>
   )
 }

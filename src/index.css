@@ -26,8 +26,8 @@ html.dark {
 }
 
 @theme {
-  --font-sans: "Source Sans 3", ui-sans-serif, system-ui, sans-serif;
-  --font-display: "Fraunces", ui-serif, Georgia, serif;
+  --font-sans: "Plus Jakarta Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Plus Jakarta Sans", ui-sans-serif, system-ui, sans-serif;
   --color-gold: #ffd700;
   --color-brick: #c81e1e;
   --color-sage: #0f9f6e;
@@ -72,15 +72,15 @@ body {
 
 .font-display {
   font-family: var(--font-display);
-  letter-spacing: -0.01em;
-  font-optical-sizing: auto;
+  letter-spacing: -0.03em;
+  font-weight: 800;
 }
 
 .flame-bg {
   background:
-    radial-gradient(900px 420px at 0% 0%, rgba(26, 61, 26, 0.32), transparent 55%),
-    radial-gradient(700px 360px at 100% 10%, rgba(255, 215, 0, 0.14), transparent 50%),
-    #0c0c0c;
+    radial-gradient(900px 520px at 12% 8%, rgba(255, 215, 0, 0.18), transparent 52%),
+    radial-gradient(700px 360px at 100% 10%, rgba(255, 215, 0, 0.08), transparent 50%),
+    linear-gradient(180deg, #0c1c0e 0%, #142814 48%, #0a160c 100%);
   color: #f4f5f7;
 }
 
@@ -181,24 +181,27 @@ html.dark .card {
   justify-content: center;
   min-height: 48px;
   border-radius: 1rem;
-  background: var(--color-ember);
-  color: #fff;
-  font-weight: 700;
-  box-shadow: 0 10px 24px -12px rgba(26, 61, 26, 0.65);
-  transition: transform 0.12s ease, background 0.12s ease;
+  background: #ffd700;
+  color: #1a3d1a;
+  font-weight: 800;
+  box-shadow: 0 10px 24px -12px rgba(255, 215, 0, 0.65);
+  transition: transform 0.12s ease, filter 0.12s ease;
 }
 
 .btn-primary:hover {
-  background: var(--color-ember-hot);
+  filter: brightness(1.05);
 }
 
-html.dark .btn-primary,
+html.dark .btn-primary {
+  background: #ffd700;
+  color: #143314;
+}
 html.dark .chip-on {
   background: #2d5c2d;
   color: #fff;
 }
 html.dark .btn-primary:hover {
-  background: #3a7340;
+  filter: brightness(1.08);
 }
 
 /* Botones/paneles bg-ink: siguen oscuros; el texto cream/ink de dentro queda claro. */
@@ -230,6 +233,12 @@ html.dark .bg-ink\/80 {
   -webkit-backdrop-filter: blur(16px);
 }
 
+.nav-active {
+  background: #ffd700;
+  color: #1a3d1a;
+  box-shadow: 0 10px 22px -12px rgba(255, 215, 0, 0.7);
+}
+
 ::-webkit-scrollbar {
   width: 8px;
   height: 8px;
@@ -248,6 +257,14 @@ html.dark ::-webkit-scrollbar-thumb {
   .no-print {
     display: none !important;
   }
+}
+
+.order-card-in {
+  animation: order-card-in 0.35s ease both;
+}
+@keyframes order-card-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: none; }
 }
 
 

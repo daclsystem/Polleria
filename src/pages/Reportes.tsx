@@ -43,19 +43,49 @@ function staffUser(order: Order, users: User[]): User | undefined {
   return undefined
 }
 
+function limaStart(ymd: string) {
+  return new Date(`${ymd}T05:00:00.000Z`)
+}
+function limaEnd(ymd: string) {
+  const d = limaStart(ymd)
+  d.setUTCDate(d.getUTCDate() + 1)
+  return d
+}
+function todayYmd() {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Lima' }).format(new Date())
+}
+
 export function Reportes() {
   const { state } = useStore()
-  const [days, setDays] = useState(7)
+  const [preset, setPreset] = useState<1 | 7 | 30 | 'rango'>(7)
+  const [fromYmd, setFromYmd] = useState(() => {
+    const d = limaStart(todayYmd())
+    d.setUTCDate(d.getUTCDate() - 6)
+    return d.toISOString().slice(0, 10)
+  })
+  const [toYmd, setToYmd] = useState(todayYmd)
   const [tab, setTab] = useState<TabId>('resumen')
 
-  const from = useMemo(() => {
-    const d = new Date()
-    d.setDate(d.getDate() - (days - 1))
-    d.setHours(0, 0, 0, 0)
-    return d
-  }, [days])
+  const { from, until } = useMemo(() => {
+    if (preset === 'rango') {
+      const a = fromYmd <= toYmd ? fromYmd : toYmd
+      const b = fromYmd <= toYmd ? toYmd : fromYmd
+      return { from: limaStart(a), until: limaEnd(b) }
+    }
+    const end = limaEnd(todayYmd())
+    const start = limaStart(todayYmd())
+    start.setUTCDate(start.getUTCDate() - (preset - 1))
+    return { from: start, until: end }
+  }, [preset, fromYmd, toYmd])
 
-  const periodOrders = state.orders.filter((o) => new Date(o.createdAt) >= from)
+  const periodOrders = useMemo(
+    () =>
+      state.orders.filter((o) => {
+        const t = new Date(o.createdAt).getTime()
+        return t >= from.getTime() && t < until.getTime()
+      }),
+    [state.orders, from, until],
+  )
   const orders = periodOrders.filter((o) => o.status !== 'cancelado')
   const cancelled = periodOrders.filter((o) => o.status === 'cancelado')
   const paid = orders.filter((o) => o.paid)
@@ -180,7 +210,8 @@ export function Reportes() {
     }
   }, [paid, state.users, productById])
 
-  const periodLabel = days === 1 ? 'Hoy' : `Últimos ${days} días`
+  const periodLabel =
+    preset === 'rango' ? `${fromYmd} — ${toYmd}` : preset === 1 ? 'Hoy' : `Últimos ${preset} días`
   const todaySales = paid.filter((o) => isSameDay(o.createdAt)).reduce((s, o) => s + o.total, 0)
   const topMozo = analytics.mozos[0] || analytics.staff.find((s) => !/app|web|sin asignar/i.test(s.label))
   const topHour = analytics.hoursPeak[0]
@@ -270,18 +301,40 @@ export function Reportes() {
       <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
         <PageTitle
           title="Reportes"
-          hint="Solo administrador · mesas, mozos, horas, clientes, carta y export Excel."
+          hint="Solo administrador · elige Hoy, 7, 30 días o un rango. Cada pestaña usa las mismas fechas."
         />
         <div className="flex flex-wrap gap-2">
-          {[1, 7, 30].map((n) => (
+          {([1, 7, 30] as const).map((n) => (
             <button
               key={n}
-              onClick={() => setDays(n)}
-              className={`min-h-9 rounded-full px-4 py-1.5 text-sm ${days === n ? 'bg-ink text-cream' : 'bg-white'}`}
+              onClick={() => setPreset(n)}
+              className={`min-h-9 rounded-full px-4 py-1.5 text-sm ${preset === n ? 'bg-ink text-cream' : 'bg-white'}`}
             >
               {n === 1 ? 'Hoy' : `${n} días`}
             </button>
           ))}
+          <button
+            onClick={() => setPreset('rango')}
+            className={`min-h-9 rounded-full px-4 py-1.5 text-sm ${preset === 'rango' ? 'bg-ink text-cream' : 'bg-white'}`}
+          >
+            Rango
+          </button>
+          {preset === 'rango' ? (
+            <>
+              <input
+                type="date"
+                className="min-h-9 rounded-full bg-white px-3 text-sm ring-1 ring-ink/10"
+                value={fromYmd}
+                onChange={(e) => setFromYmd(e.target.value || todayYmd())}
+              />
+              <input
+                type="date"
+                className="min-h-9 rounded-full bg-white px-3 text-sm ring-1 ring-ink/10"
+                value={toYmd}
+                onChange={(e) => setToYmd(e.target.value || todayYmd())}
+              />
+            </>
+          ) : null}
           <button
             onClick={printCierre}
             className="inline-flex min-h-9 items-center gap-1.5 rounded-full bg-ink px-4 py-1.5 text-sm font-semibold text-cream"

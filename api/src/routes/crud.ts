@@ -48,6 +48,8 @@ crudRouter.post('/products', authRequired, requireRoles('admin'), async (req, re
     `)
   await replaceProductOptions(id, p.optionGroups)
   await replaceProductTags(id, p.tags)
+  await replaceProductRecipes(id, p.recipes)
+  await setProductCuantificable(id, p.cuantificable === true || (Array.isArray(p.recipes) && p.recipes.length > 0))
   res.status(201).json({ id })
 })
 
@@ -84,6 +86,8 @@ crudRouter.put('/products/:id', authRequired, requireRoles('admin'), async (req,
     `)
   await replaceProductOptions(id, p.optionGroups)
   await replaceProductTags(id, p.tags)
+  await replaceProductRecipes(id, p.recipes)
+  await setProductCuantificable(id, p.cuantificable === true || (Array.isArray(p.recipes) && p.recipes.length > 0))
   res.json({ ok: true })
 })
 
@@ -157,6 +161,55 @@ async function replaceProductOptions(productId: string, raw: unknown) {
   }
 }
 
+async function setProductCuantificable(productId: string, value: boolean) {
+  try {
+    const pool = await getPool()
+    await pool
+      .request()
+      .input('id', sql.UniqueIdentifier, productId)
+      .input('c', sql.Bit, value ? 1 : 0)
+      .query(`
+        IF COL_LENGTH('dbo.Products', 'Cuantificable') IS NOT NULL
+          UPDATE dbo.Products SET Cuantificable=@c WHERE Id=@id
+      `)
+  } catch {
+    /* columna opcional */
+  }
+}
+
+async function replaceProductRecipes(productId: string, raw: unknown) {
+  if (raw === undefined) return
+  const pool = await getPool()
+  try {
+    await pool
+      .request()
+      .input('pid', sql.UniqueIdentifier, productId)
+      .query(`
+        IF OBJECT_ID(N'dbo.ProductRecipes', N'U') IS NOT NULL
+          DELETE FROM dbo.ProductRecipes WHERE ProductId = @pid
+      `)
+    if (!Array.isArray(raw)) return
+    for (const row of raw as Array<{ inventoryId?: string; qtyPerUnit?: number }>) {
+      const inventoryId = String(row.inventoryId || '')
+      const qty = Number(row.qtyPerUnit || 0)
+      if (!isGuid(inventoryId) || qty <= 0) continue
+      await pool
+        .request()
+        .input('id', sql.UniqueIdentifier, uuid())
+        .input('pid', sql.UniqueIdentifier, productId)
+        .input('iid', sql.UniqueIdentifier, inventoryId)
+        .input('qty', sql.Decimal(12, 4), qty)
+        .query(`
+          IF OBJECT_ID(N'dbo.ProductRecipes', N'U') IS NOT NULL
+          INSERT INTO dbo.ProductRecipes (Id, ProductId, InventoryId, QtyPerUnit)
+          VALUES (@id, @pid, @iid, @qty)
+        `)
+    }
+  } catch {
+    /* recetas opcionales */
+  }
+}
+
 async function replaceProductTags(productId: string, raw: unknown) {
   if (!Array.isArray(raw)) return
   const pool = await getPool()
@@ -212,7 +265,8 @@ crudRouter.post('/users', authRequired, requireRoles('admin'), async (req, res) 
     u.photoUrl ||
     `https://ui-avatars.com/api/?name=${encodeURIComponent(u.name)}&background=e11d2e&color=ffffff&size=128&bold=true`
   const pool = await getPool()
-  await pool
+  try {
+    await pool
     .request()
     .input('id', sql.UniqueIdentifier, id)
     .input('name', sql.NVarChar, u.name)
@@ -228,6 +282,11 @@ crudRouter.post('/users', authRequired, requireRoles('admin'), async (req, res) 
       INSERT INTO dbo.Users (Id, Name, Email, PasswordHash, Role, Active, Pin, Phone, Dni, IsSystem, PhotoUrl)
       VALUES (@id, @name, @email, @hash, @role, @active, @pin, @phone, @dni, 0, @photo)
     `)
+  } catch (e) {
+    const msg = (e as Error).message || ''
+    if (/UQ_Users_Email/i.test(msg)) return res.status(409).json({ error: 'Ese correo ya está registrado' })
+    return res.status(500).json({ error: msg || 'No se pudo crear el usuario' })
+  }
   res.status(201).json({ id })
 })
 
@@ -349,11 +408,51 @@ crudRouter.delete('/users/:id', authRequired, requireRoles('admin'), async (req,
 })
 
 /* ─── Inventory ─── */
+crudRouter.get('/inventory/movements', authRequired, requireRoles('admin', 'cajero', 'cocina'), async (_req, res) => {
+  const pool = await getPool()
+  try {
+    const r = await pool.request().query(`
+      SELECT TOP 120
+        m.Id, m.InventoryId, i.Name AS InventoryName, i.Unit,
+        m.Delta, m.StockAfter, m.Reason, m.Notes, m.CreatedAt,
+        u.Name AS UserName
+      FROM dbo.InventoryMovements m
+      INNER JOIN dbo.Inventory i ON i.Id = m.InventoryId
+      LEFT JOIN dbo.Users u ON u.Id = m.CreatedByUserId
+      ORDER BY m.CreatedAt DESC
+    `)
+    res.json(
+      r.recordset.map((row: Record<string, unknown>) => ({
+        id: String(row.Id),
+        inventoryId: String(row.InventoryId),
+        name: String(row.InventoryName || ''),
+        unit: String(row.Unit || ''),
+        delta: Number(row.Delta),
+        stockAfter: Number(row.StockAfter),
+        reason: String(row.Reason || ''),
+        notes: row.Notes ? String(row.Notes) : '',
+        createdAt: new Date(row.CreatedAt as string).toISOString(),
+        userName: row.UserName ? String(row.UserName) : '',
+      })),
+    )
+  } catch {
+    res.json([])
+  }
+})
+
 crudRouter.post('/inventory', authRequired, requireRoles('admin', 'cajero'), async (req, res) => {
-  const item = req.body as { id?: string; name: string; unit: string; stock: number; minStock: number; cost: number }
+  const item = req.body as { id?: string; name: string; unit: string; stock: number; minStock: number; cost: number; salePrice?: number }
   if (!item.name || !item.unit) return res.status(400).json({ error: 'name y unit requeridos' })
   const id = isGuid(item.id) ? item.id! : uuid()
   const pool = await getPool()
+  try {
+    await pool.request().query(`
+      IF COL_LENGTH('dbo.Inventory', 'SalePrice') IS NULL
+        ALTER TABLE dbo.Inventory ADD SalePrice DECIMAL(10,2) NOT NULL CONSTRAINT DF_Inventory_SalePrice DEFAULT (0);
+    `)
+  } catch {
+    /* columna opcional */
+  }
   await pool
     .request()
     .input('id', sql.UniqueIdentifier, id)
@@ -362,15 +461,18 @@ crudRouter.post('/inventory', authRequired, requireRoles('admin', 'cajero'), asy
     .input('stock', sql.Decimal(12, 3), Number(item.stock || 0))
     .input('min', sql.Decimal(12, 3), Number(item.minStock || 0))
     .input('cost', sql.Decimal(10, 2), Number(item.cost || 0))
+    .input('sale', sql.Decimal(10, 2), Number(item.salePrice || 0))
     .query(`
       INSERT INTO dbo.Inventory (Id, Name, Unit, Stock, MinStock, Cost)
       VALUES (@id, @name, @unit, @stock, @min, @cost)
+      IF COL_LENGTH('dbo.Inventory', 'SalePrice') IS NOT NULL
+        UPDATE dbo.Inventory SET SalePrice=@sale WHERE Id=@id
     `)
   res.status(201).json({ id })
 })
 
 crudRouter.put('/inventory/:id', authRequired, requireRoles('admin', 'cajero'), async (req, res) => {
-  const item = req.body as { name: string; unit: string; stock: number; minStock: number; cost: number }
+  const item = req.body as { name: string; unit: string; stock: number; minStock: number; cost: number; salePrice?: number }
   const pool = await getPool()
   await pool
     .request()
@@ -380,9 +482,12 @@ crudRouter.put('/inventory/:id', authRequired, requireRoles('admin', 'cajero'), 
     .input('stock', sql.Decimal(12, 3), Number(item.stock || 0))
     .input('min', sql.Decimal(12, 3), Number(item.minStock || 0))
     .input('cost', sql.Decimal(10, 2), Number(item.cost || 0))
+    .input('sale', sql.Decimal(10, 2), Number(item.salePrice || 0))
     .query(`
       UPDATE dbo.Inventory SET Name=@name, Unit=@unit, Stock=@stock, MinStock=@min, Cost=@cost, UpdatedAt=SYSUTCDATETIME()
       WHERE Id=@id
+      IF COL_LENGTH('dbo.Inventory', 'SalePrice') IS NOT NULL
+        UPDATE dbo.Inventory SET SalePrice=@sale WHERE Id=@id
     `)
   res.json({ ok: true })
 })
@@ -707,7 +812,7 @@ crudRouter.post('/customers/upsert', authRequired, async (req, res) => {
     let photoUrl = req.body?.photoUrl ? String(req.body.photoUrl) : ''
 
     if (!name || name.length < 2) return res.status(400).json({ error: 'Nombre del cliente obligatorio' })
-    if (!phone || phone.length < 11) return res.status(400).json({ error: 'Teléfono del cliente obligatorio' })
+    if (!phone || phone.length < 9) return res.status(400).json({ error: 'Teléfono del cliente obligatorio (9 dígitos)' })
     if (!photoUrl) photoUrl = defaultPhoto(name)
 
     const pool = await getPool()
@@ -751,6 +856,7 @@ crudRouter.post('/customers/upsert', authRequired, async (req, res) => {
 
     const id = uuid()
     const hash = await bcrypt.hash(uuid(), 8)
+    try {
     await pool
       .request()
       .input('id', sql.UniqueIdentifier, id)
@@ -764,6 +870,11 @@ crudRouter.post('/customers/upsert', authRequired, async (req, res) => {
         INSERT INTO dbo.Customers (Id, Name, Phone, Email, Address, PasswordHash, PhotoUrl)
         VALUES (@id, @name, @phone, @email, @address, @hash, @photo)
       `)
+    } catch (e) {
+      const msg = (e as Error).message || ''
+      if (/UQ_Customers_Phone/i.test(msg)) return res.status(409).json({ error: 'Ese teléfono ya está registrado' })
+      return res.status(500).json({ error: msg || 'No se pudo crear el cliente' })
+    }
 
     res.status(201).json({
       customer: {

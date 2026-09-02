@@ -10,14 +10,14 @@ export function ProtectedRoute({
   children: ReactNode
   module?: ModuleId
 }) {
-  const { user, can } = useAuth()
+  const { user, actingRole, needsViewPick, can } = useAuth()
   const location = useLocation()
 
-  if (!user) {
+  if (!user || needsViewPick) {
     return <Navigate to="/login" replace state={{ from: location.pathname }} />
   }
   if (module && !can(module)) {
-    return <Navigate to={ROLE_HOME[user.role]} replace />
+    return <Navigate to={ROLE_HOME[actingRole]} replace />
   }
   return children
 }

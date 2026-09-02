@@ -3,7 +3,7 @@ import { v4 as uuid } from 'uuid'
 import { getPool, sql } from '../db.js'
 import { authRequired } from '../auth.js'
 import { emitEvent, roomsForOrderStatus } from '../realtime.js'
-import { notifyOrderCreatedServer, notifyOrderStatusServer } from '../lib/whatsappNotify.js'
+import { notifyOrderCreatedServer, notifyOrderPaidServer, notifyOrderStatusServer } from '../lib/whatsappNotify.js'
 import {
   deductStockForKitchenItems,
   deductStockForOrderItems,
@@ -502,6 +502,13 @@ ordersRouter.post('/', async (req, res) => {
     const number = Number(numRes.recordset[0].Number)
     const orderId = uuid()
 
+    if (body.tableId && body.tableNumber == null) {
+      const tr = await new sql.Request(tx)
+        .input('tid', sql.UniqueIdentifier, body.tableId)
+        .query(`SELECT Number FROM dbo.Tables WHERE Id = @tid`)
+      if (tr.recordset[0]) body.tableNumber = Number(tr.recordset[0].Number)
+    }
+
     await new sql.Request(tx)
       .input('id', sql.UniqueIdentifier, orderId)
       .input('number', sql.Int, number)
@@ -579,7 +586,11 @@ ordersRouter.post('/', async (req, res) => {
         .input('tableId', sql.UniqueIdentifier, body.tableId)
         .input('orderId', sql.UniqueIdentifier, orderId)
         .query(`
-          UPDATE dbo.Tables SET Status = N'ocupada', CurrentOrderId = @orderId WHERE Id = @tableId
+          UPDATE dbo.Tables
+          SET
+            Status = CASE WHEN Status = N'libre' THEN N'ocupada' ELSE Status END,
+            CurrentOrderId = COALESCE(CurrentOrderId, @orderId)
+          WHERE Id = @tableId
         `)
     }
 
@@ -1027,11 +1038,65 @@ ordersRouter.post('/:id/payments', authRequired, async (req, res) => {
         .query(`UPDATE dbo.Tables SET Status = N'libre', CurrentOrderId = NULL WHERE Id = @tableId`)
     }
 
+    const billing = req.body?.billing as
+      | {
+          docTipo?: string
+          docNumero?: string
+          docNombre?: string
+          docEmail?: string
+          docPhone?: string
+          docAddress?: string
+        }
+      | undefined
+    if (billing?.docTipo) {
+      try {
+        await new sql.Request(tx)
+          .input('id', sql.UniqueIdentifier, paramId(req.params.id))
+          .input('docTipo', sql.NVarChar, String(billing.docTipo).slice(0, 20))
+          .input('docNumero', sql.NVarChar, billing.docNumero ? String(billing.docNumero).slice(0, 20) : null)
+          .input('docNombre', sql.NVarChar, billing.docNombre ? String(billing.docNombre).slice(0, 160) : null)
+          .input('docEmail', sql.NVarChar, billing.docEmail ? String(billing.docEmail).slice(0, 120) : null)
+          .input('docPhone', sql.NVarChar, billing.docPhone ? String(billing.docPhone).slice(0, 40) : null)
+          .input('docAddress', sql.NVarChar, billing.docAddress ? String(billing.docAddress).slice(0, 255) : null)
+          .query(`
+            IF COL_LENGTH('dbo.Orders', 'DocTipo') IS NOT NULL
+            UPDATE dbo.Orders SET
+              DocTipo=@docTipo, DocNumero=@docNumero, DocNombre=@docNombre,
+              DocEmail=@docEmail, DocPhone=@docPhone, DocAddress=@docAddress
+            WHERE Id=@id
+          `)
+      } catch {
+        /* columnas de documento aún no existen */
+      }
+    }
+
     await tx.commit()
     const order = await loadOrder(paramId(req.params.id))
     emitEvent('order:paid', order, ['ops', 'caja', 'mesas'])
     if (paid && !existing.Paid) {
       void publishInventorySnapshot()
+      const paidOrder = await loadOrder(paramId(req.params.id))
+      if (paidOrder) {
+        void notifyOrderPaidServer({
+          Id: String(paidOrder.Id),
+          Number: Number(paidOrder.Number),
+          Type: String(paidOrder.Type),
+          Status: String(paidOrder.Status),
+          CustomerName: String(paidOrder.CustomerName || ''),
+          CustomerPhone: paidOrder.CustomerPhone ? String(paidOrder.CustomerPhone) : null,
+          Address: paidOrder.Address ? String(paidOrder.Address) : null,
+          Total: Number(paidOrder.Total),
+          CodPaymentMethod: paidOrder.CodPaymentMethod ? String(paidOrder.CodPaymentMethod) : null,
+          Source: paidOrder.Source ? String(paidOrder.Source) : null,
+          items: Array.isArray(paidOrder.items)
+            ? (paidOrder.items as Array<{ Name: string; Qty: number; Price: number }>).map((i) => ({
+                Name: String(i.Name),
+                Qty: Number(i.Qty),
+                Price: Number(i.Price),
+              }))
+            : [],
+        })
+      }
     }
     res.json({ order, paid })
   } catch (e) {

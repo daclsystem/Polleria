@@ -1,10 +1,25 @@
-import { useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
+import { Search } from 'lucide-react'
 import { useStore } from '../store/StoreContext'
-import { soles, uid } from '../lib/format'
+import { formatDateTime, soles, uid } from '../lib/format'
+import { apiInventoryMovements } from '../lib/apiClient'
+import { downloadInventoryXlsx } from '../lib/exportInventory'
 import type { InventoryItem } from '../types'
 import { Field, Modal, PageTitle, inputClass } from '../components/ui'
+import { ConfirmProcess } from '../components/ConfirmProcess'
 
 type SalidaReason = 'ajuste' | 'perdida'
+type Mov = {
+  id: string
+  name: string
+  unit: string
+  delta: number
+  stockAfter: number
+  reason: string
+  notes: string
+  createdAt: string
+  userName?: string
+}
 
 export function Inventario() {
   const { state, saveInventory, adjustStock } = useStore()
@@ -13,6 +28,23 @@ export function Inventario() {
   const [qty, setQty] = useState(1)
   const [reason, setReason] = useState<SalidaReason>('ajuste')
   const [notes, setNotes] = useState('')
+  const [dlg, setDlg] = useState<'confirm' | 'busy' | 'done' | null>(null)
+  const [saveDlg, setSaveDlg] = useState<'confirm' | 'busy' | 'done' | null>(null)
+  const [q, setQ] = useState('')
+  const [movs, setMovs] = useState<Mov[]>([])
+  const [saveErr, setSaveErr] = useState('')
+
+  useEffect(() => {
+    void apiInventoryMovements()
+      .then(setMovs)
+      .catch(() => setMovs([]))
+  }, [state.inventory])
+
+  const list = useMemo(() => {
+    const term = q.trim().toLowerCase()
+    if (!term) return state.inventory
+    return state.inventory.filter((i) => i.name.toLowerCase().includes(term))
+  }, [state.inventory, q])
 
   const openSalida = (item: InventoryItem, preset = 1) => {
     setSalida(item)
@@ -23,8 +55,22 @@ export function Inventario() {
 
   const confirmSalida = () => {
     if (!salida || qty <= 0) return
+    setDlg('busy')
     adjustStock(salida.id, -Math.abs(qty), { reason, notes: notes.trim() || undefined })
-    setSalida(null)
+    setDlg('done')
+  }
+
+  const runSave = async () => {
+    if (!editing?.name.trim()) return
+    setSaveDlg('busy')
+    setSaveErr('')
+    try {
+      await saveInventory(editing)
+      setSaveDlg('done')
+    } catch (e) {
+      setSaveDlg('confirm')
+      setSaveErr((e as Error).message || 'No se pudo guardar')
+    }
   }
 
   return (
@@ -32,19 +78,39 @@ export function Inventario() {
       <div className="flex flex-wrap items-end justify-between gap-3">
         <PageTitle
           title="Inventario"
-          hint="Al sacar stock eliges el estado: uso o pérdida. Rojo = bajo el mínimo."
+          hint="Costo de compra y precio de venta. Rojo = bajo el mínimo."
         />
-        <button
-          className="min-h-11 rounded-xl bg-ember px-4 py-2 text-sm font-semibold text-white"
-          onClick={() =>
-            setEditing({ id: uid('i'), name: '', unit: 'unid', stock: 0, minStock: 0, cost: 0 })
-          }
-        >
-          Nuevo ítem
-        </button>
+        <div className="flex flex-wrap gap-2">
+          <button
+            type="button"
+            className="min-h-11 rounded-xl bg-cream px-4 py-2 text-sm font-semibold"
+            onClick={() => downloadInventoryXlsx(state.inventory, movs)}
+          >
+            Exportar XLSX
+          </button>
+          <button
+            className="min-h-11 rounded-xl bg-ember px-4 py-2 text-sm font-semibold text-white"
+            onClick={() =>
+              setEditing({ id: uid('i'), name: '', unit: 'unid', stock: 0, minStock: 0, cost: 0, salePrice: 0 })
+            }
+          >
+            Nuevo ítem
+          </button>
+        </div>
       </div>
+
+      <div className="relative mt-4 max-w-md">
+        <Search size={16} className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-ink/35" />
+        <input
+          className={`${inputClass} pl-9`}
+          placeholder="Buscar insumo…"
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+        />
+      </div>
+
       <div className="mt-4 space-y-3 md:hidden">
-        {state.inventory.map((i) => {
+        {list.map((i) => {
           const low = i.stock <= i.minStock
           return (
             <article key={i.id} className={`card p-4 ${low ? 'ring-1 ring-brick/30' : ''}`}>
@@ -52,7 +118,11 @@ export function Inventario() {
                 {i.name}
               </button>
               <p className={`text-sm ${low ? 'text-brick' : 'text-ink/50'}`}>
-                {i.stock} {i.unit} · mín {i.minStock} · {soles(i.cost)}
+                {i.stock} {i.unit} · mín {i.minStock}
+              </p>
+              <p className="text-xs text-ink/45">
+                Costo {soles(i.cost)}
+                {i.salePrice ? ` · Venta ${soles(i.salePrice)}` : ''}
               </p>
               <div className="mt-3 flex flex-wrap gap-1">
                 <button className="min-h-10 rounded-lg bg-brick/10 px-3 text-sm font-semibold text-brick" onClick={() => openSalida(i, 1)}>
@@ -77,11 +147,12 @@ export function Inventario() {
               <th className="px-4 py-3">Stock</th>
               <th className="px-4 py-3">Mínimo</th>
               <th className="px-4 py-3">Costo</th>
+              <th className="px-4 py-3">Venta</th>
               <th className="px-4 py-3">Ajuste</th>
             </tr>
           </thead>
           <tbody>
-            {state.inventory.map((i) => {
+            {list.map((i) => {
               const low = i.stock <= i.minStock
               return (
                 <tr key={i.id} className={`border-t border-ink/5 ${low ? 'bg-rose-50' : ''}`}>
@@ -94,6 +165,7 @@ export function Inventario() {
                   <td className={`px-4 py-3 font-semibold ${low ? 'text-brick' : ''}`}>{i.stock}</td>
                   <td className="px-4 py-3">{i.minStock}</td>
                   <td className="px-4 py-3">{soles(i.cost)}</td>
+                  <td className="px-4 py-3">{i.salePrice ? soles(i.salePrice) : '—'}</td>
                   <td className="px-4 py-3">
                     <div className="flex gap-1">
                       <button
@@ -116,6 +188,45 @@ export function Inventario() {
           </tbody>
         </table>
       </div>
+
+      {movs.length > 0 ? (
+        <div className="mt-6">
+          <h3 className="font-display text-lg text-ink">Movimientos</h3>
+          <p className="mb-2 text-xs text-ink/45">Fecha, quién lo hizo e ingreso o salida</p>
+          <ul className="space-y-1.5">
+            {movs.slice(0, 60).map((m) => {
+              const label =
+                m.reason === 'perdida' ? 'Pérdida' : m.reason === 'ingreso' ? 'Ingreso' : m.delta < 0 ? 'Salida' : m.reason
+              return (
+                <li
+                  key={m.id}
+                  className="flex flex-wrap items-baseline justify-between gap-2 rounded-xl bg-white px-3 py-2 text-sm"
+                >
+                  <span>
+                    <span
+                      className={`mr-2 rounded-full px-2 py-0.5 text-[11px] font-bold ${
+                        m.reason === 'perdida' ? 'bg-brick/15 text-brick' : m.delta < 0 ? 'bg-ink/8 text-ink' : 'bg-emerald-100 text-emerald-800'
+                      }`}
+                    >
+                      {label}
+                    </span>
+                    {m.name}{' '}
+                    <strong>
+                      {m.delta > 0 ? '+' : ''}
+                      {m.delta} {m.unit}
+                    </strong>
+                    <span className="mt-0.5 block text-xs text-ink/45">
+                      {m.userName ? `${m.userName} · ` : ''}
+                      {formatDateTime(m.createdAt)}
+                      {m.notes ? ` · ${m.notes}` : ''}
+                    </span>
+                  </span>
+                </li>
+              )
+            })}
+          </ul>
+        </div>
+      ) : null}
 
       <Modal open={!!salida} title="Salida de inventario" onClose={() => setSalida(null)}>
         {salida ? (
@@ -155,11 +266,6 @@ export function Inventario() {
                   Pérdida
                 </button>
               </div>
-              <p className="mt-1.5 text-xs text-ink/40">
-                {reason === 'perdida'
-                  ? 'Merma, vencido, roto o merma. Baja el stock y queda como pérdida.'
-                  : 'Salida normal (uso en cocina u otro consumo).'}
-              </p>
             </div>
             <Field label="Nota (opcional)">
               <input
@@ -172,14 +278,37 @@ export function Inventario() {
             <button
               type="button"
               disabled={qty <= 0}
-              onClick={confirmSalida}
+              onClick={() => setDlg('confirm')}
               className="w-full rounded-xl bg-ember py-3 font-semibold text-white disabled:opacity-40"
             >
-              Confirmar salida
+              Registrar salida
             </button>
           </div>
         ) : null}
       </Modal>
+      <ConfirmProcess
+        open={!!dlg}
+        phase={dlg === 'done' ? 'done' : dlg === 'busy' ? 'busy' : 'confirm'}
+        title={reason === 'perdida' ? '¿Registrar pérdida?' : '¿Registrar salida?'}
+        message={
+          salida ? (
+            <p>
+              Sale <strong>{qty} {salida.unit}</strong> de {salida.name}
+              {reason === 'perdida' ? ' como pérdida' : ' como uso'}.
+            </p>
+          ) : null
+        }
+        confirmLabel="Sí, registrar"
+        tone={reason === 'perdida' ? 'brick' : 'ember'}
+        doneTitle="Movimiento procesado"
+        doneMessage="Quedó registrado en el almacén."
+        onConfirm={confirmSalida}
+        onCancel={() => setDlg(null)}
+        onDone={() => {
+          setDlg(null)
+          setSalida(null)
+        }}
+      />
 
       <Modal open={!!editing} title="Insumo" onClose={() => setEditing(null)}>
         {editing ? (
@@ -187,8 +316,7 @@ export function Inventario() {
             className="space-y-3"
             onSubmit={(e) => {
               e.preventDefault()
-              saveInventory(editing)
-              setEditing(null)
+              setSaveDlg('confirm')
             }}
           >
             <Field label="Nombre">
@@ -204,14 +332,39 @@ export function Inventario() {
               <Field label="Mínimo">
                 <input type="number" className={inputClass} value={editing.minStock} onChange={(e) => setEditing({ ...editing, minStock: Number(e.target.value) })} />
               </Field>
-              <Field label="Costo">
+              <Field label="Costo (compra)">
                 <input type="number" step="0.1" className={inputClass} value={editing.cost} onChange={(e) => setEditing({ ...editing, cost: Number(e.target.value) })} />
               </Field>
+              <Field label="A cuánto se vende">
+                <input
+                  type="number"
+                  step="0.1"
+                  className={inputClass}
+                  value={editing.salePrice ?? 0}
+                  onChange={(e) => setEditing({ ...editing, salePrice: Number(e.target.value) })}
+                />
+              </Field>
             </div>
+            {saveErr ? <p className="text-xs font-semibold text-ember">{saveErr}</p> : null}
             <button className="w-full rounded-xl bg-ember py-3 font-semibold text-white">Guardar</button>
           </form>
         ) : null}
       </Modal>
+      <ConfirmProcess
+        open={!!saveDlg}
+        phase={saveDlg === 'done' ? 'done' : saveDlg === 'busy' ? 'busy' : 'confirm'}
+        title="¿Guardar insumo?"
+        message={<p>Se actualiza costo, precio de venta y stock.</p>}
+        confirmLabel="Sí, guardar"
+        doneTitle="Insumo procesado"
+        doneMessage="El ítem quedó guardado."
+        onConfirm={() => void runSave()}
+        onCancel={() => setSaveDlg(null)}
+        onDone={() => {
+          setSaveDlg(null)
+          setEditing(null)
+        }}
+      />
     </div>
   )
 }

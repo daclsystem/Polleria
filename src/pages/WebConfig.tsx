@@ -17,7 +17,7 @@ import { Field, Modal, PageTitle, inputClass } from '../components/ui'
 import { apiGetBanners, apiGetWebsite, apiSaveBanners, apiSaveWebsite } from '../lib/apiClient'
 import {
   DEFAULT_WEB_SITE,
-  mergeWebSite,
+  rememberWebSite,
   normalizeBanners,
   type WebBranch,
   type WebHighlight,
@@ -72,7 +72,7 @@ export function WebConfig() {
     void Promise.all([apiGetBanners(true), apiGetWebsite(true)])
       .then(([b, w]) => {
         setBanners(normalizeBanners(b.banners))
-        setSite(mergeWebSite(w.site))
+        setSite(rememberWebSite(w.site))
       })
       .catch((e) => setError((e as Error).message))
   }, [])
@@ -93,6 +93,7 @@ export function WebConfig() {
     setSaved(false)
     try {
       await apiSaveWebsite(site)
+      rememberWebSite(site)
       setSaved(true)
       setTimeout(() => setSaved(false), 2000)
     } catch (e) {

@@ -1,16 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import {
-  LogOut,
-  MessageCircle,
-  Phone,
-  QrCode,
-  RefreshCw,
-  Send,
-  Settings2,
-  Zap,
-} from 'lucide-react'
-import { useStore } from '../store/StoreContext'
-import { formatDateTime, padOrder, soles } from '../lib/format'
+import { LogOut, MessageCircle, QrCode, RefreshCw, Settings2, Zap } from 'lucide-react'
 import {
   DEFAULT_WSPGO,
   fetchSessionQr,
@@ -18,56 +7,37 @@ import {
   getSessionStatus,
   logoutWhatsappSession,
   saveWspgoConfig,
-  sendWhatsAppText,
   startWhatsappSession,
   type WspgoConfig,
 } from '../lib/whatsapp'
-import type { Order } from '../types'
+import {
+  downloadMassTemplate,
+  enqueueMass,
+  parseMassXlsx,
+  resetMass,
+  subscribeMass,
+  type MassStatus,
+} from '../lib/whatsappMass'
 import { Field, Modal, PageTitle, inputClass } from '../components/ui'
 
-type MessageTab = 'pedidos' | 'plantillas' | 'config'
-
-function fillPreview(template: string, order: Order) {
-  const detalle = order.items.map((i) => `${i.qty}x ${i.name}`).join('\n')
-  return template
-    .replace(/\{nombre\}/g, order.customerName)
-    .replace(/\{numero\}/g, String(order.number))
-    .replace(/\{total\}/g, soles(order.total))
-    .replace(/\{detalle\}/g, detalle)
-    .replace(/\{direccion\}/g, order.address || 'N/A')
-    .replace(/\{telefono\}/g, order.customerPhone || '')
-    .replace(/\{tipo\}/g, order.type)
-    .replace(/\{pago\}/g, order.paymentMethod)
-    .replace(/\{tipo_entrega\}/g, order.type === 'delivery' ? 'Delivery' : 'Recojo')
-    .replace(/\{direccion_line\}/g, order.address ? `📍 ${order.address}` : '')
-}
-
 export function WhatsApp() {
-  const { state } = useStore()
   const [config, setConfig] = useState<WspgoConfig>(DEFAULT_WSPGO)
-  const [tab, setTab] = useState<MessageTab>('pedidos')
   const [configOpen, setConfigOpen] = useState(false)
-  const [previewMsg, setPreviewMsg] = useState<string | null>(null)
-  const [customPhone, setCustomPhone] = useState('')
-  const [customMsg, setCustomMsg] = useState('')
-  const [phoneQuery, setPhoneQuery] = useState('')
   const [sendResult, setSendResult] = useState<string | null>(null)
   const [sessionStatus, setSessionStatus] = useState<string>('…')
   const [qrSrc, setQrSrc] = useState<string | null>(null)
   const [qrBusy, setQrBusy] = useState(false)
   const [qrErr, setQrErr] = useState<string | null>(null)
   const [wantQr, setWantQr] = useState(false)
+  const [mass, setMass] = useState<MassStatus>({ running: false, total: 0, sent: 0, failed: 0 })
+  const [massRows, setMassRows] = useState(0)
 
-  const phoneDigits = phoneQuery.replace(/\D/g, '')
-  const recentOrders = state.orders
-    .filter((o) => o.customerPhone && o.status !== 'cancelado')
-    .filter((o) => {
-      if (!phoneDigits) return true
-      const tel = String(o.customerPhone || '').replace(/\D/g, '')
-      const name = o.customerName.toLowerCase()
-      return tel.includes(phoneDigits) || name.includes(phoneQuery.trim().toLowerCase())
-    })
-    .slice(0, phoneDigits ? 40 : 15)
+  useEffect(() => subscribeMass(setMass), [])
+
+  const flash = (msg: string) => {
+    setSendResult(msg)
+    setTimeout(() => setSendResult(null), 4000)
+  }
 
   useEffect(() => {
     void fetchWspgoConfig().then(setConfig)
@@ -134,23 +104,20 @@ export function WhatsApp() {
     }
   }
 
-  const flash = (msg: string) => {
-    setSendResult(msg)
-    setTimeout(() => setSendResult(null), 4000)
-  }
-
-  const handleSendToOrder = async (order: Order, key: keyof WspgoConfig['templates']) => {
-    const phone = order.customerPhone || ''
-    if (!phone) return
-    const message = fillPreview(config.templates[key], order)
-    const res = await sendWhatsAppText(phone, message, config)
-    flash(res.ok ? `Enviado a ${order.customerName}` : `Error: ${res.error}`)
-  }
-
-  const handleSendCustom = async () => {
-    if (!customPhone || !customMsg) return
-    const res = await sendWhatsAppText(customPhone, customMsg, config)
-    flash(res.ok ? 'Mensaje enviado' : `Error: ${res.error}`)
+  const handleReconnect = async () => {
+    setWantQr(true)
+    setQrBusy(true)
+    setQrErr(null)
+    try {
+      await startWhatsappSession(config)
+      await refreshStatus()
+      await loadQr()
+      flash('Reconectando sesión…')
+    } catch (e) {
+      setQrErr((e as Error).message || 'No se pudo reconectar')
+    } finally {
+      setQrBusy(false)
+    }
   }
 
   const handleSaveConfig = async () => {
@@ -163,18 +130,12 @@ export function WhatsApp() {
     }
   }
 
-  const tabs: { id: MessageTab; label: string }[] = [
-    { id: 'pedidos', label: 'Enviar a pedidos' },
-    { id: 'plantillas', label: 'Plantillas' },
-    { id: 'config', label: 'Mensaje libre' },
-  ]
-
   const statusOk = sessionStatus === 'WORKING'
 
   return (
     <div>
       <div className="flex flex-wrap items-end justify-between gap-4">
-        <PageTitle title="WhatsApp" hint="Pedidos automáticos vía iwspgo.indevsoft.com" />
+        <PageTitle title="WhatsApp" hint="Envío masivo y avisos automáticos de pedidos." />
         <button
           onClick={() => setConfigOpen(true)}
           className="flex min-h-11 items-center gap-2 rounded-xl bg-ink px-4 py-2 text-sm font-semibold text-cream"
@@ -193,14 +154,24 @@ export function WhatsApp() {
           {config.enabled ? `Sesión ${config.session}: ${sessionStatus}` : 'Deshabilitado'}
         </div>
         {config.enabled ? (
-          <button
-            type="button"
-            onClick={() => void handleLogoutQr()}
-            disabled={qrBusy}
-            className="inline-flex min-h-9 items-center gap-1.5 rounded-full bg-ink px-3 text-xs font-bold text-cream disabled:opacity-50"
-          >
-            <LogOut size={13} /> Cerrar y escanear QR
-          </button>
+          <>
+            <button
+              type="button"
+              onClick={() => void handleReconnect()}
+              disabled={qrBusy}
+              className="inline-flex min-h-9 items-center gap-1.5 rounded-full bg-[#25d366] px-3 text-xs font-bold text-white disabled:opacity-50"
+            >
+              <RefreshCw size={13} className={qrBusy ? 'animate-spin' : ''} /> Reconectar sesión
+            </button>
+            <button
+              type="button"
+              onClick={() => void handleLogoutQr()}
+              disabled={qrBusy}
+              className="inline-flex min-h-9 items-center gap-1.5 rounded-full bg-ink px-3 text-xs font-bold text-cream disabled:opacity-50"
+            >
+              <LogOut size={13} /> Cerrar y escanear QR
+            </button>
+          </>
         ) : null}
         {sendResult && <span className="text-sm font-medium text-green-600">{sendResult}</span>}
       </div>
@@ -234,161 +205,69 @@ export function WhatsApp() {
         </div>
       ) : null}
 
-      <div className="mt-5 flex gap-2 overflow-x-auto">
-        {tabs.map((t) => (
-          <button
-            key={t.id}
-            onClick={() => setTab(t.id)}
-            className={`min-h-9 shrink-0 rounded-full px-4 py-1.5 text-sm font-semibold ${
-              tab === t.id ? 'bg-[#25d366] text-white' : 'bg-white text-ink/60'
-            }`}
-          >
-            {t.label}
-          </button>
-        ))}
-      </div>
-
-      {tab === 'pedidos' && (
-        <div className="mt-5 space-y-3">
-          <p className="text-xs text-ink/50">
-            Recibido y listo se envían solos al crear el pedido. Aquí solo reenvías “en camino” si hace falta.
+      <div className="card mt-5 space-y-4 p-5">
+          <p className="text-sm font-black">Carga masiva de mensajes</p>
+          <p className="text-sm text-ink/55">
+            Descarga el formato Excel, completa teléfono / nombre / mensaje y súbelo. El envío sigue en
+            segundo plano con pausa entre mensajes para no caer en spam.
           </p>
-          <label className="block">
-            <span className="text-[11px] font-bold tracking-[0.14em] text-ink/40 uppercase">Buscar teléfono</span>
-            <input
-              className={`${inputClass} mt-1.5`}
-              value={phoneQuery}
-              onChange={(e) => setPhoneQuery(e.target.value)}
-              placeholder="937493214 o nombre"
-              inputMode="tel"
-              autoComplete="tel"
-            />
-          </label>
-          {recentOrders.length === 0 ? (
-            <div className="rounded-2xl border border-dashed border-ink/15 py-12 text-center text-ink/40">
-              {phoneDigits ? 'Ningún pedido con ese teléfono' : 'No hay pedidos con teléfono registrado'}
-            </div>
-          ) : (
-            recentOrders.map((o) => (
-              <div key={o.id} className="card flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between">
-                <div className="flex items-center gap-3">
-                  <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[#25d366]/10">
-                    <Phone size={18} className="text-[#25d366]" />
-                  </div>
-                  <div>
-                    <p className="text-sm font-semibold">
-                      {padOrder(o.number)} · {o.customerName}
-                    </p>
-                    <p className="text-xs text-ink/50">
-                      {o.customerPhone} · {soles(o.total)} · {formatDateTime(o.createdAt)}
-                    </p>
-                  </div>
-                </div>
-                {o.type === 'delivery' ? (
-                  <button
-                    onClick={() => handleSendToOrder(o, 'pedidoEnCamino')}
-                    className="flex min-h-9 items-center justify-center gap-1 rounded-lg bg-blue-600 px-3 text-xs font-semibold text-white"
-                  >
-                    <Send size={11} /> Enviar en camino
-                  </button>
-                ) : (
-                  <p className="text-xs font-medium text-ink/40">Recojo · aviso automático</p>
-                )}
-              </div>
-            ))
-          )}
-        </div>
-      )}
-
-      {tab === 'plantillas' && (
-        <div className="mt-5 space-y-4">
-          <p className="text-xs text-ink/50">
-            Variables: {'{nombre}'}, {'{numero}'}, {'{total}'}, {'{detalle}'}, {'{direccion}'}, {'{pago}'}
-          </p>
-          {(Object.keys(config.templates) as (keyof WspgoConfig['templates'])[]).map((key) => {
-            const labels: Record<string, string> = {
-              pedidoRecibido: 'Pedido recibido (cliente)',
-              pedidoListo: 'Pedido listo (cliente)',
-              pedidoEnCamino: 'Pedido en camino',
-              avisoLocal: 'Aviso al local (pedido nuevo)',
-            }
-            return (
-              <div key={key} className="card p-4">
-                <div className="flex items-center justify-between">
-                  <p className="text-sm font-semibold">{labels[key] || key}</p>
-                  <button
-                    onClick={() => setPreviewMsg(config.templates[key])}
-                    className="text-xs font-semibold text-[#25d366] hover:underline"
-                  >
-                    Vista previa
-                  </button>
-                </div>
-                <textarea
-                  className="mt-2 w-full resize-none rounded-xl border border-ink/10 bg-cream p-3 text-xs leading-relaxed"
-                  rows={4}
-                  value={config.templates[key]}
-                  onChange={(e) => {
-                    setConfig({
-                      ...config,
-                      templates: { ...config.templates, [key]: e.target.value },
-                    })
-                  }}
-                />
-              </div>
-            )
-          })}
-          <button
-            onClick={async () => {
-              try {
-                await saveWspgoConfig(config)
-                flash('Plantillas guardadas en API')
-              } catch (e) {
-                flash((e as Error).message || 'Error al guardar')
-              }
-            }}
-            className="w-full rounded-xl bg-[#25d366] py-3 font-semibold text-white"
-          >
-            Guardar plantillas
-          </button>
-        </div>
-      )}
-
-      {tab === 'config' && (
-        <div className="card mt-5 space-y-4 p-5">
-          <Field label="Número de WhatsApp (con código de país)">
-            <input
-              className={inputClass}
-              value={customPhone}
-              onChange={(e) => setCustomPhone(e.target.value)}
-              placeholder="51999999999"
-              inputMode="tel"
-            />
-          </Field>
-          <Field label="Mensaje">
-            <textarea
-              className="w-full resize-none rounded-xl border border-ink/10 bg-white p-3 text-sm"
-              rows={5}
-              value={customMsg}
-              onChange={(e) => setCustomMsg(e.target.value)}
-            />
-          </Field>
-          <button
-            onClick={handleSendCustom}
-            disabled={!customPhone || !customMsg}
-            className="flex min-h-12 w-full items-center justify-center gap-2 rounded-xl bg-[#25d366] py-3 font-semibold text-white disabled:opacity-40"
-          >
-            <Send size={16} /> Enviar por API
-          </button>
-        </div>
-      )}
-
-      <Modal open={!!previewMsg} title="Vista previa del mensaje" onClose={() => setPreviewMsg(null)}>
-        <div className="rounded-2xl bg-[#e5ddd5] p-4">
-          <div className="ml-auto max-w-[85%] whitespace-pre-wrap rounded-2xl rounded-tr-sm bg-[#dcf8c6] p-3 text-sm shadow-sm">
-            {previewMsg}
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => downloadMassTemplate()}
+              className="min-h-11 rounded-xl bg-cream px-4 text-sm font-semibold"
+            >
+              Descargar formato XLSX
+            </button>
+            <label className="min-h-11 cursor-pointer rounded-xl bg-ink px-4 py-3 text-sm font-semibold text-cream">
+              Subir Excel
+              <input
+                type="file"
+                accept=".xlsx,.xls"
+                className="hidden"
+                onChange={(e) => {
+                  const file = e.target.files?.[0]
+                  e.target.value = ''
+                  if (!file) return
+                  void file.arrayBuffer().then((buf) => {
+                    const rows = parseMassXlsx(buf)
+                    setMassRows(rows.length)
+                    if (!rows.length) {
+                      flash('El archivo no tiene filas válidas (telefono + mensaje)')
+                      return
+                    }
+                    enqueueMass(rows, config)
+                    flash(`${rows.length} mensajes en cola`)
+                  })
+                }}
+              />
+            </label>
+            {!mass.running && mass.total > 0 ? (
+              <button
+                type="button"
+                onClick={() => resetMass()}
+                className="min-h-11 rounded-xl bg-cream px-4 text-sm font-semibold"
+              >
+                Limpiar
+              </button>
+            ) : null}
           </div>
+          {mass.total > 0 ? (
+            <div className="rounded-xl bg-cream p-3 text-sm">
+              <p className="font-semibold">
+                {mass.running ? 'Enviando en segundo plano…' : 'Cola'}
+              </p>
+              <p className="text-ink/55">
+                Enviados {mass.sent} · Fallidos {mass.failed} · Total {mass.total}
+                {mass.current ? ` · ahora ${mass.current}` : ''}
+              </p>
+              {mass.lastError ? <p className="mt-1 text-xs text-brick">{mass.lastError}</p> : null}
+              {massRows > 0 && mass.running ? (
+                <p className="mt-1 text-xs text-ink/40">Puedes salir de esta pantalla; el envío continúa.</p>
+              ) : null}
+            </div>
+          ) : null}
         </div>
-      </Modal>
 
       <Modal open={configOpen} title="Configurar iwspgo (WhatsApp)" onClose={() => setConfigOpen(false)} wide>
         <div className="space-y-4">

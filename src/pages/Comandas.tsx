@@ -1,22 +1,29 @@
+import { Navigate } from 'react-router-dom'
 import { useEffect, useMemo, useState } from 'react'
-import { Printer } from 'lucide-react'
+import { Search } from 'lucide-react'
 import { useStore } from '../store/StoreContext'
 import { useAuth } from '../auth/AuthContext'
 import { formatDateTime, padOrder, soles } from '../lib/format'
 import { printTicket } from '../lib/print'
-import { filterKitchenItems } from '../lib/kitchen'
+import { staffLabel } from '../lib/staffLabel'
 import { orderBelongsToStaff } from '../lib/realtime'
 import { apiAssignDriver, apiListDrivers, apiSettleCashier } from '../lib/apiClient'
 import { siteUrl } from '../lib/paths'
 import { isDeliveryOrder, needsDriver } from '../lib/orderType'
-import type { Driver, Order, OrderStatus, PaymentMethod } from '../types'
+import type { Driver, Order, OrderStatus } from '../types'
+import { canCharge } from '../types'
 import { Empty, Modal, PageTitle, StatusBadge, TypeBadge } from '../components/ui'
+import { CajaCobro } from '../components/CajaCobro'
+import { CajaCierre } from '../components/CajaCierre'
+import { PrintOrderActions } from '../components/PrintOrderActions'
+import { ConfirmProcess } from '../components/ConfirmProcess'
 
-type ComandaFilter = 'por_cobrar' | 'liquidar_caja' | 'todas' | 'delivery' | 'recojo' | OrderStatus
+type ComandaFilter = 'por_cobrar' | 'liquidar_caja' | 'historial' | 'todas' | 'delivery' | 'recojo' | OrderStatus
 
 const FILTERS_FULL: { id: ComandaFilter; label: string }[] = [
   { id: 'por_cobrar', label: 'Por cobrar' },
   { id: 'liquidar_caja', label: 'Liquidar' },
+  { id: 'historial', label: 'Historial cobros' },
   { id: 'delivery', label: 'Delivery' },
   { id: 'recojo', label: 'Recojo' },
   { id: 'todas', label: 'Todas' },
@@ -27,10 +34,11 @@ const FILTERS_FULL: { id: ComandaFilter; label: string }[] = [
   { id: 'cancelado', label: 'Canceladas' },
 ]
 
-/** Cajero solo ve: Por cobrar y Liquidar */
+/** Cajero: por cobrar, liquidar e historial de cobros */
 const FILTERS_CAJA: { id: ComandaFilter; label: string }[] = [
   { id: 'por_cobrar', label: 'Por cobrar' },
   { id: 'liquidar_caja', label: 'Liquidar' },
+  { id: 'historial', label: 'Historial cobros' },
 ]
 
 /** Pedidos web/delivery entregados pero pagados online - pendientes de liquidar en caja */
@@ -43,6 +51,19 @@ function needsCashierSettle(o: Order): boolean {
   )
 }
 
+function limaDayStart(ymd: string) {
+  return new Date(`${ymd}T05:00:00.000Z`)
+}
+function limaDayEnd(ymd: string) {
+  const d = limaDayStart(ymd)
+  d.setUTCDate(d.getUTCDate() + 1)
+  return d
+}
+
+function todayYmd() {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Lima' }).format(new Date())
+}
+
 function isPendingPayment(o: Order) {
   return !o.paid && o.status !== 'cancelado'
 }
@@ -52,20 +73,27 @@ function mozoCanSeeOrder(o: Order, user: { id?: string; name?: string }) {
   if (orderBelongsToStaff(o, user)) return true
   if (isDeliveryOrder(o) && o.status !== 'cancelado' && o.status !== 'entregado') return true
   if (o.type === 'llevar' && o.status !== 'cancelado' && o.status !== 'entregado') return true
+  if (o.type === 'salon' && o.source === 'web' && o.status !== 'cancelado' && o.status !== 'entregado') return true
   return false
 }
 
 export function Comandas() {
   const { state, updateOrderStatus, payOrder, reloadFromApi } = useStore()
-  const { user } = useAuth()
-  const isMozo = user?.role === 'mozo'
-  const isCajero = user?.role === 'cajero'
-  const [filter, setFilter] = useState<ComandaFilter>(isCajero ? 'por_cobrar' : isMozo ? 'delivery' : 'todas')
+  const { user, actingRole } = useAuth()
+  const isMozo = actingRole === 'mozo'
+  const isCajero = actingRole === 'cajero'
+  const mayCharge = canCharge(actingRole)
+  const [filter, setFilter] = useState<ComandaFilter>(isCajero ? 'por_cobrar' : 'todas')
+  const [custQ, setCustQ] = useState('')
+  const [custOpen, setCustOpen] = useState(false)
   const [selected, setSelected] = useState<Order | null>(null)
-  const [pay, setPay] = useState<PaymentMethod>('efectivo')
+  const [paying, setPaying] = useState(false)
   const [drivers, setDrivers] = useState<Driver[]>([])
   const [assigning, setAssigning] = useState(false)
   const [pickedDriverId, setPickedDriverId] = useState('')
+  const [settleDlg, setSettleDlg] = useState<'confirm' | 'busy' | 'done' | null>(null)
+  const [cobroFrom, setCobroFrom] = useState(todayYmd)
+  const [cobroTo, setCobroTo] = useState(todayYmd)
   const driverAppUrl = siteUrl('driver')
 
   const assignDriver = async (order: Order, driverId: string | null) => {
@@ -99,7 +127,7 @@ export function Comandas() {
   }, [isCajero])
 
   useEffect(() => {
-    if (isMozo) setFilter('delivery')
+    if (isMozo) setFilter('todas')
   }, [isMozo])
 
   const pendingPayCount = useMemo(
@@ -136,12 +164,46 @@ export function Comandas() {
     [state.orders],
   )
 
+  const custNeedle = custQ.trim().toLowerCase()
+  const custPhone = custQ.replace(/\D/g, '')
+  const custHits = useMemo(() => {
+    if (custNeedle.length < 2 && custPhone.length < 3) return []
+    const seen = new Set<string>()
+    const out: { name: string; phone?: string }[] = []
+    const push = (name: string, phone?: string) => {
+      const key = `${name.toLowerCase()}|${(phone || '').replace(/\D/g, '').slice(-9)}`
+      if (seen.has(key)) return
+      seen.add(key)
+      out.push({ name, phone })
+    }
+    for (const c of state.customers) {
+      const n = c.name.toLowerCase()
+      const p = (c.phone || '').replace(/\D/g, '')
+      if ((custNeedle.length >= 2 && n.includes(custNeedle)) || (custPhone.length >= 3 && p.includes(custPhone))) {
+        push(c.name, c.phone)
+      }
+    }
+    for (const o of state.orders) {
+      const n = o.customerName.toLowerCase()
+      const p = (o.customerPhone || '').replace(/\D/g, '')
+      if ((custNeedle.length >= 2 && n.includes(custNeedle)) || (custPhone.length >= 3 && p.includes(custPhone))) {
+        push(o.customerName, o.customerPhone)
+      }
+    }
+    return out.slice(0, 8)
+  }, [custNeedle, custPhone, state.customers, state.orders])
+
   const list = useMemo(() => {
     return state.orders
       .filter((o) => {
         if (isMozo && user && !mozoCanSeeOrder(o, user)) return false
         if (filter === 'por_cobrar') return isPendingPayment(o)
         if (filter === 'liquidar_caja') return needsCashierSettle(o)
+        if (filter === 'historial') {
+          if (!o.paid || o.status === 'cancelado') return false
+          const t = new Date(o.updatedAt || o.createdAt).getTime()
+          return t >= limaDayStart(cobroFrom).getTime() && t < limaDayEnd(cobroTo).getTime()
+        }
         if (filter === 'delivery') {
           return isDeliveryOrder(o) && o.status !== 'cancelado' && o.status !== 'entregado'
         }
@@ -150,6 +212,12 @@ export function Comandas() {
         }
         if (filter === 'todas') return true
         return o.status === filter
+      })
+      .filter((o) => {
+        if (!custNeedle && custPhone.length < 3) return true
+        const n = o.customerName.toLowerCase()
+        const p = (o.customerPhone || '').replace(/\D/g, '')
+        return (custNeedle.length >= 2 && n.includes(custNeedle)) || (custPhone.length >= 3 && p.includes(custPhone))
       })
       .sort((a, b) => {
         if (filter === 'delivery') {
@@ -167,7 +235,7 @@ export function Comandas() {
         }
         return b.createdAt.localeCompare(a.createdAt)
       })
-  }, [state.orders, filter, isMozo, user])
+  }, [state.orders, filter, isMozo, user, custNeedle, custPhone, cobroFrom, cobroTo])
 
   const current = selected ? (state.orders.find((o) => o.id === selected.id) ?? null) : null
 
@@ -187,25 +255,63 @@ export function Comandas() {
     if (!mozoCanSeeOrder(selected, user)) setSelected(null)
   }, [isMozo, user, selected])
 
+  if (isMozo) return <Navigate to="/pedidos-web" replace />
+
   return (
     <div>
-      <PageTitle
-        title={isCajero ? 'Caja' : isMozo ? 'Pedidos · mesa, llamada y delivery' : 'Ver pedidos'}
-        hint={
-          isMozo
-            ? `Mesas + pedidos por llamada/WSP/web. Delivery: asigna repartidor (${needDriverCount} sin conductor).`
-            : isCajero
-              ? `Por cobrar (${pendingPayCount})${cashierSettleCount > 0 ? ` · Liquidar (${cashierSettleCount})` : ''}`
-              : 'Toca uno para cobrar, cambiar estado o imprimir ticket.'
-        }
-      />
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <PageTitle
+          title={isCajero ? 'Caja' : isMozo ? 'Pedidos · mesa, llamada y delivery' : 'Ver pedidos'}
+          hint={
+            isMozo
+              ? `Tomas pedidos. El cobro lo hace caja. Delivery: asigna repartidor (${needDriverCount} sin conductor).`
+              : isCajero
+                ? `Por cobrar (${pendingPayCount})${cashierSettleCount > 0 ? ` · Liquidar (${cashierSettleCount})` : ''}`
+                : 'Toca uno para cobrar, cambiar estado o imprimir ticket.'
+          }
+        />
+        {mayCharge ? <CajaCierre /> : null}
+      </div>
+      <div className="relative mt-4">
+        <Search size={16} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-ink/35" />
+        <input
+          className="min-h-12 w-full rounded-2xl border border-ink/10 bg-surface py-3 pr-4 pl-10 text-sm outline-none placeholder:text-ink/35 focus:border-gold focus:ring-2 focus:ring-gold/30"
+          placeholder="Buscar cliente por nombre o celular…"
+          value={custQ}
+          onChange={(e) => {
+            setCustQ(e.target.value)
+            setCustOpen(true)
+          }}
+          onFocus={() => setCustOpen(true)}
+          autoComplete="off"
+        />
+        {custOpen && custHits.length > 0 ? (
+          <ul className="absolute z-30 mt-1 max-h-56 w-full overflow-y-auto rounded-2xl border border-ink/10 bg-surface py-1 shadow-xl">
+            {custHits.map((c) => (
+              <li key={`${c.name}-${c.phone || ''}`}>
+                <button
+                  type="button"
+                  className="flex w-full items-center justify-between gap-3 px-3 py-2.5 text-left hover:bg-gold/15"
+                  onClick={() => {
+                    setCustQ(c.name)
+                    setCustOpen(false)
+                  }}
+                >
+                  <span className="text-sm font-semibold">{c.name}</span>
+                  <span className="text-xs text-ink/45">{c.phone}</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        ) : null}
+      </div>
       <div className="mt-4 flex gap-2 overflow-x-auto pb-1">
-        {(isCajero ? FILTERS_CAJA : FILTERS_FULL).map((f) => (
+        {(isCajero ? FILTERS_CAJA : isMozo ? FILTERS_FULL.filter((f) => f.id !== 'por_cobrar' && f.id !== 'liquidar_caja') : FILTERS_FULL).map((f) => (
           <button
             key={f.id}
             onClick={() => setFilter(f.id)}
             className={`min-h-9 shrink-0 rounded-full px-4 py-1.5 text-sm ${
-              filter === f.id ? 'bg-ink text-cream' : 'bg-white text-ink/60'
+              filter === f.id ? 'bg-ink text-cream' : 'bg-surface text-ink/60 ring-1 ring-ink/8'
             }`}
           >
             {f.id === 'por_cobrar' && pendingPayCount > 0
@@ -220,26 +326,52 @@ export function Comandas() {
           </button>
         ))}
       </div>
+      {filter === 'historial' ? (
+        <div className="mt-3 flex flex-wrap items-end gap-2">
+          <label className="text-xs font-semibold text-ink/50">
+            Desde
+            <input
+              type="date"
+              className="mt-1 block min-h-10 rounded-xl border border-ink/10 bg-surface px-3 text-sm text-ink"
+              value={cobroFrom}
+              onChange={(e) => setCobroFrom(e.target.value || todayYmd())}
+            />
+          </label>
+          <label className="text-xs font-semibold text-ink/50">
+            Hasta
+            <input
+              type="date"
+              className="mt-1 block min-h-10 rounded-xl border border-ink/10 bg-surface px-3 text-sm text-ink"
+              value={cobroTo}
+              onChange={(e) => setCobroTo(e.target.value || todayYmd())}
+            />
+          </label>
+        </div>
+      ) : null}
       {list.length === 0 ? (
         <div className="mt-8">
           <Empty
             title={
               filter === 'por_cobrar'
                 ? 'Nada por cobrar'
-                : filter === 'delivery'
-                  ? 'No hay deliveries activos'
-                  : filter === 'recojo'
-                    ? 'No hay recojos activos'
-                    : 'No hay comandas en este filtro'
+                : filter === 'historial'
+                  ? 'Sin cobros en ese rango'
+                  : filter === 'delivery'
+                    ? 'No hay deliveries activos'
+                    : filter === 'recojo'
+                      ? 'No hay recojos activos'
+                      : 'No hay comandas en este filtro'
             }
             hint={
               filter === 'por_cobrar'
                 ? 'Cuando haya pedidos sin pagar aparecerán aquí.'
-                : filter === 'delivery'
-                  ? 'Pedidos a domicilio (llamada, WSP, web). Aquí asignas repartidor.'
-                  : filter === 'recojo'
-                    ? 'Pedidos para recojo en tienda (llamada, WSP, web). Sin repartidor.'
-                    : 'Crea uno desde Tomar pedido o la carta web.'
+                : filter === 'historial'
+                  ? 'Cambia las fechas para ver cobros de otros días.'
+                  : filter === 'delivery'
+                    ? 'Pedidos a domicilio (llamada, WSP, web). Aquí asignas repartidor.'
+                    : filter === 'recojo'
+                      ? 'Pedidos para recojo en tienda (llamada, WSP, web). Sin repartidor.'
+                      : 'Crea uno desde Para llevar o Mesas.'
             }
           />
         </div>
@@ -256,12 +388,21 @@ export function Comandas() {
                   <div>
                     <p className="font-display text-xl tracking-tight">{padOrder(o.number)}</p>
                     <p className="text-sm font-medium text-ink/55">{o.customerName}</p>
+                    {o.tableNumber ? (
+                      <p className="mt-0.5 font-display text-2xl text-ember">Mesa {o.tableNumber}</p>
+                    ) : null}
+                    <p className="text-xs text-ink/40">Mozo: {staffLabel(o, state.users)}</p>
                   </div>
                   <p className="font-extrabold text-ember">{soles(o.total)}</p>
                 </div>
                 <div className="mt-3 flex flex-wrap items-center gap-2">
                   <StatusBadge status={o.status} />
                   <TypeBadge type={o.type} />
+                  {o.tableNumber ? (
+                    <span className="rounded-full bg-gold px-2 py-0.5 text-[11px] font-black text-[#1a3d1a]">
+                      Mesa {o.tableNumber}
+                    </span>
+                  ) : null}
                   {isDeliveryOrder(o) && !o.driverId && o.status !== 'entregado' && o.status !== 'cancelado' ? (
                     <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-bold text-amber-900">
                       Sin repartidor
@@ -304,10 +445,17 @@ export function Comandas() {
                     <td className="px-4 py-3 font-semibold">{padOrder(o.number)}</td>
                     <td className="px-4 py-3">
                       <p>{o.customerName}</p>
-                      <p className="text-xs text-ink/40">{o.createdBy}</p>
+                      <p className="text-xs text-ink/40">{staffLabel(o, state.users)}</p>
                     </td>
                     <td className="px-4 py-3">
-                      <TypeBadge type={o.type} />
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <TypeBadge type={o.type} />
+                        {o.tableNumber ? (
+                          <span className="rounded-full bg-gold px-2 py-0.5 text-[10px] font-black text-[#1a3d1a]">
+                            Mesa {o.tableNumber}
+                          </span>
+                        ) : null}
+                      </div>
                     </td>
                     <td className="px-4 py-3">
                       <div className="flex flex-wrap items-center gap-1.5">
@@ -351,7 +499,13 @@ export function Comandas() {
             <div className="flex flex-wrap gap-2">
               <StatusBadge status={current.status} />
               <TypeBadge type={current.type} />
+              {current.tableNumber ? (
+                <span className="rounded-full bg-gold px-2.5 py-0.5 text-sm font-black text-[#1a3d1a]">
+                  Mesa {current.tableNumber}
+                </span>
+              ) : null}
             </div>
+            <p className="text-sm font-semibold text-ink">Mozo: {staffLabel(current, state.users)}</p>
             <p className="text-sm text-ink/60">
               {current.customerName}
               {current.customerPhone ? ` · ${current.customerPhone}` : ''}
@@ -369,8 +523,6 @@ export function Comandas() {
               ))}
             </ul>
             <div className="text-sm text-ink/50">
-              <p>Subtotal (sin IGV): {soles(current.subtotal)}</p>
-              <p>IGV: {soles(current.igv)}</p>
               <p className="font-display text-xl text-ink">Total {soles(current.total)}</p>
             </div>
             {current.notes ? <p className="text-sm">Nota: {current.notes}</p> : null}
@@ -484,44 +636,7 @@ export function Comandas() {
               </div>
             ) : null}
 
-            <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
-              <button
-                className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-white px-3 py-2 text-sm font-semibold"
-                onClick={() => printTicket(current, state.settings, 'caja')}
-              >
-                <Printer size={16} /> Ticket caja
-              </button>
-              <button
-                className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-white px-3 py-2 text-sm font-semibold"
-                onClick={() => {
-                  const kitchen = filterKitchenItems(current.items, state.products)
-                  if (kitchen.length === 0) {
-                    alert('Este pedido no tiene ítems de preparación (solo barra).')
-                    return
-                  }
-                  printTicket(
-                    {
-                      ...current,
-                      items: kitchen,
-                      notes:
-                        current.source === 'web'
-                          ? `WEB / APP · ${current.notes || ''}`.trim()
-                          : current.notes,
-                    },
-                    state.settings,
-                    'cocina',
-                  )
-                }}
-              >
-                <Printer size={16} /> Comanda cocina
-              </button>
-              <button
-                className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-white px-3 py-2 text-sm font-semibold"
-                onClick={() => printTicket(current, state.settings, 'cuenta')}
-              >
-                <Printer size={16} /> Pre-cuenta
-              </button>
-            </div>
+            {current.paid ? <PrintOrderActions order={current} /> : null}
 
             {current.status !== 'cancelado' && current.status !== 'entregado' ? (
               <div className="flex flex-wrap gap-2">
@@ -558,7 +673,7 @@ export function Comandas() {
                         Asigna un repartidor arriba. Sin conductor no se puede marcar entregado.
                       </p>
                     )
-                  ) : (
+                  ) : current.paid && !mayCharge ? (
                     <button
                       className="min-h-11 rounded-xl bg-ink px-4 py-2 text-sm font-semibold text-cream"
                       onClick={() => {
@@ -566,39 +681,50 @@ export function Comandas() {
                         setSelected(null)
                       }}
                     >
-                      Entregar
+                      {current.type === 'salon' || current.tableNumber
+                        ? `Liberar mesa${current.tableNumber ? ` ${current.tableNumber}` : ''}`
+                        : 'Entregar recojo'}
                     </button>
-                  )
+                  ) : null
                 ) : null}
               </div>
             ) : null}
-            {!current.paid && current.status !== 'cancelado' ? (
-              <div className="rounded-xl bg-white p-3">
-                <p className="mb-2 text-xs font-semibold uppercase text-ink/40">Cobrar</p>
-                <div className="flex flex-wrap gap-2">
-                  {(['efectivo', 'yape', 'tarjeta'] as PaymentMethod[]).map((m) => (
-                    <button
-                      key={m}
-                      onClick={() => setPay(m)}
-                      className={`min-h-10 rounded-lg px-3 py-1 text-sm capitalize ${pay === m ? 'bg-ink text-cream' : 'bg-cream'}`}
-                    >
-                      {m}
-                    </button>
-                  ))}
-                  <button
-                    className="min-h-10 rounded-lg bg-ember px-3 py-1 text-sm font-semibold text-white sm:ml-auto"
-                    onClick={() => {
-                      payOrder(current.id, pay)
-                      printTicket({ ...current, paid: true, paymentMethod: pay }, state.settings, 'caja')
-                      setSelected(null)
-                    }}
-                  >
-                    Confirmar e imprimir
-                  </button>
-                </div>
-              </div>
+            {!mayCharge && !current.paid && current.status !== 'cancelado' ? (
+              <p className="rounded-xl bg-amber-50 px-3 py-2 text-sm font-semibold text-amber-900">
+                Por cobrar · solo caja confirma el pago.
+              </p>
             ) : null}
-            {needsCashierSettle(current) ? (
+            {mayCharge && !current.paid && current.status !== 'cancelado' ? (
+              <CajaCobro
+                order={current}
+                busy={paying}
+                onConfirm={async (payload) => {
+                  setPaying(true)
+                  try {
+                    await payOrder(current.id, payload)
+                    if (current.type === 'salon' || current.type === 'llevar' || current.tableNumber) {
+                      updateOrderStatus(current.id, 'entregado')
+                    }
+                    const paidOrder = {
+                      ...current,
+                      paid: true,
+                      paymentMethod: payload.payments[0]?.method ?? 'efectivo',
+                      docTipo: payload.billing.docTipo,
+                      docNumero: payload.billing.docNumero,
+                      docNombre: payload.billing.docNombre,
+                      docEmail: payload.billing.docEmail,
+                      docPhone: payload.billing.docPhone,
+                      docAddress: payload.billing.docAddress,
+                    }
+                    printTicket(paidOrder, state.settings, 'caja', state.users)
+                  } finally {
+                    setPaying(false)
+                  }
+                }}
+                onFinished={() => setSelected(null)}
+              />
+            ) : null}
+            {mayCharge && needsCashierSettle(current) ? (
               <div className="rounded-xl bg-teal-50 p-3">
                 <p className="mb-2 text-xs font-semibold uppercase text-teal-700">Liquidar en caja</p>
                 <p className="mb-3 text-sm text-teal-900">
@@ -606,11 +732,7 @@ export function Comandas() {
                 </p>
                 <button
                   className="min-h-10 rounded-lg bg-teal-600 px-4 py-2 text-sm font-semibold text-white"
-                  onClick={async () => {
-                    await apiSettleCashier(current.id)
-                    reloadFromApi()
-                    setSelected(null)
-                  }}
+                  onClick={() => setSettleDlg('confirm')}
                 >
                   Confirmar liquidación
                 </button>
@@ -619,6 +741,31 @@ export function Comandas() {
           </div>
         ) : null}
       </Modal>
+      <ConfirmProcess
+        open={!!settleDlg}
+        phase={settleDlg === 'done' ? 'done' : settleDlg === 'busy' ? 'busy' : 'confirm'}
+        title="¿Liquidar en caja?"
+        message={<p>Confirmas que este pedido web ya está cobrado y entregado.</p>}
+        confirmLabel="Sí, liquidar"
+        doneTitle="Liquidación procesada"
+        doneMessage="El pedido quedó liquidado en caja."
+        busyLabel="Liquidando…"
+        onConfirm={() => {
+          if (!current) return
+          setSettleDlg('busy')
+          void apiSettleCashier(current.id)
+            .then(() => {
+              reloadFromApi()
+              setSettleDlg('done')
+            })
+            .catch(() => setSettleDlg('confirm'))
+        }}
+        onCancel={() => setSettleDlg(null)}
+        onDone={() => {
+          setSettleDlg(null)
+          setSelected(null)
+        }}
+      />
     </div>
   )
 }

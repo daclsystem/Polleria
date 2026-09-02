@@ -55,6 +55,55 @@ reviewsRouter.get('/product/:productId', async (req, res) => {
   }
 })
 
+reviewsRouter.post('/visit', async (req, res) => {
+  try {
+    const orderId = String(req.body?.orderId || '')
+    const tel = String(req.body?.tel || '').replace(/\D/g, '')
+    const stars = Math.min(5, Math.max(1, Number(req.body?.stars) || 5))
+    const comment = String(req.body?.comment || '').trim().slice(0, 500)
+    if (!/^[0-9a-f-]{36}$/i.test(orderId) || tel.length < 6) {
+      return res.status(400).json({ error: 'Pedido y teléfono requeridos' })
+    }
+    const pool = await getPool()
+    await pool.request().query(`
+      IF OBJECT_ID(N'dbo.OrderFeedback', N'U') IS NULL
+      BEGIN
+        CREATE TABLE dbo.OrderFeedback (
+          Id UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_OrderFeedback PRIMARY KEY DEFAULT NEWID(),
+          OrderId UNIQUEIDENTIFIER NOT NULL,
+          Phone NVARCHAR(20) NOT NULL,
+          Stars TINYINT NOT NULL,
+          Comment NVARCHAR(500) NULL,
+          CreatedAt DATETIME2 NOT NULL CONSTRAINT DF_OrderFeedback_Created DEFAULT SYSUTCDATETIME()
+        );
+        CREATE UNIQUE INDEX UQ_OrderFeedback_Order_Phone ON dbo.OrderFeedback (OrderId, Phone);
+      END
+    `)
+    const exists = await pool
+      .request()
+      .input('oid', sql.UniqueIdentifier, orderId)
+      .input('tel', sql.NVarChar, tel)
+      .query(`SELECT TOP 1 Id FROM dbo.OrderFeedback WHERE OrderId=@oid AND Phone=@tel`)
+    if (exists.recordset[0]) {
+      return res.json({ ok: true, already: true, message: 'Ya calificaste este pedido. ¡Gracias!' })
+    }
+    await pool
+      .request()
+      .input('id', sql.UniqueIdentifier, uuid())
+      .input('oid', sql.UniqueIdentifier, orderId)
+      .input('tel', sql.NVarChar, tel)
+      .input('stars', sql.TinyInt, stars)
+      .input('comment', sql.NVarChar, comment || null)
+      .query(`
+        INSERT INTO dbo.OrderFeedback (Id, OrderId, Phone, Stars, Comment)
+        VALUES (@id, @oid, @tel, @stars, @comment)
+      `)
+    res.json({ ok: true })
+  } catch (e) {
+    res.status(500).json({ error: (e as Error).message })
+  }
+})
+
 reviewsRouter.post('/', authRequired, async (req, res) => {
   try {
     const user = req.user

@@ -1,24 +1,9 @@
 import * as XLSX from 'xlsx'
 import type { Order, User } from '../types'
 import { PAY_LABEL, TYPE_LABEL } from '../types'
+import { staffLabel } from './staffLabel'
 
 type RankRow = { label: string; total: number; count: number }
-
-function staffLabel(order: Order, users: User[]) {
-  if (order.source === 'web') return 'App / Web'
-  if (order.createdByUserId) {
-    const u = users.find((x) => x.id === order.createdByUserId)
-    if (u) return u.name
-  }
-  if (order.createdBy) {
-    const byId = users.find((x) => x.id === order.createdBy)
-    if (byId) return byId.name
-    const byName = users.find((x) => x.name === order.createdBy)
-    if (byName) return byName.name
-    if (!['api', 'Sistema', 'POS', 'Web'].includes(order.createdBy)) return order.createdBy
-  }
-  return 'Sin asignar'
-}
 
 function sheetFromRank(name: string, rows: RankRow[], countHeader: string) {
   const data = [

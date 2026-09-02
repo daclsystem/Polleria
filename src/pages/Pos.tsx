@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
-import { Check, ChevronDown, MapPin, Minus, Plus, Trash2, X } from 'lucide-react'
+import { Check, ChevronDown, Loader2, MapPin, Minus, Plus, Trash2, X } from 'lucide-react'
 import { useAuth } from '../auth/AuthContext'
 import { useStore } from '../store/StoreContext'
 import { padOrder, soles } from '../lib/format'
@@ -11,26 +11,38 @@ import { pickDeliveryBranchId } from '../lib/deliveryRanges'
 import { filterKitchenItems } from '../lib/kitchen'
 import { orderBelongsToStaff } from '../lib/realtime'
 import type { Customer, OrderItem, OrderType, PaymentMethod } from '../types'
+import { canCharge } from '../types'
 import { Field, Modal, PageTitle, inputClass } from '../components/ui'
 
-const TYPES: { id: OrderType; label: string }[] = [
-  { id: 'salon', label: 'Salón / mesa' },
-  { id: 'llevar', label: 'Recojo (llamada/WSP)' },
-  { id: 'delivery', label: 'Delivery (llamada/WSP)' },
-]
+function phoneDigitsOf(value?: string) {
+  return String(value || '').replace(/\D/g, '')
+}
+
+function phoneLast9(value?: string) {
+  return phoneDigitsOf(value).slice(-9)
+}
+
+function prettyPhone(value?: string) {
+  const d = phoneLast9(value)
+  if (d.length !== 9) return value || ''
+  return `${d.slice(0, 3)} ${d.slice(3, 6)} ${d.slice(6)}`
+}
 
 export function Pos() {
   const { state, createOrder, addItemsToOrder, payOrder } = useStore()
-  const { user } = useAuth()
+  const { user, actingRole } = useAuth()
   const navigate = useNavigate()
   const [params] = useSearchParams()
   const presetTable = params.get('mesa') ?? ''
   const appendOrderId = params.get('agregar') ?? ''
+  const presetTipo = params.get('tipo')
 
   const appendOrder = appendOrderId ? state.orders.find((o) => o.id === appendOrderId) : null
   const appendForbidden =
-    Boolean(appendOrder) && user?.role === 'mozo' && !orderBelongsToStaff(appendOrder!, user)
+    Boolean(appendOrder) && actingRole === 'mozo' && !orderBelongsToStaff(appendOrder!, user)
   const isAppendMode = !!appendOrder && !appendForbidden
+  const salonFlow = Boolean(presetTable) || isAppendMode
+  const mayCharge = canCharge(actingRole)
 
   const categories = useMemo(
     () => ['Todos', ...new Set(state.products.map((p) => p.category))],
@@ -38,7 +50,15 @@ export function Pos() {
   )
   const [cat, setCat] = useState('Todos')
   const [q, setQ] = useState('')
-  const [type, setType] = useState<OrderType>(isAppendMode ? (appendOrder?.type ?? 'salon') : 'salon')
+  const [type, setType] = useState<OrderType>(
+    isAppendMode
+      ? (appendOrder?.type ?? 'salon')
+      : presetTable
+        ? 'salon'
+        : presetTipo === 'delivery'
+          ? 'delivery'
+          : 'llevar',
+  )
   const [tableId, setTableId] = useState(presetTable)
   const [tableOpen, setTableOpen] = useState(false)
   const [customerName, setCustomerName] = useState(
@@ -47,6 +67,8 @@ export function Pos() {
   const [phone, setPhone] = useState(isAppendMode ? (appendOrder?.customerPhone ?? '') : '')
   const [custHits, setCustHits] = useState<Customer[]>([])
   const [custOpen, setCustOpen] = useState(false)
+  const [matchedCustomer, setMatchedCustomer] = useState<Customer | null>(null)
+  const appliedPhoneRef = useRef('')
   const [address, setAddress] = useState('')
   const [addressLat, setAddressLat] = useState<number | null>(null)
   const [addressLng, setAddressLng] = useState<number | null>(null)
@@ -56,10 +78,12 @@ export function Pos() {
   const [quoteInfo, setQuoteInfo] = useState<string | null>(null)
   const [quoteBusy, setQuoteBusy] = useState(false)
   const [notes, setNotes] = useState('')
-  const [discount, setDiscount] = useState(0)
   const [items, setItems] = useState<OrderItem[]>([])
   const [payOpen, setPayOpen] = useState(false)
   const [cartOpen, setCartOpen] = useState(false)
+  const [confirmSend, setConfirmSend] = useState(false)
+  const [sending, setSending] = useState(false)
+  const sendingRef = useRef(false)
   const [method, setMethod] = useState<PaymentMethod>('efectivo')
   const [cash, setCash] = useState('')
 
@@ -89,7 +113,7 @@ export function Pos() {
   const qty = items.reduce((s, i) => s + i.qty, 0)
   const gross = items.reduce((s, i) => s + i.qty * i.price, 0)
   const deliveryFee = type === 'delivery' ? quotedFee || 0 : 0
-  const total = Math.max(0, gross - discount + deliveryFee)
+  const total = Math.max(0, gross + deliveryFee)
 
   useEffect(() => {
     if (type !== 'delivery') {
@@ -101,15 +125,18 @@ export function Pos() {
   useEffect(() => {
     if (isAppendMode) return
     const nameQ = customerName.trim().toLowerCase()
-    const phoneQ = phone.replace(/\D/g, '')
+    const phoneQ = phoneDigitsOf(phone)
+    const last9 = phoneQ.slice(-9)
     if (nameQ.length < 2 && phoneQ.length < 3) {
       setCustHits([])
+      setMatchedCustomer(null)
+      appliedPhoneRef.current = ''
       return
     }
     const local: Customer[] = []
     const seen = new Set<string>()
     const push = (c: { id?: string; name: string; phone?: string; address?: string }) => {
-      const key = (c.phone || '').replace(/\D/g, '').slice(-9) || c.name.toLowerCase()
+      const key = phoneLast9(c.phone) || c.name.toLowerCase()
       if (!key || seen.has(key)) return
       seen.add(key)
       local.push({
@@ -123,29 +150,52 @@ export function Pos() {
     }
     for (const c of state.customers) {
       const n = c.name.toLowerCase()
-      const p = (c.phone || '').replace(/\D/g, '')
+      const p = phoneDigitsOf(c.phone)
       if ((nameQ.length >= 2 && n.includes(nameQ)) || (phoneQ.length >= 3 && p.includes(phoneQ))) push(c)
     }
     for (const o of state.orders) {
       const n = o.customerName.toLowerCase()
-      const p = (o.customerPhone || '').replace(/\D/g, '')
+      const p = phoneDigitsOf(o.customerPhone)
       if ((nameQ.length >= 2 && n.includes(nameQ)) || (phoneQ.length >= 3 && p.includes(phoneQ))) {
         push({ name: o.customerName, phone: o.customerPhone, address: o.address, id: o.customerId })
       }
     }
+
+    const applyExact = (pool: Customer[]) => {
+      if (last9.length !== 9) {
+        setMatchedCustomer(null)
+        appliedPhoneRef.current = ''
+        return
+      }
+      const exact = pool.find((c) => phoneLast9(c.phone) === last9)
+      if (!exact) {
+        setMatchedCustomer(null)
+        return
+      }
+      setMatchedCustomer(exact)
+      if (appliedPhoneRef.current === last9) return
+      appliedPhoneRef.current = last9
+      setCustomerName(exact.name)
+      if (exact.address) setAddress(exact.address)
+      setCustOpen(true)
+    }
+
     setCustHits(local.slice(0, 8))
-    const q = nameQ.length >= 2 ? customerName.trim() : phoneQ
+    applyExact(local)
+    const query = phoneQ.length >= 3 ? phoneQ : customerName.trim()
     const t = window.setTimeout(() => {
-      void apiSearchCustomers(q)
+      void apiSearchCustomers(query)
         .then((r) => {
-          for (const c of r.customers || []) push(c)
+          const incoming = r.customers || []
           setCustHits((prev) => {
-            const map = new Map(prev.map((x) => [(x.phone || '').replace(/\D/g, '').slice(-9) || x.name, x]))
-            for (const c of r.customers || []) {
-              const k = (c.phone || '').replace(/\D/g, '').slice(-9) || c.name
+            const map = new Map(prev.map((x) => [phoneLast9(x.phone) || x.name, x]))
+            for (const c of incoming) {
+              const k = phoneLast9(c.phone) || c.name
               if (!map.has(k)) map.set(k, c)
             }
-            return [...map.values()].slice(0, 8)
+            const next = [...map.values()].slice(0, 8)
+            applyExact(next)
+            return next
           })
         })
         .catch(() => undefined)
@@ -156,11 +206,10 @@ export function Pos() {
   const change = Math.max(0, cashNum - total)
   const canSend = items.length > 0 && (isAppendMode || type !== 'salon' || Boolean(tableId))
 
-  const phoneDigits = phone.replace(/\D/g, '')
   const nameOk = customerName.trim().length >= 2
-  const phoneOk = phoneDigits.length >= 9
+  const phoneOk = phoneLast9(phone).length === 9
   const customerOk = isAppendMode || (nameOk && phoneOk)
-  const canSubmit = canSend && customerOk
+  const canSubmit = canSend && customerOk && (type !== 'salon' || Boolean(tableId) || isAppendMode)
 
   const add = (productId: string) => {
     const p = state.products.find((x) => x.id === productId)
@@ -173,79 +222,89 @@ export function Pos() {
   }
 
   const submit = async (paid: boolean, payMethod: PaymentMethod) => {
-    if (!canSubmit) return
-
-    if (isAppendMode && appendOrder) {
-      const kitchenNew = filterKitchenItems(items, state.products)
-      addItemsToOrder(appendOrder.id, items, user?.name ?? 'POS')
-      // Comanda adicional: cocina lo ve en Recibidos (nuevo), no en fuego
-      if (kitchenNew.length > 0) {
-        printTicket(
-          {
-            ...appendOrder,
-            items: kitchenNew,
-            notes: `ADICIONAL · Mesa ${appendOrder.tableNumber ?? ''} · solo lo nuevo`,
-            status: 'nuevo',
-          },
-          state.settings,
-          'cocina',
-        )
-      }
-      navigate('/comandas')
-      return
-    }
-
-    const name = customerName.trim()
-    if (!nameOk || !phoneOk) {
-      alert('Nombre y teléfono del cliente son obligatorios')
-      return
-    }
-    if (type === 'delivery' && !address.trim()) {
-      alert('Indica la dirección de entrega para calcular km y tiempo')
-      return
-    }
-
-    let lat = addressLat
-    let lng = addressLng
-    let dist = quoteKm
-    let mins = quoteMin
-    let sendFee = deliveryFee
-    if (type === 'delivery') {
-      try {
-        const q = await quoteDeliveryFromAddress(address.trim(), pickDeliveryBranchId(state.branches))
-        lat = q.lat
-        lng = q.lng
-        dist = q.distanceKm
-        mins = q.timeMin
-        sendFee = q.fee
-        setAddressLat(q.lat)
-        setAddressLng(q.lng)
-        setQuotedFee(q.fee)
-        setQuoteKm(q.distanceKm)
-        setQuoteMin(q.timeMin)
-        setQuoteInfo(formatDeliveryQuote(q))
-      } catch (e) {
-        alert((e as Error).message || 'No se pudo calcular el delivery. Revisa la dirección o la ubicación del local.')
-        return
-      }
-    }
-    const orderItems =
-      type === 'delivery' && sendFee > 0
-        ? [...items, { productId: 'delivery', name: 'Delivery', qty: 1, price: sendFee }]
-        : items
+    if (!canSubmit || sendingRef.current) return
+    sendingRef.current = true
+    setSending(true)
+    setConfirmSend(false)
+    setPayOpen(false)
 
     try {
-      const { customer } = await apiUpsertCustomer({
-        name,
-        phone,
-        address: type === 'delivery' ? address || undefined : undefined,
-      })
+      if (isAppendMode && appendOrder) {
+        const kitchenNew = filterKitchenItems(items, state.products)
+        addItemsToOrder(appendOrder.id, items, user?.name ?? 'POS')
+        if (kitchenNew.length > 0) {
+          printTicket(
+            {
+              ...appendOrder,
+              items: kitchenNew,
+              notes: `ADICIONAL · Mesa ${appendOrder.tableNumber ?? ''} · solo lo nuevo`,
+              status: 'nuevo',
+            },
+            state.settings,
+            'cocina',
+            state.users,
+          )
+        }
+        navigate('/pedidos-web')
+        return
+      }
+
+      const name = customerName.trim()
+      if (!isAppendMode && (!nameOk || !phoneOk)) {
+        alert('Nombre y celular del cliente son obligatorios')
+        return
+      }
+      if (type === 'delivery' && !address.trim()) {
+        alert('Indica la dirección de entrega para calcular km y tiempo')
+        return
+      }
+
+      let lat = addressLat
+      let lng = addressLng
+      let dist = quoteKm
+      let mins = quoteMin
+      let sendFee = deliveryFee
+      if (type === 'delivery') {
+        try {
+          const q = await quoteDeliveryFromAddress(address.trim(), pickDeliveryBranchId(state.branches))
+          lat = q.lat
+          lng = q.lng
+          dist = q.distanceKm
+          mins = q.timeMin
+          sendFee = q.fee
+          setAddressLat(q.lat)
+          setAddressLng(q.lng)
+          setQuotedFee(q.fee)
+          setQuoteKm(q.distanceKm)
+          setQuoteMin(q.timeMin)
+          setQuoteInfo(formatDeliveryQuote(q))
+        } catch (e) {
+          alert((e as Error).message || 'No se pudo calcular el delivery. Revisa la dirección o la ubicación del local.')
+          return
+        }
+      }
+      const orderItems =
+        type === 'delivery' && sendFee > 0
+          ? [...items, { productId: 'delivery', name: 'Delivery', qty: 1, price: sendFee }]
+          : items
+
+      let customerId: string | undefined
+      let customerPhone = phone
+      if (phoneOk && nameOk) {
+        const { customer } = await apiUpsertCustomer({
+          name,
+          phone,
+          address: type === 'delivery' ? address || undefined : undefined,
+        })
+        customerId = customer.id
+        customerPhone = customer.phone || phone
+      }
       const order = await createOrder({
         type,
         items: orderItems,
         customerName: name,
-        customerPhone: customer.phone || phone,
-        customerId: customer.id,
+        customerPhone: customerPhone || undefined,
+        customerId,
         address: type === 'delivery' ? address : undefined,
         addressLat: type === 'delivery' && lat != null ? lat : undefined,
         addressLng: type === 'delivery' && lng != null ? lng : undefined,
@@ -254,25 +313,33 @@ export function Pos() {
         deliveryDistanceKm: type === 'delivery' ? dist ?? undefined : undefined,
         deliveryTimeMin: type === 'delivery' ? mins ?? undefined : undefined,
         tableId: type === 'salon' ? tableId : undefined,
-        discount,
-        paymentMethod: paid ? payMethod : 'pendiente',
-        paid,
+        discount: 0,
+        paymentMethod: paid && mayCharge ? payMethod : 'pendiente',
+        paid: paid && mayCharge,
         notes: notes || undefined,
         createdBy: user?.name ?? 'POS',
         createdByUserId: user?.id,
         source: 'pos',
         codPaymentMethod: type === 'delivery' ? (payMethod === 'yape' ? 'yape' : 'efectivo') : undefined,
       })
-      if (paid) payOrder(order.id, payMethod)
+      if (paid && mayCharge) payOrder(order.id, payMethod)
       const kitchenItems = filterKitchenItems(order.items, state.products)
       if (kitchenItems.length > 0) {
-        printTicket({ ...order, items: kitchenItems }, state.settings, 'cocina')
+        printTicket({ ...order, items: kitchenItems }, state.settings, 'cocina', state.users)
       }
-      if (paid) setTimeout(() => printTicket(order, state.settings, 'caja'), 400)
-      navigate('/comandas')
+      if (paid && mayCharge) setTimeout(() => printTicket(order, state.settings, 'caja', state.users), 400)
+      navigate(type === 'salon' ? '/mesas' : '/pedidos-web')
     } catch (e) {
       alert((e as Error).message || 'No se pudo crear el pedido')
+    } finally {
+      sendingRef.current = false
+      setSending(false)
     }
+  }
+
+  const askSend = () => {
+    if (!canSubmit || sendingRef.current) return
+    setConfirmSend(true)
   }
 
   const cartBody = (
@@ -335,15 +402,6 @@ export function Pos() {
             <span className="font-semibold text-ink">{deliveryFee > 0 ? soles(deliveryFee) : '—'}</span>
           </div>
         ) : null}
-        <Field label="Descuento (S/)">
-          <input
-            type="number"
-            min={0}
-            className={inputClass}
-            value={discount || ''}
-            onChange={(e) => setDiscount(Number(e.target.value) || 0)}
-          />
-        </Field>
         <Field label="Notas de comanda">
           <input className={inputClass} value={notes} onChange={(e) => setNotes(e.target.value)} />
         </Field>
@@ -354,23 +412,26 @@ export function Pos() {
       </div>
       <div className="mt-4 grid gap-2">
         <button
-          disabled={!canSubmit}
-          onClick={() => submit(false, 'pendiente')}
+          disabled={!canSubmit || sending}
+          onClick={askSend}
           className="min-h-12 rounded-2xl bg-ink py-3 font-bold text-cream disabled:opacity-40"
         >
           {isAppendMode
             ? 'Agregar (comanda solo lo nuevo de cocina)'
             : 'Enviar e imprimir cocina'}
         </button>
-        {!isAppendMode && (
+        {!isAppendMode && mayCharge && (
           <button
-            disabled={!canSubmit}
+            disabled={!canSubmit || sending}
             onClick={() => setPayOpen(true)}
             className="btn-primary disabled:opacity-40"
           >
             Cobrar, imprimir y enviar
           </button>
         )}
+        {!isAppendMode && !mayCharge ? (
+          <p className="text-center text-[11px] text-ink/40">El cobro lo hace caja.</p>
+        ) : null}
         {isAppendMode ? (
           <p className="text-center text-[11px] text-ink/40">
             Cocina solo recibe platos nuevos (ej. chaufa). Bebidas no van a comanda.
@@ -384,23 +445,40 @@ export function Pos() {
     <div className="grid gap-6 xl:grid-cols-[1fr_380px]">
       <div>
         <PageTitle
-          title={isAppendMode ? `Agregar a ${padOrder(appendOrder!.number)}` : 'Tomar pedido'}
-          hint={isAppendMode
-            ? `${appendOrder!.customerName} ya tiene ${appendOrder!.items.length} platos. Agrega más y envía a cocina.`
-            : '1. Nombre y teléfono. 2. Salón, llevar o delivery. 3. Toca los platos. 4. Envía o cobra.'}
+          title={
+            isAppendMode
+              ? `Agregar a ${padOrder(appendOrder!.number)}`
+              : salonFlow
+                ? `Mesa ${selectedTable?.number ?? ''}`
+                : 'Para llevar'
+          }
+          hint={
+            isAppendMode
+              ? `${appendOrder!.customerName} ya tiene ${appendOrder!.items.length} platos. Agrega más y envía a cocina.`
+              : salonFlow
+                ? 'Toca los platos y envía a cocina. El cobro lo hace caja.'
+                : 'Piden y se lo llevan. Elige platos y envía. El cobro lo hace caja.'
+          }
         />
 
-        <div className="seg mt-5">
-          {TYPES.map((t) => (
-            <button
-              key={t.id}
-              onClick={() => setType(t.id)}
-              className={`seg-btn ${type === t.id ? 'seg-btn-on' : ''}`}
-            >
-              {t.label}
-            </button>
-          ))}
-        </div>
+        {!salonFlow ? (
+          <div className="seg mt-5">
+            {(
+              [
+                { id: 'llevar' as const, label: 'Para llevar' },
+                { id: 'delivery' as const, label: 'Delivery' },
+              ]
+            ).map((t) => (
+              <button
+                key={t.id}
+                onClick={() => setType(t.id)}
+                className={`seg-btn ${type === t.id ? 'seg-btn-on' : ''}`}
+              >
+                {t.label}
+              </button>
+            ))}
+          </div>
+        ) : null}
 
         <div className="mt-4 grid gap-3 sm:grid-cols-2">
           <div className="relative">
@@ -413,6 +491,7 @@ export function Pos() {
                 setCustOpen(true)
               }}
               onFocus={() => setCustOpen(true)}
+              onBlur={() => window.setTimeout(() => setCustOpen(false), 180)}
               required
               disabled={isAppendMode}
               autoComplete="off"
@@ -421,21 +500,37 @@ export function Pos() {
           <div className="relative">
             <input
               className={inputClass}
-              placeholder="Teléfono *"
+              placeholder="Celular *"
               value={phone}
               onChange={(e) => {
-                setPhone(e.target.value)
+                const next = e.target.value.replace(/\D/g, '').slice(0, 9)
+                setPhone(next)
+                if (next.length < 9) {
+                  appliedPhoneRef.current = ''
+                  setMatchedCustomer(null)
+                }
                 setCustOpen(true)
               }}
               onFocus={() => setCustOpen(true)}
-              inputMode="tel"
+              onBlur={() => window.setTimeout(() => setCustOpen(false), 180)}
+              inputMode="numeric"
               required
               disabled={isAppendMode}
               autoComplete="off"
+              maxLength={9}
             />
           </div>
+          {!isAppendMode && matchedCustomer && phoneOk ? (
+            <p className="sm:col-span-2 rounded-2xl bg-emerald-500/12 px-3 py-2 text-xs font-semibold text-emerald-800 dark:text-emerald-300">
+              Celular de {matchedCustomer.name} · {prettyPhone(matchedCustomer.phone)}. El nombre se rellena solo; al enviar se actualiza si lo cambias. No se duplica.
+            </p>
+          ) : !isAppendMode ? (
+            <p className="sm:col-span-2 text-[11px] font-semibold text-ink/40">
+              Nombre y celular son obligatorios. Escribe el nombre para ver el teléfono, o el celular para rellenar el nombre.
+            </p>
+          ) : null}
           {!isAppendMode && custOpen && custHits.length > 0 ? (
-            <div className="sm:col-span-2 overflow-hidden rounded-2xl border border-ink/10 bg-surface shadow-lg">
+            <div className="sm:col-span-2 z-30 overflow-hidden rounded-2xl border border-ink/10 bg-surface shadow-lg">
               <p className="px-3 pt-2 text-[11px] font-bold tracking-wide text-ink/40 uppercase">
                 Coincidencias
               </p>
@@ -445,9 +540,13 @@ export function Pos() {
                     <button
                       type="button"
                       className="flex w-full items-center justify-between gap-3 px-3 py-2.5 text-left hover:bg-ember/8"
+                      onMouseDown={(e) => e.preventDefault()}
                       onClick={() => {
+                        const last9 = phoneLast9(c.phone)
                         setCustomerName(c.name)
-                        setPhone(c.phone || '')
+                        setPhone(last9)
+                        appliedPhoneRef.current = last9
+                        setMatchedCustomer(c)
                         if (c.address) setAddress(c.address)
                         setCustHits([])
                         setCustOpen(false)
@@ -455,7 +554,7 @@ export function Pos() {
                     >
                       <span>
                         <span className="block text-sm font-semibold">{c.name}</span>
-                        <span className="text-xs text-ink/45">{c.phone}</span>
+                        <span className="text-xs font-bold text-ember">{prettyPhone(c.phone) || 'Sin celular'}</span>
                       </span>
                       {c.address ? <span className="max-w-[40%] truncate text-[11px] text-ink/35">{c.address}</span> : null}
                     </button>
@@ -531,7 +630,7 @@ export function Pos() {
               )}
             </div>
           ) : null}
-          {!isAppendMode && (!nameOk || !phoneOk) ? (
+          {!isAppendMode && type === 'delivery' && (!nameOk || !phoneOk) ? (
             <p className="sm:col-span-2 text-xs font-medium text-brick">
               Nombre (mín. 2 letras) y teléfono (9 dígitos) son obligatorios.
             </p>
@@ -558,7 +657,7 @@ export function Pos() {
           </div>
         </div>
 
-        <div className={`mt-5 grid grid-cols-2 gap-3 lg:grid-cols-3 ${qty > 0 ? 'pb-24 xl:pb-0' : ''}`}>
+        <div className={`mt-5 grid grid-cols-2 gap-2.5 sm:grid-cols-3 sm:gap-3 xl:grid-cols-4 ${qty > 0 ? 'pb-24 xl:pb-0' : ''}`}>
           {products.map((p) => (
             <button
               key={p.id}
@@ -591,16 +690,16 @@ export function Pos() {
       {qty > 0 ? (
         <button
           onClick={() => setCartOpen(true)}
-          className="safe-bottom fixed inset-x-3 z-20 flex min-h-[3.25rem] items-center justify-between rounded-2xl bg-ember px-4 py-3.5 text-white shadow-xl shadow-ember/35 xl:hidden"
+          className="safe-bottom fixed inset-x-3 z-20 flex min-h-[3.25rem] items-center justify-between rounded-2xl bg-gold px-4 py-3.5 text-[#1a3d1a] shadow-xl shadow-yellow-500/25 xl:hidden"
           style={{ bottom: '4.75rem' }}
         >
           <span className="inline-flex items-center gap-2 font-bold">
-            <span className="flex h-7 w-7 items-center justify-center rounded-full bg-white/20 text-sm">
+            <span className="flex h-7 w-7 items-center justify-center rounded-full bg-[#1a3d1a] text-sm text-gold">
               {qty}
             </span>
             Ver ticket
           </span>
-          <span className="font-display text-lg tracking-tight">{soles(total)}</span>
+          <span className="text-lg font-black tracking-tight">{soles(total)}</span>
         </button>
       ) : null}
 
@@ -695,10 +794,70 @@ export function Pos() {
         ) : (
           <p className="mt-4 text-sm text-ink/45">Confirma el pago {method}. Se imprime ticket y comanda.</p>
         )}
-        <button className="btn-primary mt-5 w-full" onClick={() => submit(true, method)}>
+        <button
+          className="btn-primary mt-5 w-full disabled:opacity-40"
+          disabled={sending}
+          onClick={() => void submit(true, method)}
+        >
           Confirmar, imprimir y enviar
         </button>
       </Modal>
+
+      <Modal
+        open={confirmSend}
+        title={isAppendMode ? '¿Agregar a la comanda?' : '¿Enviar este pedido?'}
+        onClose={() => {
+          if (!sending) setConfirmSend(false)
+        }}
+      >
+        <p className="text-sm text-ink/60">
+          {isAppendMode
+            ? `Se agregará a ${padOrder(appendOrder!.number)}. Cocina solo recibe lo nuevo.`
+            : salonFlow
+              ? `Mesa ${selectedTable?.number ?? ''} · ${customerName.trim() || 'cliente'}`
+              : `${type === 'delivery' ? 'Delivery' : 'Para llevar'} · ${customerName.trim()}`}
+        </p>
+        <ul className="mt-3 max-h-40 space-y-1 overflow-y-auto text-sm">
+          {items.map((i, idx) => (
+            <li key={`${i.productId}-${idx}`}>
+              {i.qty}× {i.name}
+            </li>
+          ))}
+        </ul>
+        <p className="mt-3 font-display text-2xl tracking-tight text-ember">{soles(total)}</p>
+        <p className="mt-1 text-xs text-ink/40">Confirma para no mandar el pedido dos veces.</p>
+        <div className="mt-5 grid grid-cols-2 gap-2">
+          <button
+            type="button"
+            className="min-h-11 rounded-2xl bg-ink/[0.06] text-sm font-semibold"
+            disabled={sending}
+            onClick={() => setConfirmSend(false)}
+          >
+            Cancelar
+          </button>
+          <button
+            type="button"
+            className="min-h-11 rounded-2xl bg-ink text-sm font-bold text-cream disabled:opacity-40"
+            disabled={sending}
+            onClick={() => void submit(false, 'pendiente')}
+          >
+            Sí, enviar
+          </button>
+        </div>
+      </Modal>
+
+      {sending ? (
+        <div className="fixed inset-0 z-[90] flex items-center justify-center bg-ink/55 px-6">
+          <div className="w-full max-w-sm rounded-3xl bg-surface p-6 text-center shadow-2xl">
+            <Loader2 className="mx-auto h-10 w-10 animate-spin text-ember" />
+            <p className="mt-4 font-display text-xl tracking-tight">Enviando pedido…</p>
+            <p className="mt-1 text-sm text-ink/50">Espera. No pulses otra vez.</p>
+            <div className="mt-4 h-1.5 overflow-hidden rounded-full bg-ink/10">
+              <div className="h-full w-1/2 animate-pulse rounded-full bg-gold" />
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   )
 }

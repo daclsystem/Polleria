@@ -11,9 +11,8 @@ import {
   ChevronsRight,
   ClipboardList,
   Contact,
-  ExternalLink,
   FileText,
-  Globe,
+  History,
   LayoutDashboard,
   LogOut,
   Menu,
@@ -26,30 +25,33 @@ import {
   TicketPercent,
   Users,
   UtensilsCrossed,
+  Wallet,
   X,
 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { useAuth } from '../auth/AuthContext'
 import { useStore } from '../store/StoreContext'
-import { ROLE_LABEL, type ModuleId, type Role } from '../types'
-import { customerMenuUrl } from '../lib/paths'
+import { ROLE_HOME, ROLE_LABEL, STAFF_VIEW_OPTIONS, type ModuleId, type Role } from '../types'
+import { withBase } from '../lib/paths'
 import { APP_VERSION } from '../lib/version'
 import { LiveToasts } from './LiveToasts'
 import { unlockSounds } from '../lib/sounds'
 import { ConfirmLogout } from './ConfirmLogout'
-import { defaultAvatarUrl, shortAccountId } from '../lib/avatar'
+import { displayAvatarUrl, shortAccountId } from '../lib/avatar'
 import { uploadAvatar } from '../lib/minio'
 import { apiUpdateStaffProfile } from '../lib/apiClient'
+import { PersonAvatar } from './PersonAvatar'
 import { ThemeToggle } from './ThemeToggle'
 
 const NAV: { to: string; label: string; hint: string; icon: LucideIcon; module: ModuleId }[] = [
   { to: '/', label: 'Inicio', hint: 'Resumen del día', icon: LayoutDashboard, module: 'dashboard' },
-  { to: '/pos', label: 'Tomar pedido', hint: 'Nueva comanda', icon: UtensilsCrossed, module: 'pos' },
-  { to: '/comandas', label: 'Ver pedidos', hint: 'Seguimiento y cobro', icon: ClipboardList, module: 'comandas' },
-  { to: '/cocina', label: 'Cocina', hint: 'Preparar platos', icon: ChefHat, module: 'cocina' },
   { to: '/mesas', label: 'Mesas', hint: 'Salón y terraza', icon: Table2, module: 'mesas' },
+  { to: '/pedidos-web', label: 'Pedidos', hint: 'En curso: mesa, recojo, delivery', icon: ClipboardList, module: 'pedidos-web' },
   { to: '/reservas', label: 'Reservas', hint: 'Clientes por llegar', icon: CalendarCheck, module: 'reservas' },
-  { to: '/pedidos-web', label: 'Pedidos online', hint: 'Lo que pide el cliente', icon: Globe, module: 'pedidos-web' },
+  { to: '/historial', label: 'Historial', hint: 'Pedidos cerrados por fecha', icon: History, module: 'historial' },
+  { to: '/pos', label: 'Para llevar', hint: 'Piden y se lo llevan', icon: UtensilsCrossed, module: 'pos' },
+  { to: '/comandas', label: 'Caja', hint: 'Cobrar y liquidar', icon: Wallet, module: 'comandas' },
+  { to: '/cocina', label: 'Cocina', hint: 'Preparar platos', icon: ChefHat, module: 'cocina' },
   { to: '/menu', label: 'Carta', hint: 'Precios y platos', icon: ShoppingBag, module: 'menu' },
   { to: '/inventario', label: 'Inventario', hint: 'Insumos y stock', icon: Package, module: 'inventario' },
   { to: '/usuarios', label: 'Equipo', hint: 'Usuarios y roles', icon: Users, module: 'usuarios' },
@@ -77,7 +79,7 @@ const NAV: { to: string; label: string; hint: string; icon: LucideIcon; module: 
 ]
 
 const GROUPS: { title: string; modules: ModuleId[] }[] = [
-  { title: 'Trabajar ahora', modules: ['dashboard', 'pos', 'comandas', 'cocina', 'mesas', 'reservas', 'pedidos-web'] },
+  { title: 'Trabajar ahora', modules: ['dashboard', 'mesas', 'pedidos-web', 'reservas', 'historial', 'pos', 'comandas', 'cocina'] },
   {
     title: 'Administrar',
     modules: [
@@ -103,14 +105,14 @@ const BOTTOM: Record<Role, ModuleId[]> = {
   admin: ['dashboard', 'pos', 'comandas', 'cocina'],
   cajero: ['dashboard', 'comandas'],
   cocina: ['cocina'],
-  mozo: ['mesas', 'pos', 'comandas'],
+  mozo: ['mesas', 'pedidos-web', 'reservas', 'historial'],
 }
 
 const SIDEBAR_KEY = 'polleria-sidebar-collapsed'
 
 export function Layout() {
-  const { user, can, logout } = useAuth()
-  const { apiMode, apiLoading, apiError, live } = useStore()
+  const { user, actingRole, setViewRole, patchSessionUser, can, logout } = useAuth()
+  const { apiMode, apiLoading, apiError, live, pushNotice } = useStore()
   const navigate = useNavigate()
   const [open, setOpen] = useState(false)
   const [logoutOpen, setLogoutOpen] = useState(false)
@@ -134,11 +136,23 @@ export function Layout() {
     }
   }, [collapsed])
 
-  const items = NAV.filter((i) => can(i.module))
-  const bottomIds = user ? BOTTOM[user.role] : []
+  const items = NAV.filter((i) => {
+    if (!can(i.module)) return false
+    if (actingRole === 'mozo' && i.module === 'pos') return false
+    return true
+  })
+  const bottomIds = user ? BOTTOM[actingRole] : []
   const bottom = NAV.filter((i) => bottomIds.includes(i.module) && can(i.module))
-  const bottomCount = Math.min(bottom.length, 3) + 1
-  const [photo, setPhoto] = useState(() => user?.photoUrl || defaultAvatarUrl(user?.name || 'Usuario', 'staff'))
+  const compactBottom = actingRole === 'mozo'
+  const visibleBottom = compactBottom ? bottom : bottom.slice(0, 3)
+  const bottomCount = visibleBottom.length + (compactBottom ? 0 : 1)
+  const [photo, setPhoto] = useState(() =>
+    displayAvatarUrl(user?.name || 'Usuario', user?.photoUrl, 'staff'),
+  )
+
+  useEffect(() => {
+    setPhoto(displayAvatarUrl(user?.name || 'Usuario', user?.photoUrl, 'staff'))
+  }, [user?.photoUrl, user?.name])
   const avatarRef = useRef<HTMLInputElement>(null)
   const [uploadingAvatar, setUploadingAvatar] = useState(false)
 
@@ -147,10 +161,13 @@ export function Layout() {
     setUploadingAvatar(true)
     try {
       const url = await uploadAvatar(file)
-      await apiUpdateStaffProfile({ photoUrl: url })
-      setPhoto(url)
-    } catch {
-      /* ignore */
+      const r = await apiUpdateStaffProfile({ photoUrl: url })
+      const next = r.user.photoUrl || url
+      setPhoto(next)
+      patchSessionUser({ photoUrl: next })
+      pushNotice('Foto de perfil actualizada', 'ok')
+    } catch (e) {
+      pushNotice((e as Error).message || 'No se pudo cambiar la foto', 'warn')
     } finally {
       setUploadingAvatar(false)
     }
@@ -162,7 +179,7 @@ export function Layout() {
       <ConfirmLogout
         open={logoutOpen}
         name={user?.name || ''}
-        roleLabel={user ? ROLE_LABEL[user.role] : undefined}
+        roleLabel={user ? ROLE_LABEL[actingRole] : undefined}
         accountId={user?.id || ''}
         photoUrl={photo}
         tone="staff"
@@ -176,35 +193,48 @@ export function Layout() {
       <aside
         className={`fixed inset-y-0 left-0 z-40 w-[min(18.5rem,88vw)] flame-bg text-white transition-[width,transform] duration-200 lg:static lg:translate-x-0 ${
           open ? 'translate-x-0' : '-translate-x-full'
-        } ${collapsed ? 'lg:w-[4.25rem]' : 'lg:w-[17.5rem]'}`}
+        } ${collapsed ? 'lg:w-[4.5rem]' : 'lg:w-[17.5rem]'}`}
       >
-        <div className="flex h-full flex-col">
-          <div
-            className={`flex items-center justify-between px-5 py-5 ${
-              collapsed ? 'lg:justify-center lg:px-1.5' : ''
-            }`}
-          >
-            <div className={`min-w-0 ${collapsed ? 'lg:hidden' : ''}`}>
-              <p className="font-display text-[1.4rem] leading-none tracking-tight">Chifa-Pollería</p>
-              <p className="mt-1 text-[11px] font-medium tracking-[0.18em] text-white/45 uppercase">Lopez</p>
-            </div>
-            {collapsed ? (
-              <p className="hidden font-display text-lg text-gold lg:block" title="Chifa-Pollería Lopez">
-                CL
-              </p>
-            ) : null}
-            <button className="tap rounded-xl p-2 lg:hidden" onClick={() => setOpen(false)} aria-label="Cerrar">
-              <X size={18} />
-            </button>
+        <div className="flex h-full flex-col pt-[env(safe-area-inset-top)]">
+          <div className={`px-3 pt-4 pb-2 ${collapsed ? 'lg:px-1.5' : ''}`}>
             <button
               type="button"
-              className="tap hidden rounded-xl p-2 text-white/70 hover:bg-white/10 hover:text-white lg:inline-flex"
-              onClick={() => setCollapsed((v) => !v)}
-              aria-label={collapsed ? 'Expandir menú' : 'Contraer menú'}
-              title={collapsed ? 'Expandir' : 'Contraer'}
+              onClick={() => collapsed && setCollapsed(false)}
+              title={collapsed ? 'Expandir menú' : 'Chifa Pollería Lopez'}
+              aria-label={collapsed ? 'Expandir menú' : 'Chifa Pollería Lopez'}
+              className={
+                collapsed
+                  ? 'mx-auto hidden h-11 w-11 items-center justify-center overflow-hidden rounded-xl bg-white p-0.5 shadow-sm lg:flex'
+                  : 'hidden'
+              }
             >
-              {collapsed ? <ChevronsRight size={18} /> : <ChevronsLeft size={18} />}
+              <img
+                src={withBase('logo-lopez.png')}
+                alt=""
+                className="h-full w-full object-contain"
+              />
             </button>
+            <div className={`overflow-hidden rounded-2xl bg-white p-1.5 shadow-sm ${collapsed ? 'lg:hidden' : ''}`}>
+              <img
+                src={withBase('logo-lopez.png')}
+                alt="Chifa Pollería Lopez"
+                className="mx-auto h-14 w-full object-contain sm:h-16"
+              />
+            </div>
+            <div className="mt-2 flex items-center justify-end gap-1">
+              <button className="tap rounded-xl p-2 lg:hidden" onClick={() => setOpen(false)} aria-label="Cerrar">
+                <X size={18} />
+              </button>
+              <button
+                type="button"
+                className="tap hidden rounded-xl p-2 text-white/70 hover:bg-white/10 hover:text-white lg:inline-flex"
+                onClick={() => setCollapsed((v) => !v)}
+                aria-label={collapsed ? 'Expandir menú' : 'Contraer menú'}
+                title={collapsed ? 'Expandir' : 'Contraer'}
+              >
+                {collapsed ? <ChevronsRight size={18} /> : <ChevronsLeft size={18} />}
+              </button>
+            </div>
           </div>
           <nav className={`flex-1 space-y-5 overflow-y-auto px-3 pb-4 ${collapsed ? 'lg:px-1.5' : ''}`}>
             {GROUPS.map((group) => {
@@ -234,8 +264,8 @@ export function Layout() {
                               collapsed ? 'lg:justify-center lg:gap-0 lg:px-0 lg:py-2.5' : ''
                             } ${
                               isActive
-                                ? 'bg-ember text-white shadow-lg shadow-ember/25'
-                                : 'text-white/75 hover:bg-white/6 hover:text-white'
+                                ? 'nav-active'
+                                : 'text-white/75 hover:bg-white/10 hover:text-white'
                             }`
                           }
                         >
@@ -268,18 +298,20 @@ export function Layout() {
                 className="relative shrink-0 disabled:opacity-50"
                 title="Cambiar foto"
               >
-                <img
-                  src={photo}
-                  alt={user?.name || ''}
-                  className="h-12 w-12 rounded-full object-cover ring-2 ring-white/20"
-                />
-                <span className="absolute -bottom-0.5 -right-0.5 flex h-5 w-5 items-center justify-center rounded-full bg-ember text-white">
-                  <Camera size={10} />
+                <span className="relative shrink-0">
+                  <PersonAvatar
+                    name={user?.name || 'Usuario'}
+                    photoUrl={photo}
+                    className="h-12 w-12 text-sm"
+                  />
+                  <span className="absolute -bottom-0.5 -right-0.5 flex h-5 w-5 items-center justify-center rounded-full bg-gold text-[#1a3d1a] ring-2 ring-[#0c1c0e]">
+                    <Camera size={10} strokeWidth={2.6} />
+                  </span>
                 </span>
               </button>
               <div className={`min-w-0 ${collapsed ? 'lg:hidden' : ''}`}>
                 <p className="truncate text-sm font-semibold">{user?.name}</p>
-                <p className="text-xs text-white/50">{user ? ROLE_LABEL[user.role] : ''}</p>
+                <p className="text-xs text-white/50">{user ? ROLE_LABEL[actingRole] : ''}</p>
                 <p className="mt-0.5 font-mono text-[10px] tracking-wider text-white/40">
                   ID · {shortAccountId(user?.id)}
                 </p>
@@ -308,8 +340,8 @@ export function Layout() {
           aria-label="Cerrar menú"
         />
       ) : null}
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col pb-[4.75rem] lg:pb-0">
-        <header className="surface-header sticky top-0 z-20 flex items-center gap-3 px-3 py-2.5 sm:px-5 lg:px-8">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col pb-[5.25rem] lg:pb-0">
+        <header className="surface-header sticky top-0 z-20 flex items-center gap-2 px-3 py-2 pt-[max(0.5rem,env(safe-area-inset-top))] sm:gap-3 sm:px-5 lg:px-8">
           <button
             className="tap rounded-xl p-2 hover:bg-ink/[0.04] lg:hidden"
             onClick={() => setOpen(true)}
@@ -326,11 +358,8 @@ export function Layout() {
           >
             {collapsed ? <ChevronsRight size={20} /> : <ChevronsLeft size={20} />}
           </button>
-          <div className="min-w-0">
-            <p className="truncate font-display text-lg leading-none tracking-tight lg:hidden">
-              Chifa-Pollería Lopez
-            </p>
-            <p className="hidden text-sm text-ink/40 capitalize sm:block">
+          <div className="hidden min-w-0 xl:block">
+            <p className="truncate text-sm capitalize text-ink/40">
               {new Date().toLocaleDateString('es-PE', {
                 weekday: 'long',
                 day: 'numeric',
@@ -339,15 +368,48 @@ export function Layout() {
             </p>
           </div>
           <div className="ml-auto flex items-center gap-2">
+            {user?.isSystem ? (
+              <label className="min-w-0">
+                <span className="sr-only">Ver como</span>
+                <select
+                  value={actingRole}
+                  onChange={(e) => {
+                    const next = e.target.value as Role
+                    setViewRole(next)
+                    navigate(ROLE_HOME[next] || '/')
+                  }}
+                  className="max-w-[9.5rem] truncate rounded-full border border-ink/10 bg-surface px-3 py-1.5 text-[11px] font-bold text-ink outline-none focus:border-gold"
+                >
+                  {STAFF_VIEW_OPTIONS.map((opt) => (
+                    <option key={opt.id} value={opt.id}>
+                      {opt.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            ) : null}
             <ThemeToggle />
             {user ? (
-              <div className="hidden items-center gap-2 sm:flex">
-                <img src={photo} alt="" className="h-8 w-8 rounded-full object-cover ring-1 ring-ink/10" />
-                <div className="min-w-0 leading-tight">
+              <button
+                type="button"
+                disabled={uploadingAvatar}
+                onClick={() => avatarRef.current?.click()}
+                className="relative flex items-center gap-2 rounded-full pr-1 disabled:opacity-50"
+                title="Cambiar foto de perfil"
+              >
+                <PersonAvatar
+                  name={user.name}
+                  photoUrl={photo}
+                  className="h-9 w-9 text-[11px]"
+                />
+                <span className="absolute -bottom-0.5 left-6 flex h-4 w-4 items-center justify-center rounded-full bg-gold text-[#1a3d1a]">
+                  <Camera size={9} strokeWidth={2.6} />
+                </span>
+                <div className="hidden min-w-0 leading-tight xl:block">
                   <p className="truncate text-xs font-bold text-ink">{user.name}</p>
                   <p className="font-mono text-[10px] text-ink/40">ID · {shortAccountId(user.id)}</p>
                 </div>
-              </div>
+              </button>
             ) : null}
             {apiMode ? (
               <span
@@ -355,7 +417,7 @@ export function Layout() {
                   apiError
                     ? 'bg-red-100 text-red-700'
                     : live
-                      ? 'bg-emerald-100 text-emerald-800'
+                      ? 'bg-emerald-500/20 text-emerald-300'
                       : apiLoading
                         ? 'bg-amber-100 text-amber-800'
                         : 'bg-ink/[0.06] text-ink/45'
@@ -375,16 +437,6 @@ export function Layout() {
                 Demo local
               </span>
             )}
-            <a
-              href={customerMenuUrl()}
-              target="_blank"
-              rel="noreferrer"
-              className="inline-flex min-h-10 items-center gap-1.5 rounded-full bg-ink px-3.5 py-1.5 text-xs font-bold text-white shadow-sm"
-            >
-              <ExternalLink size={13} />
-              <span className="hidden sm:inline">Carta del cliente</span>
-              <span className="sm:hidden">Carta</span>
-            </a>
           </div>
         </header>
         {apiError ? (
@@ -392,7 +444,7 @@ export function Layout() {
             No se pudo sincronizar con el API: {apiError}
           </div>
         ) : null}
-        <main className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto p-3 sm:p-5 lg:p-8">
+        <main className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto p-3 sm:p-5 md:p-6 lg:p-8">
           <Outlet />
         </main>
       </div>
@@ -402,38 +454,44 @@ export function Layout() {
           bottomCount === 2 ? 'grid-cols-2' : bottomCount === 3 ? 'grid-cols-3' : 'grid-cols-4'
         }`}
       >
-        {bottom.slice(0, 3).map((item) => {
+        {visibleBottom.map((item) => {
           const Icon = item.icon
           const short =
             item.module === 'dashboard'
               ? 'Inicio'
               : item.module === 'pos'
-                ? 'Tomar'
+                ? 'Llevar'
                 : item.module === 'comandas'
-                  ? user?.role === 'cajero'
-                    ? 'Cobrar'
+                  ? actingRole === 'cajero'
+                    ? 'Caja'
                     : 'Ver'
                   : item.module === 'cocina'
                     ? 'Cocina'
                     : item.module === 'mesas'
                       ? 'Mesas'
-                      : item.label.split(' ')[0]
+                      : item.module === 'pedidos-web'
+                        ? 'Pedidos'
+                        : item.module === 'historial'
+                          ? 'Historial'
+                          : item.module === 'reservas'
+                            ? 'Reservas'
+                            : item.label.split(' ')[0]
           return (
             <NavLink
               key={item.to}
               to={item.to}
               end={item.to === '/'}
               className={({ isActive }) =>
-                `flex flex-col items-center gap-0.5 rounded-2xl py-2 text-[10px] font-bold tracking-wide ${
-                  isActive ? 'text-ember' : 'text-ink/35'
+                `flex min-h-12 flex-col items-center justify-center gap-0.5 rounded-2xl py-1.5 text-[10px] font-bold tracking-wide ${
+                  isActive ? 'text-[#1a3d1a] dark:text-gold' : 'text-ink/35'
                 }`
               }
             >
               {({ isActive }) => (
                 <>
                   <span
-                    className={`flex h-8 w-8 items-center justify-center rounded-xl ${
-                      isActive ? 'bg-ember/10' : ''
+                    className={`flex h-9 w-9 items-center justify-center rounded-xl ${
+                      isActive ? 'bg-gold text-[#1a3d1a]' : ''
                     }`}
                   >
                     <Icon size={20} strokeWidth={isActive ? 2.4 : 2} />
@@ -444,6 +502,7 @@ export function Layout() {
             </NavLink>
           )
         })}
+        {compactBottom ? null : (
         <button
           onClick={() => setOpen(true)}
           className="flex flex-col items-center gap-0.5 rounded-2xl py-2 text-[10px] font-bold tracking-wide text-ink/35"
@@ -453,6 +512,7 @@ export function Layout() {
           </span>
           Más
         </button>
+        )}
       </nav>
     </div>
   )

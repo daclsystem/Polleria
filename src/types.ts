@@ -21,6 +21,8 @@ export interface User {
   isSystem?: boolean
   /** Foto de perfil (MinIO o ui-avatars) */
   photoUrl?: string
+  /** Local donde trabaja (mozo, etc.) */
+  branchId?: string
 }
 
 export interface ProductOption {
@@ -52,12 +54,21 @@ export interface Product {
   prepMinutes: number
   /** Si false, no imprime en comanda de cocina (ej. bebidas). Default: según categoría. */
   sendToKitchen?: boolean
+  /** Si true, baja almacén al cobrar (gaseosa, pollo, etc.) */
+  cuantificable?: boolean
+  /** Receta: cuánto insumo consume 1 unidad vendida (ej. 1/2 pollo = 0.5) */
+  recipes?: ProductRecipe[]
   optionGroups?: ProductOptionGroup[]
   tags?: string[]
   /** Unidades vendidas (últimos ~60 días) */
   soldCount?: number
   ratingAvg?: number
   reviewCount?: number
+}
+
+export interface ProductRecipe {
+  inventoryId: string
+  qtyPerUnit: number
 }
 
 export interface InventoryItem {
@@ -67,6 +78,8 @@ export interface InventoryItem {
   stock: number
   minStock: number
   cost: number
+  /** Precio de venta si se comercializa el insumo (ej. gaseosa) */
+  salePrice?: number
 }
 
 export interface Table {
@@ -76,6 +89,7 @@ export interface Table {
   zone: string
   status: TableStatus
   orderId?: string
+  branchId?: string
 }
 
 export interface SelectedOption {
@@ -141,6 +155,22 @@ export interface Order {
   driverArrivedAt?: string
   deliveryPhotoUrl?: string
   driverSettledAt?: string
+  /** Documento al cobrar: ticket interno, boleta o factura */
+  docTipo?: FiscalDocTipo
+  docNumero?: string
+  docNombre?: string
+  docEmail?: string
+  docPhone?: string
+  docAddress?: string
+}
+
+export type FiscalDocTipo = 'ninguno' | 'boleta_simple' | 'boleta_dni' | 'factura'
+
+export type PaySplit = {
+  method: PaymentMethod
+  amount: number
+  cashTendered?: number
+  reference?: string
 }
 
 export type PrinterDriver = 'browser' | 'usb' | 'network' | 'rawbt'
@@ -277,6 +307,7 @@ export const MODULES = [
   'conductores',
   'reportes',
   'pedidos-web',
+  'historial',
   'sucursales',
   'facturacion',
   'whatsapp',
@@ -294,8 +325,8 @@ export const ROLE_MODULES: Record<Role, ModuleId[]> = {
   cajero: ['dashboard', 'comandas'],
   /** Cocina: solo preparar */
   cocina: ['cocina'],
-  /** Mozo: mesas, tomar pedidos, asignar delivery */
-  mozo: ['pos', 'comandas', 'mesas', 'reservas', 'pedidos-web'],
+  /** Mozo: mesas, pedidos, reservas, historial */
+  mozo: ['mesas', 'pedidos-web', 'reservas', 'historial', 'pos'],
 }
 
 export const ROLE_LABEL: Record<Role, string> = {
@@ -305,12 +336,23 @@ export const ROLE_LABEL: Record<Role, string> = {
   mozo: 'Mozo',
 }
 
+export function canCharge(role: Role) {
+  return role === 'cajero' || role === 'admin'
+}
+
 export const ROLE_HOME: Record<Role, string> = {
   admin: '/',
   cajero: '/comandas',
   cocina: '/cocina',
   mozo: '/mesas',
 }
+
+export const STAFF_VIEW_OPTIONS: { id: Role; label: string; hint: string }[] = [
+  { id: 'admin', label: 'Administrador', hint: 'Todo el sistema' },
+  { id: 'mozo', label: 'Mozo', hint: 'Mesas, pedidos, reservas e historial' },
+  { id: 'cocina', label: 'Cocina', hint: 'Preparar comandas' },
+  { id: 'cajero', label: 'Caja', hint: 'Cobrar y liquidar' },
+]
 
 export const TYPE_LABEL: Record<OrderType, string> = {
   salon: 'Salón',

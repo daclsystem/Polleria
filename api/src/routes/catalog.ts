@@ -65,6 +65,8 @@ function mapProduct(r: Record<string, unknown>) {
     available: Boolean(r.Available),
     prepMinutes: Number(r.PrepMinutes || 10),
     sendToKitchen,
+    cuantificable: Boolean(r.Cuantificable),
+    recipes: [] as Array<{ inventoryId: string; qtyPerUnit: number }>,
     tags: [] as string[],
     optionGroups: [] as Array<{
       id: string
@@ -378,10 +380,29 @@ async function attachProductExtras<T extends ReturnType<typeof mapProduct>>(prod
     /* reviews opcionales */
   }
 
+  const recipesBy = new Map<string, Array<{ inventoryId: string; qtyPerUnit: number }>>()
+  try {
+    const recR = await pool.request().query(`
+      SELECT ProductId, InventoryId, QtyPerUnit
+      FROM dbo.ProductRecipes
+      WHERE ProductId IN (${ids.map((id) => `'${id}'`).join(',')})
+    `)
+    for (const r of recR.recordset as Array<{ ProductId: string; InventoryId: string; QtyPerUnit: number }>) {
+      const pid = String(r.ProductId)
+      const list = recipesBy.get(pid) || []
+      list.push({ inventoryId: String(r.InventoryId), qtyPerUnit: Number(r.QtyPerUnit) })
+      recipesBy.set(pid, list)
+    }
+  } catch {
+    /* recetas opcionales */
+  }
+
   for (const p of products) {
     p.tags = tagsBy.get(p.id) || []
     p.optionGroups = groupsBy.get(p.id) || []
     p.soldCount = soldBy.get(p.id) || 0
+    p.recipes = recipesBy.get(p.id) || []
+    if (p.recipes.length) p.cuantificable = true
     const rating = ratingBy.get(p.id)
     p.ratingAvg = rating?.avg || 0
     p.reviewCount = rating?.count || 0
@@ -522,6 +543,7 @@ catalogRouter.get('/bootstrap', authRequired, async (_req, res) => {
         stock: Number(r.Stock),
         minStock: Number(r.MinStock),
         cost: Number(r.Cost),
+        salePrice: r.SalePrice != null ? Number(r.SalePrice) : undefined,
       })),
       settings: {
         name: s.Name || 'Chifa-Pollería Lopez',
@@ -606,4 +628,25 @@ catalogRouter.get('/tables', authRequired, async (_req, res) => {
   const pool = await getPool()
   const r = await pool.request().query(`SELECT * FROM dbo.Tables ORDER BY Number`)
   res.json({ tables: r.recordset.map(mapTable) })
+})
+
+/** Salón público para que el cliente elija mesa (sin CurrentOrderId). */
+catalogRouter.get('/floor', async (_req, res) => {
+  try {
+    const pool = await getPool()
+    const r = await pool.request().query(`
+      SELECT Id, Number, Seats, Zone, Status FROM dbo.Tables ORDER BY Zone, Number
+    `)
+    res.json({
+      tables: r.recordset.map((row: Record<string, unknown>) => ({
+        id: String(row.Id),
+        number: Number(row.Number),
+        seats: Number(row.Seats),
+        zone: String(row.Zone || 'Salón'),
+        status: String(row.Status || 'libre'),
+      })),
+    })
+  } catch (e) {
+    res.status(500).json({ error: (e as Error).message })
+  }
 })

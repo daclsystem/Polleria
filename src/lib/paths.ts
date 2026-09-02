@@ -46,6 +46,15 @@ export function siteUrl(app: keyof typeof APP_BASE, path = '/') {
   return `${origin}${base}${p}`
 }
 
+/** Dominio público para tickets (nunca localhost). */
+export function publicWebUrl() {
+  return 'https://chifapollerialopez.com'
+}
+
+export function publicWebHost() {
+  return publicWebUrl().replace(/^https?:\/\//, '').replace(/\/$/, '')
+}
+
 /** App de pedidos del cliente. Opcional: abrir un producto al llegar. */
 export function customerMenuUrl(opts?: { productId?: string }) {
   const base = siteUrl('cliente', '/')

@@ -253,3 +253,24 @@ export function mergeWebSite(raw: unknown): WebSiteContent {
     },
   }
 }
+
+/** Teléfono público de la web (no el celular de un usuario ni el de Ajustes). */
+let cachedTicketPhone = DEFAULT_WEB_SITE.phoneDisplay
+
+function prettyLast9(raw: string) {
+  const d = raw.replace(/\D/g, '').slice(-9)
+  if (d.length !== 9) return raw.trim()
+  return `${d.slice(0, 3)} ${d.slice(3, 6)} ${d.slice(6)}`
+}
+
+export function rememberWebSite(raw: unknown): WebSiteContent {
+  const site = mergeWebSite(raw)
+  const display = site.phoneDisplay.trim()
+  if (display) cachedTicketPhone = display
+  else if (site.whatsappNumber) cachedTicketPhone = prettyLast9(site.whatsappNumber)
+  return site
+}
+
+export function ticketPublicPhone() {
+  return cachedTicketPhone || DEFAULT_WEB_SITE.phoneDisplay
+}

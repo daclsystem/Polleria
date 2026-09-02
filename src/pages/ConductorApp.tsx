@@ -14,6 +14,7 @@ import {
   Wallet,
 } from 'lucide-react'
 import { PhoneOtpLogin } from '../components/PhoneOtpLogin'
+import { AuthSplitLayout } from '../components/AuthSplitLayout'
 import { ConfirmLogout } from '../components/ConfirmLogout'
 import { SessionReplacedDialog } from '../components/SessionReplacedDialog'
 import {
@@ -36,7 +37,6 @@ import {
 import { uploadAvatar } from '../lib/minio'
 import { connectRealtime, onRealtimeEvent } from '../lib/realtime'
 import { padOrder, soles } from '../lib/format'
-import { APP_VERSION } from '../lib/version'
 import { notifyWeb } from '../lib/webNotify'
 import { useDeviceLocation } from '../hooks/useDeviceLocation'
 import { uploadDeliveryPhoto } from '../lib/minio'
@@ -228,56 +228,48 @@ export function ConductorApp() {
 
   if (!driver) {
     return (
-      <div className="relative min-h-dvh bg-[#0b1f1c] px-4 py-10 text-white">
-        <div className="absolute right-4 top-4 z-10">
-          <ThemeToggle tone="dark" />
-        </div>
-        <div className="mx-auto max-w-md">
-          <div className="mb-8 text-center">
-            <img
-              src={`${import.meta.env.BASE_URL}logo-lopez.png`}
-              alt="Chifa-Pollería Lopez"
-              className="mx-auto h-16 w-auto rounded-2xl shadow-lg ring-2 ring-white/10"
-            />
-            <p className="mt-5 text-[11px] font-bold tracking-[0.22em] text-teal-300 uppercase">Repartidor</p>
-            <h1 className="mt-1 font-display text-4xl tracking-tight">En ruta</h1>
-            <p className="mt-2 text-sm text-white/55">Tus entregas, el mapa y el cobro en un solo lugar.</p>
-          </div>
-          <SessionReplacedDialog
-            open={Boolean(replacedMsg)}
-            message={replacedMsg || undefined}
-            onAck={() => setReplacedMsg(null)}
-          />
-          <div className="rounded-[1.75rem] bg-white p-5 text-ink shadow-2xl">
-            <PhoneOtpLogin
-              accountType="driver"
-              purpose="login"
-              title="Entrar"
-              hint="Celular del conductor. Si no llega WhatsApp, usa 123456."
-              onSuccess={async (data) => {
-                if (!data.token || !data.driver) throw new Error('Respuesta inválida')
-                setApiToken(data.token, 'driver')
-                const session: DriverSession = {
-                  id: data.driver.id,
-                  name: data.driver.name,
-                  phone: data.driver.phone,
-                  vehicleInfo: data.driver.vehicleInfo,
-                  photoUrl: data.driver.photoUrl || defaultAvatarUrl(data.driver.name, 'driver'),
-                }
-                localStorage.setItem(DRIVER_KEY, JSON.stringify(session))
-                setDriver(session)
-                setPermsOpen(true)
-              }}
-            />
-          </div>
-          <p className="mt-6 text-center text-[10px] text-white/30">v{APP_VERSION}</p>
-        </div>
-      </div>
+      <AuthSplitLayout
+        kicker="Chifa-Pollería Lopez"
+        title="En ruta"
+        subtitle="Tus entregas, el mapa y el cobro. Entra con el celular registrado como conductor."
+        highlights={[
+          { icon: Bike, title: 'Tus entregas', desc: 'Pedidos asignados al instante.' },
+          { icon: MapPin, title: 'Ruta y GPS', desc: 'El local y el cliente te ven.' },
+          { icon: Wallet, title: 'Cobro en destino', desc: 'Efectivo, Yape o ya pagado.' },
+        ]}
+        footer="Solo conductores autorizados · una sesión a la vez"
+      >
+        <SessionReplacedDialog
+          open={Boolean(replacedMsg)}
+          message={replacedMsg || undefined}
+          onAck={() => setReplacedMsg(null)}
+        />
+        <PhoneOtpLogin
+          accountType="driver"
+          purpose="login"
+          title="Entrar a entregas"
+          hint="Usa el celular registrado como conductor. Te enviamos el código por WhatsApp."
+          onSuccess={async (data) => {
+            if (!data.token || !data.driver) throw new Error('Respuesta inválida')
+            setApiToken(data.token, 'driver')
+            const session: DriverSession = {
+              id: data.driver.id,
+              name: data.driver.name,
+              phone: data.driver.phone,
+              vehicleInfo: data.driver.vehicleInfo,
+              photoUrl: data.driver.photoUrl || defaultAvatarUrl(data.driver.name, 'driver'),
+            }
+            localStorage.setItem(DRIVER_KEY, JSON.stringify(session))
+            setDriver(session)
+            setPermsOpen(true)
+          }}
+        />
+      </AuthSplitLayout>
     )
   }
 
   return (
-    <div className="min-h-dvh bg-[#eef3f1] text-ink">
+    <div className="min-h-dvh bg-cream text-ink">
       <DevicePermissionsPrompt
         open={permsOpen}
         title="Activa ubicación y avisos"
@@ -403,12 +395,12 @@ export function ConductorApp() {
                   </p>
                 </div>
                 <div className="grid grid-cols-2 gap-3">
-                  <div className="rounded-2xl bg-white p-4 shadow-sm">
+                  <div className="rounded-2xl bg-surface p-4 shadow-sm ring-1 ring-ink/8">
                     <p className="text-xs font-semibold text-ink/50">Semana</p>
                     <p className="font-display text-2xl text-teal-800">{soles(earnings.week.total)}</p>
                     <p className="text-xs text-ink/40">{earnings.week.trips} servicios</p>
                   </div>
-                  <div className="rounded-2xl bg-white p-4 shadow-sm">
+                  <div className="rounded-2xl bg-surface p-4 shadow-sm ring-1 ring-ink/8">
                     <p className="text-xs font-semibold text-ink/50">Mes</p>
                     <p className="font-display text-2xl text-teal-800">{soles(earnings.month.total)}</p>
                     <p className="text-xs text-ink/40">{earnings.month.trips} servicios</p>
@@ -442,7 +434,7 @@ export function ConductorApp() {
             ) : null}
 
             {mine.length === 0 ? (
-              <div className="rounded-[1.75rem] bg-white px-6 py-14 text-center shadow-sm">
+              <div className="rounded-[1.75rem] bg-surface px-6 py-14 text-center shadow-sm ring-1 ring-ink/8">
                 <Bike size={36} className="mx-auto text-teal-700/40" />
                 <p className="mt-4 font-display text-xl">Sin entregas</p>
                 <p className="mt-1 text-sm text-ink/45">Cuando te asignen un pedido, toca la tarjeta y se abre el mapa.</p>

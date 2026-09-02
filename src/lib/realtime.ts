@@ -231,12 +231,16 @@ export function orderLabel(payload: unknown) {
   return { n, name, status, createdByUserId, createdBy, id }
 }
 
-/** Lee rol staff guardado en sesión local */
+/** Lee rol staff guardado en sesión local (respeta la vista del admin de sistema). */
 export function readStaffRole(): Role | null {
   try {
     const raw = localStorage.getItem('polleria-api-user')
     if (!raw) return null
-    const u = JSON.parse(raw) as { role?: Role }
+    const u = JSON.parse(raw) as { role?: Role; isSystem?: boolean }
+    if (u.isSystem) {
+      const view = localStorage.getItem('polleria-staff-view')
+      if (view === 'admin' || view === 'cajero' || view === 'cocina' || view === 'mozo') return view
+    }
     return u.role || null
   } catch {
     return null

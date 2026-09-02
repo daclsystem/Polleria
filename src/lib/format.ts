@@ -48,13 +48,13 @@ export function elapsedMinutes(iso: string) {
   return Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 60000))
 }
 
+export function limaYmd(isoOrDate: string | Date = new Date()) {
+  const d = typeof isoOrDate === 'string' ? new Date(isoOrDate) : isoOrDate
+  return new Intl.DateTimeFormat('en-CA', { timeZone: LIMA }).format(d)
+}
+
 export function isSameDay(iso: string, date = new Date()) {
-  const d = new Date(iso)
-  return (
-    d.getFullYear() === date.getFullYear() &&
-    d.getMonth() === date.getMonth() &&
-    d.getDate() === date.getDate()
-  )
+  return limaYmd(iso) === limaYmd(date)
 }
 
 export function dayKey(iso: string) {

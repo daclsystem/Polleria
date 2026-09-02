@@ -9,6 +9,7 @@
     "dev:system": "cross-env VITE_APP=system vite",
     "dev:driver": "cross-env VITE_APP=driver vite",
     "dev:cliente": "cross-env VITE_APP=cliente vite",
+    "dev:all": "node scripts/dev-all.mjs",
     "build": "npm run build:all",
     "build:web": "cross-env VITE_APP=web tsc -b && cross-env VITE_APP=web vite build && shx cp deploy/htaccess/web.htaccess dist/web/.htaccess",
     "build:system": "cross-env VITE_APP=system tsc -b && cross-env VITE_APP=system vite build && shx cp deploy/htaccess/system.htaccess dist/system/.htaccess",

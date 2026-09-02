@@ -56,7 +56,7 @@ export function Modal({
       >
         <div className="mx-auto mb-3 h-1 w-10 rounded-full bg-ink/10 sm:hidden" />
         <div className="mb-4 flex items-start justify-between gap-4">
-          <h3 className="font-display text-xl font-semibold tracking-tight sm:text-2xl">{title}</h3>
+          <h3 className="text-xl font-black tracking-tight sm:text-2xl">{title}</h3>
           <button
             onClick={onClose}
             className="tap flex h-10 w-10 items-center justify-center rounded-full bg-ink/[0.04] text-xl text-ink/45 hover:bg-ink/[0.08] hover:text-ink"
@@ -86,12 +86,12 @@ export function Field({
 }
 
 export const inputClass =
-  'w-full rounded-2xl border border-ink/[0.08] bg-surface px-4 py-3.5 text-base text-ink shadow-sm outline-none transition placeholder:text-ink/30 focus:border-ember/35 focus:ring-4 focus:ring-ember/10 md:py-3 md:text-sm'
+  'min-h-12 w-full rounded-2xl border border-ink/[0.08] bg-surface px-4 py-3.5 text-base text-ink shadow-sm outline-none transition placeholder:text-ink/30 focus:border-gold focus:ring-4 focus:ring-gold/20 md:py-3'
 
 export function Empty({ title, hint }: { title: string; hint?: string }) {
   return (
     <div className="rounded-[1.5rem] border border-dashed border-ink/12 bg-surface/70 px-6 py-14 text-center text-ink">
-      <p className="font-display text-lg tracking-tight sm:text-xl">{title}</p>
+      <p className="text-lg font-black tracking-tight sm:text-xl">{title}</p>
       {hint ? <p className="mt-1 text-sm text-ink/45">{hint}</p> : null}
     </div>
   )
@@ -101,10 +101,12 @@ export function PageTitle({ kicker, title, hint }: { kicker?: string; title: str
   return (
     <div className="min-w-0">
       {kicker ? (
-        <p className="text-[11px] font-bold tracking-[0.18em] text-ember uppercase">{kicker}</p>
+        <p className="text-[10px] font-bold tracking-[0.2em] text-[#1a3d1a] uppercase dark:text-gold">
+          {kicker}
+        </p>
       ) : null}
-      <h1 className="font-display text-[1.85rem] leading-[1.1] tracking-tight sm:text-4xl">{title}</h1>
-      {hint ? <p className="mt-1.5 max-w-2xl text-sm leading-relaxed text-ink/45">{hint}</p> : null}
+      <h1 className="text-2xl font-extrabold leading-tight tracking-tight sm:text-[1.75rem]">{title}</h1>
+      {hint ? <p className="mt-1 max-w-xl text-sm leading-relaxed text-ink/45">{hint}</p> : null}
     </div>
   )
 }

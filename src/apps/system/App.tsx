@@ -145,7 +145,15 @@ export default function App() {
                 path="/pedidos-web"
                 element={
                   <ProtectedRoute module="pedidos-web">
-                    <PedidosWeb />
+                    <PedidosWeb vista="curso" />
+                  </ProtectedRoute>
+                }
+              />
+              <Route
+                path="/historial"
+                element={
+                  <ProtectedRoute module="historial">
+                    <PedidosWeb vista="historial" />
                   </ProtectedRoute>
                 }
               />

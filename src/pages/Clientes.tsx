@@ -3,6 +3,7 @@ import { Search } from 'lucide-react'
 import { apiListCustomers, apiUpsertCustomer } from '../lib/apiClient'
 import type { Customer } from '../types'
 import { Field, Modal, PageTitle, inputClass } from '../components/ui'
+import { ConfirmProcess } from '../components/ConfirmProcess'
 import { formatDateTime } from '../lib/format'
 
 export function Clientes() {
@@ -12,6 +13,7 @@ export function Clientes() {
   const [q, setQ] = useState('')
   const [editing, setEditing] = useState<Partial<Customer> | null>(null)
   const [saving, setSaving] = useState(false)
+  const [dlg, setDlg] = useState<'confirm' | 'busy' | 'done' | null>(null)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -47,6 +49,7 @@ export function Clientes() {
       return
     }
     setSaving(true)
+    setDlg('busy')
     try {
       await apiUpsertCustomer({
         name: editing.name.trim(),
@@ -54,9 +57,10 @@ export function Clientes() {
         email: editing.email || undefined,
         address: editing.address || undefined,
       })
-      setEditing(null)
       await load()
+      setDlg('done')
     } catch (e) {
+      setDlg('confirm')
       alert((e as Error).message || 'No se pudo guardar')
     } finally {
       setSaving(false)
@@ -133,7 +137,11 @@ export function Clientes() {
             className="space-y-3"
             onSubmit={(e) => {
               e.preventDefault()
-              void save()
+              if (!editing?.name?.trim() || !editing?.phone?.trim()) {
+                alert('Nombre y teléfono son obligatorios')
+                return
+              }
+              setDlg('confirm')
             }}
           >
             <Field label="Nombre *">
@@ -177,6 +185,21 @@ export function Clientes() {
           </form>
         ) : null}
       </Modal>
+      <ConfirmProcess
+        open={!!dlg}
+        phase={dlg === 'done' ? 'done' : dlg === 'busy' ? 'busy' : 'confirm'}
+        title="¿Guardar cliente?"
+        message={<p>Se actualizan nombre, teléfono y datos de contacto.</p>}
+        confirmLabel="Sí, guardar"
+        doneTitle="Cliente procesado"
+        doneMessage="El cliente quedó guardado."
+        onConfirm={() => void save()}
+        onCancel={() => setDlg(null)}
+        onDone={() => {
+          setDlg(null)
+          setEditing(null)
+        }}
+      />
     </div>
   )
 }

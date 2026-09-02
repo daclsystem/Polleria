@@ -179,3 +179,48 @@ export async function notifyOrderStatusServer(order: OrderLike, status: string) 
   await sendText(phone, text)
   return { sent: true, track: track || undefined }
 }
+
+export function ratingUrl(orderId: string, phone?: string) {
+  const q = phone ? `?tel=${encodeURIComponent(normalizePhone(phone).slice(-9))}` : ''
+  return `${FRONT_URL}/calificar/${orderId}${q}`
+}
+
+/** Gracias al cobrar: todos los pedidos con celular (mesa, recojo o delivery). */
+export async function notifyOrderPaidServer(order: OrderLike) {
+  const cfg = await loadWaConfig()
+  if (cfg.enabled === false) return { sent: false, reason: 'whatsapp deshabilitado' }
+  if (cfg.autoNotifyCustomer === false) return { sent: false, reason: 'avisos al cliente apagados' }
+
+  const phone = String(order.CustomerPhone || '')
+  if (!phone) return { sent: false, reason: 'sin teléfono' }
+
+  const rate = ratingUrl(String(order.Id), phone)
+  const carta = `${FRONT_URL}/`
+  const mesa =
+    order.Type === 'salon'
+      ? 'en mesa'
+      : order.Type === 'llevar'
+        ? 'para llevar'
+        : 'por delivery'
+
+  const text =
+    `🍗 *Chifa-Pollería Lopez*\n` +
+    `¡Gracias ${order.CustomerName}! 💛\n\n` +
+    `Ya registramos el pago de tu pedido *#${order.Number}* (${mesa})\n` +
+    `Total: *${soles(Number(order.Total))}*\n\n` +
+    `Esperamos que el pollo y el chifa te hayan sabido a gloria.\n` +
+    `La próxima te esperamos con el mismo sazón — pide por la web o WhatsApp y te llega más rápido.\n\n` +
+    `⭐ *Califícanos (1 minuto):*\n${rate}\n\n` +
+    `🛒 *Pide de nuevo:*\n${carta}\n\n` +
+    `📍 Chocos Imperial, Cañete\n` +
+    `🕚 11:00 – 23:00\n` +
+    `WhatsApp: 962 797 752`
+
+  try {
+    await sendText(phone, text)
+    return { sent: true, track: rate }
+  } catch (e) {
+    console.warn('[whatsapp] paid', (e as Error).message)
+    return { sent: false, reason: (e as Error).message }
+  }
+}

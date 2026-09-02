@@ -7,6 +7,7 @@ import {
 } from '../lib/apiClient'
 import type { Driver } from '../types'
 import { Field, Modal, PageTitle, inputClass } from '../components/ui'
+import { ConfirmProcess } from '../components/ConfirmProcess'
 import { uid } from '../lib/format'
 import { siteUrl } from '../lib/paths'
 import { uploadAvatar } from '../lib/minio'
@@ -19,6 +20,7 @@ export function Conductores() {
   const [editing, setEditing] = useState<Driver | null>(null)
   const [isNew, setIsNew] = useState(false)
   const [saving, setSaving] = useState(false)
+  const [dlg, setDlg] = useState<'confirm' | 'busy' | 'done' | null>(null)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -43,6 +45,7 @@ export function Conductores() {
       return
     }
     setSaving(true)
+    setDlg('busy')
     try {
       const payload = {
         name: editing.name.trim(),
@@ -57,10 +60,10 @@ export function Conductores() {
       } else {
         await apiUpdateDriver(editing.id, payload)
       }
-      setEditing(null)
-      setIsNew(false)
       await load()
+      setDlg('done')
     } catch (e) {
+      setDlg('confirm')
       alert((e as Error).message || 'No se pudo guardar')
     } finally {
       setSaving(false)
@@ -175,7 +178,11 @@ export function Conductores() {
             className="space-y-3"
             onSubmit={(e) => {
               e.preventDefault()
-              void save()
+              if (!editing?.name?.trim() || !editing?.phone?.trim()) {
+                alert('Nombre y teléfono son obligatorios')
+                return
+              }
+              setDlg('confirm')
             }}
           >
             <Field label="Nombre *">
@@ -229,6 +236,22 @@ export function Conductores() {
           </form>
         ) : null}
       </Modal>
+      <ConfirmProcess
+        open={!!dlg}
+        phase={dlg === 'done' ? 'done' : dlg === 'busy' ? 'busy' : 'confirm'}
+        title={isNew ? '¿Guardar conductor?' : '¿Guardar cambios?'}
+        message={<p>Se {isNew ? 'crea' : 'actualiza'} el repartidor y su acceso a la app.</p>}
+        confirmLabel="Sí, guardar"
+        doneTitle="Conductor procesado"
+        doneMessage="Los datos quedaron guardados."
+        onConfirm={() => void save()}
+        onCancel={() => setDlg(null)}
+        onDone={() => {
+          setDlg(null)
+          setEditing(null)
+          setIsNew(false)
+        }}
+      />
     </div>
   )
 }

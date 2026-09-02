@@ -9,6 +9,8 @@
 
 import { EscPosBuilder, rowText } from './escpos'
 import { formatDate, formatTime, padOrder, solesPrint } from './format'
+import { publicWebHost } from './paths'
+import { ticketPublicPhone } from './webSite'
 import type { Order, PrinterConfig, Settings } from '../types'
 import { PAY_LABEL, TYPE_LABEL } from '../types'
 
@@ -40,13 +42,20 @@ function header(settings: Settings, full: boolean): TicketLine[] {
   const lines: TicketLine[] = [
     { t: 'text', text: settings.name, align: 'center', bold: true, size: 'double' },
   ]
-  if (full) {
-    lines.push({ t: 'text', text: settings.slogan, align: 'center' })
+  const slogan = (settings.slogan || '').trim()
+  if (full && slogan.length >= 4 && !/^api\s*ok$/i.test(slogan)) {
+    lines.push({ t: 'text', text: slogan, align: 'center' })
   }
   lines.push({ t: 'text', text: settings.address, align: 'center' })
   if (full) {
-    lines.push({ t: 'text', text: `RUC ${settings.ruc} · ${settings.phone}`, align: 'center' })
+    const rucDigits = (settings.ruc || '').replace(/\D/g, '')
+    if (rucDigits.length >= 8) {
+      lines.push({ t: 'text', text: `RUC ${settings.ruc}`, align: 'center' })
+    }
   }
+  const phone = ticketPublicPhone()
+  if (phone) lines.push({ t: 'text', text: `Tel. ${phone}`, align: 'center' })
+  lines.push({ t: 'text', text: publicWebHost(), align: 'center' })
   lines.push({ t: 'sep', char: '=' })
   return lines
 }
@@ -69,46 +78,82 @@ function orderMeta(
       align: 'center',
       bold: true,
     },
-    {
-      t: 'text',
-      text: `${TYPE_LABEL[order.type]}${order.tableNumber ? ` · Mesa ${order.tableNumber}` : ''}`,
-    },
-    { t: 'text', text: `Cliente: ${order.customerName || '—'}`, bold: true },
   ]
+  if (order.tableNumber) {
+    lines.push({
+      t: 'text',
+      text: `MESA ${order.tableNumber}`,
+      align: 'center',
+      bold: true,
+      size: 'double',
+    })
+  }
+  lines.push({
+    t: 'text',
+    text: TYPE_LABEL[order.type],
+    align: 'center',
+    bold: !order.tableNumber,
+  })
+  lines.push({ t: 'text', text: `Cliente: ${order.customerName || '—'}`, bold: true })
   if (opts.phone && order.customerPhone) {
     lines.push({ t: 'text', text: `Cel: ${order.customerPhone}` })
   }
   if (opts.address && order.address) {
     lines.push({ t: 'text', text: order.address })
   }
-  if (order.createdBy) {
-    lines.push({ t: 'text', text: `Mozo: ${order.createdBy}` })
-  }
+  lines.push({ t: 'text', text: `Mozo: ${order.createdBy || '—'}`, bold: true })
   return lines
 }
 
 function totals(order: Order, settings: Settings): TicketLine[] {
-  const lines: TicketLine[] = [
-    { t: 'sep' },
-    { t: 'row', left: 'Subtotal', right: solesPrint(order.subtotal) },
-  ]
-  if (order.discount) {
+  const factura = order.docTipo === 'factura'
+  const lines: TicketLine[] = [{ t: 'sep' }]
+  if (factura) {
+    lines.push({ t: 'row', left: 'Op. gravadas', right: solesPrint(order.subtotal) })
+    if (order.discount) {
+      lines.push({ t: 'row', left: 'Descuento', right: `- ${solesPrint(order.discount)}` })
+    }
+    lines.push({
+      t: 'row',
+      left: `IGV ${(settings.igvRate * 100).toFixed(0)}% (incluido)`,
+      right: solesPrint(order.igv),
+    })
+  } else if (order.discount) {
     lines.push({ t: 'row', left: 'Descuento', right: `- ${solesPrint(order.discount)}` })
   }
-  lines.push({
-    t: 'row',
-    left: `IGV ${(settings.igvRate * 100).toFixed(0)}%`,
-    right: solesPrint(order.igv),
-  })
   lines.push({ t: 'row', left: 'TOTAL', right: solesPrint(order.total), bold: true, size: 'double' })
   return lines
 }
 
+function billingBlock(order: Order): TicketLine[] {
+  if (order.docTipo !== 'factura' && order.docTipo !== 'boleta_dni' && order.docTipo !== 'boleta_simple') {
+    return []
+  }
+  const lines: TicketLine[] = [{ t: 'sep' }]
+  if (order.docTipo === 'factura') {
+    lines.push({ t: 'text', text: 'FACTURA', align: 'center', bold: true })
+    if (order.docNumero) lines.push({ t: 'text', text: `RUC ${order.docNumero}` })
+    if (order.docNombre) lines.push({ t: 'text', text: order.docNombre, bold: true })
+  } else if (order.docTipo === 'boleta_dni') {
+    lines.push({ t: 'text', text: 'BOLETA', align: 'center', bold: true })
+    if (order.docNumero) lines.push({ t: 'text', text: `DNI ${order.docNumero}` })
+    if (order.docNombre) lines.push({ t: 'text', text: order.docNombre })
+  } else {
+    lines.push({ t: 'text', text: 'BOLETA', align: 'center', bold: true })
+    if (order.docNombre) lines.push({ t: 'text', text: order.docNombre })
+  }
+  if (order.docAddress) lines.push({ t: 'text', text: order.docAddress })
+  return lines
+}
+
 function buildCaja(order: Order, settings: Settings, cols: number): TicketDoc {
+  const heading =
+    order.docTipo === 'factura' ? 'FACTURA' : order.docTipo === 'ninguno' || !order.docTipo ? 'TICKET DE VENTA' : 'BOLETA'
   const lines: TicketLine[] = [
     ...header(settings, true),
-    { t: 'text', text: 'TICKET DE VENTA', align: 'center', bold: true },
+    { t: 'text', text: heading, align: 'center', bold: true },
     ...orderMeta(order, { phone: true, address: true }),
+    ...billingBlock(order),
     { t: 'sep' },
   ]
 
@@ -145,6 +190,8 @@ function buildCocina(order: Order, settings: Settings, cols: number): TicketDoc 
   const lines: TicketLine[] = [
     { t: 'text', text: heading, align: 'center', bold: true, size: 'double' },
     { t: 'text', text: settings.name, align: 'center', bold: true },
+    { t: 'text', text: `Tel. ${ticketPublicPhone()}`, align: 'center' },
+    { t: 'text', text: publicWebHost(), align: 'center' },
     { t: 'sep', char: '=' },
     ...orderMeta(order, { boldNumber: true }),
     { t: 'sep' },

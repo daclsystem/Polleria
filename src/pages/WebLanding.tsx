@@ -33,7 +33,7 @@ import { getCustomerSession, setCustomerHome, setCustomerSession } from '../lib/
 import {
   DEFAULT_WEB_BANNERS,
   DEFAULT_WEB_SITE,
-  mergeWebSite,
+  rememberWebSite,
   normalizeBanners,
   type WebBanner,
   type WebHighlight,
@@ -63,7 +63,7 @@ export function WebLanding() {
     void Promise.all([apiGetBanners(false), apiGetWebsite(false)])
       .then(([b, w]) => {
         setBanners(normalizeBanners(b.banners))
-        setSite(mergeWebSite(w.site))
+        setSite(rememberWebSite(w.site))
       })
       .catch(() => undefined)
   }, [])

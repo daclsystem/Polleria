@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { APP_VERSION } from '../lib/version'
+import { APP_VERSION, isNewerVersion } from '../lib/version'
 
 const POLL_MS = 30_000
 const COUNTDOWN_SEC = 5
@@ -15,7 +15,8 @@ function versionUrl() {
 
 /**
  * Vigila version.json del build publicado.
- * Si hay versión nueva → diálogo 5s → recarga automática.
+ * Solo recarga si la remota es estrictamente más nueva (nunca “baja” de versión).
+ * En desarrollo no corre: el JS y el middleware pueden desfasarse al editar version.ts.
  */
 export function VersionUpdateWatcher() {
   const [open, setOpen] = useState(false)
@@ -24,6 +25,8 @@ export function VersionUpdateWatcher() {
   const reloading = useRef(false)
 
   useEffect(() => {
+    if (import.meta.env.DEV) return
+
     try {
       localStorage.setItem(STORAGE_KEY, APP_VERSION)
     } catch {
@@ -40,7 +43,7 @@ export function VersionUpdateWatcher() {
         if (!res.ok) return
         const data = (await res.json()) as VersionPayload
         const next = String(data.version || '').trim()
-        if (next && next !== APP_VERSION) {
+        if (next && isNewerVersion(next, APP_VERSION)) {
           setRemoteVersion(next)
           setSeconds(COUNTDOWN_SEC)
           setOpen(true)
@@ -69,11 +72,9 @@ export function VersionUpdateWatcher() {
   const forceReload = () => {
     if (reloading.current) return
     reloading.current = true
-    // Limpiar caches y forzar recarga
     if ('caches' in window) {
-      caches.keys().then(names => names.forEach(name => caches.delete(name)))
+      caches.keys().then((names) => names.forEach((name) => caches.delete(name)))
     }
-    // Forzar recarga ignorando cache
     const url = new URL(window.location.href)
     url.searchParams.set('_reload', Date.now().toString())
     window.location.href = url.toString()
@@ -105,12 +106,12 @@ export function VersionUpdateWatcher() {
         aria-labelledby="version-update-title"
         className="w-full max-w-sm rounded-3xl bg-surface p-6 text-center text-ink shadow-2xl ring-1 ring-ink/10"
       >
-        <p className="text-xs font-bold tracking-[0.2em] text-green-700 uppercase">Actualización</p>
+        <p className="text-xs font-bold tracking-[0.2em] text-ember uppercase">Actualización</p>
         <h2 id="version-update-title" className="mt-2 text-xl font-black text-ink">
           Nueva versión disponible
         </h2>
         <p className="mt-2 text-sm text-ink/60">
-          v{APP_VERSION} → <span className="font-bold text-sage">v{remoteVersion}</span>
+          v{APP_VERSION} → <span className="font-bold text-ember">v{remoteVersion}</span>
         </p>
         <p className="mt-4 text-sm text-ink/50">
           Se actualizará automáticamente en{' '}
@@ -118,13 +119,13 @@ export function VersionUpdateWatcher() {
         </p>
         <div className="mt-4 h-1.5 overflow-hidden rounded-full bg-ink/10">
           <div
-            className="h-full rounded-full bg-green-600 transition-all duration-1000 ease-linear"
+            className="h-full rounded-full bg-ember transition-all duration-1000 ease-linear"
             style={{ width: `${((COUNTDOWN_SEC - seconds) / COUNTDOWN_SEC) * 100}%` }}
           />
         </div>
         <button
           type="button"
-          className="mt-5 w-full rounded-2xl bg-[#1a3d1a] py-3 text-sm font-bold text-white"
+          className="mt-5 w-full rounded-2xl bg-ember py-3 text-sm font-bold text-cream"
           onClick={forceReload}
         >
           Actualizar ahora

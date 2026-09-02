@@ -4,8 +4,11 @@ import { printRawbt, sendToPrinter } from './printer-driver'
 import { defaultPrinterSetup, loadPrinterSetup } from './printerStore'
 import { prepareTicketShare, shareTicketPayload } from './share'
 import { buildTicketDoc, renderEscPos, type TicketDoc, type TicketKind } from './ticket-doc'
-import type { Order, PrinterConfig, Settings } from '../types'
+import type { Order, PrinterConfig, Settings, User } from '../types'
 import { DEFAULT_PRINTER, PAY_LABEL, TYPE_LABEL } from '../types'
+import { publicWebHost, withBase } from './paths'
+import { ticketPublicPhone } from './webSite'
+import { staffLabel } from './staffLabel'
 
 export type { TicketKind }
 
@@ -17,25 +20,6 @@ function esc(s: string) {
     .replaceAll('<', '&lt;')
     .replaceAll('>', '&gt;')
     .replaceAll('"', '&quot;')
-}
-
-function standaloneBar() {
-  return `
-  <div class="noprint standalone-bar" id="standalone-bar">
-    <p>Vista previa</p>
-    <button type="button" class="print" onclick="window.print()">Imprimir</button>
-    <button type="button" onclick="goBackToSystem()">Cerrar</button>
-  </div>
-  <script>
-    // Dentro del overlay del sistema la barra de arriba ya tiene los botones.
-    try { if (window.parent && window.parent !== window) { document.getElementById('standalone-bar').hidden = true; } } catch (e) {}
-    function goBackToSystem() {
-      try { if (window.parent && window.parent !== window && window.parent.closePrintPreview) { window.parent.closePrintPreview(); return; } } catch (e) {}
-      try { window.close(); } catch (e) {}
-      if (window.opener) { window.close(); return; }
-      if (history.length > 1) { history.back(); return; }
-    }
-  </script>`
 }
 
 function ticketShell(title: string, inner: string, width = '80mm') {
@@ -52,40 +36,60 @@ function ticketShell(title: string, inner: string, width = '80mm') {
     .sheet { width: 72mm; margin: 0 auto; padding: 12px 0 24px; }
     .center { text-align: center; }
     .brand { font-size: 16px; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; }
+    .logo { display: block; width: 62mm; max-width: 100%; height: auto; margin: 0 auto 6px; background: #fff; }
+    img.logo { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
     .muted { color: #444; }
     .dash { border: 0; border-top: 1px dashed #111; margin: 8px 0; }
     .row { display: flex; justify-content: space-between; gap: 8px; }
     .item { margin: 4px 0; }
     .note { font-size: 11px; font-style: italic; }
     .big { font-size: 18px; font-weight: 800; }
+    .mesa { font-size: 22px; font-weight: 900; letter-spacing: 0.04em; }
     .cut { text-align: center; font-size: 10px; margin-top: 10px; }
     h1, h2, p { margin: 0 0 4px; }
-    .standalone-bar {
-      display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
-      padding: 12px 14px; padding-top: max(12px, env(safe-area-inset-top));
-      background: #0c0c0c; color: #fff; font-family: system-ui, sans-serif;
-    }
-    .standalone-bar[hidden] { display: none !important; }
-    .standalone-bar p { margin: 0; flex: 1 1 120px; font-weight: 600; font-size: 14px; }
-    .standalone-bar button {
-      min-height: 44px; border: 0; border-radius: 12px; padding: 0 16px;
-      font-weight: 700; font-size: 14px; background: #fff; color: #111; cursor: pointer;
-    }
-    .standalone-bar button.print { background: #1a3d1a; color: #fff; }
     @media print { .noprint { display: none !important; } }
   </style>
 </head>
 <body>
-  ${standaloneBar()}
   <div class="sheet">${inner}</div>
 </body>
 </html>`
 }
 
+function ticketLogoSrc() {
+  if (typeof window === 'undefined') return withBase('logo-lopez.png')
+  return new URL(withBase('logo-lopez.png'), window.location.origin).href
+}
+
+function sloganOk(s?: string) {
+  const t = (s || '').trim()
+  if (t.length < 4) return false
+  if (/^api\s*ok$/i.test(t)) return false
+  return true
+}
+
+function headerContactHtml(settings: Settings) {
+  const rucDigits = (settings.ruc || '').replace(/\D/g, '')
+  const phone = ticketPublicPhone()
+  const bits: string[] = []
+  if (rucDigits.length >= 8) bits.push(`<p class="muted">RUC ${esc(settings.ruc)}</p>`)
+  if (phone) bits.push(`<p class="muted">Tel. ${esc(phone)}</p>`)
+  bits.push(`<p class="muted">${esc(publicWebHost())}</p>`)
+  return bits.join('')
+}
+
 export function ticketHtml(order: Order, settings: Settings, kind: TicketKind) {
   const printedAt = new Date().toISOString()
   const heading =
-    kind === 'cocina' ? 'COMANDA COCINA' : kind === 'cuenta' ? 'PRE-CUENTA' : 'TICKET DE VENTA'
+    kind === 'cocina'
+      ? 'COMANDA COCINA'
+      : kind === 'cuenta'
+        ? 'PRE-CUENTA'
+        : order.docTipo === 'factura'
+          ? 'FACTURA'
+          : order.docTipo && order.docTipo !== 'ninguno'
+            ? 'BOLETA'
+            : 'TICKET DE VENTA'
   const items = order.items
     .map((i) => {
       const line =
@@ -96,32 +100,46 @@ export function ticketHtml(order: Order, settings: Settings, kind: TicketKind) {
     })
     .join('')
 
+  const factura = order.docTipo === 'factura'
   const money =
     kind === 'cocina'
       ? ''
       : `<hr class="dash" />
-        <div class="row muted"><span>Subtotal</span><span>${esc(solesPrint(order.subtotal))}</span></div>
+        ${factura ? `<div class="row muted"><span>Op. gravadas</span><span>${esc(solesPrint(order.subtotal))}</span></div>` : ''}
         ${order.discount ? `<div class="row muted"><span>Descuento</span><span>- ${esc(solesPrint(order.discount))}</span></div>` : ''}
-        <div class="row muted"><span>IGV ${(settings.igvRate * 100).toFixed(0)}%</span><span>${esc(solesPrint(order.igv))}</span></div>
+        ${factura ? `<div class="row muted"><span>IGV ${(settings.igvRate * 100).toFixed(0)}% (incluido)</span><span>${esc(solesPrint(order.igv))}</span></div>` : ''}
         <div class="row big"><span>TOTAL</span><span>${esc(solesPrint(order.total))}</span></div>
         <p class="center muted" style="margin-top:8px">${esc(PAY_LABEL[order.paymentMethod])} · ${order.paid ? 'PAGADO' : 'POR COBRAR'}</p>`
 
+  const billing =
+    kind !== 'cocina' && (order.docTipo === 'factura' || order.docTipo === 'boleta_dni' || order.docTipo === 'boleta_simple')
+      ? `<p>${order.docTipo === 'factura' && order.docNumero ? `RUC ${esc(order.docNumero)}` : order.docTipo === 'boleta_dni' && order.docNumero ? `DNI ${esc(order.docNumero)}` : ''}</p>
+        ${order.docNombre ? `<p><strong>${esc(order.docNombre)}</strong></p>` : ''}
+        ${order.docAddress ? `<p>${esc(order.docAddress)}</p>` : ''}`
+      : ''
+
+  const mesa = order.tableNumber
+    ? `<p class="center mesa">MESA ${esc(String(order.tableNumber))}</p>`
+    : ''
+
   const inner = `
     <div class="center">
-      <p class="brand">${esc(settings.name)}</p>
-      <p class="muted">${esc(settings.slogan)}</p>
+      <img class="logo" src="${esc(ticketLogoSrc())}" alt="${esc(settings.name)}" />
+      ${sloganOk(settings.slogan) ? `<p class="muted">${esc(settings.slogan)}</p>` : ''}
       <p class="muted">${esc(settings.address)}</p>
-      <p class="muted">RUC ${esc(settings.ruc)} · ${esc(settings.phone)}</p>
+      ${headerContactHtml(settings)}
     </div>
     <hr class="dash" />
     <p class="center big">${heading}</p>
     <p class="center">${esc(padOrder(order.number))} · ${esc(formatDate(printedAt))}</p>
     <p class="center"><strong>Hora ${esc(formatTime(printedAt))}</strong></p>
-    <p>${esc(TYPE_LABEL[order.type])}${order.tableNumber ? ` · Mesa ${order.tableNumber}` : ''}</p>
+    ${mesa}
+    <p class="center"><strong>${esc(TYPE_LABEL[order.type])}</strong></p>
     <p><strong>Cliente: ${esc(order.customerName || '—')}</strong></p>
     ${order.customerPhone ? `<p>Cel: ${esc(order.customerPhone)}</p>` : ''}
     ${order.address ? `<p>${esc(order.address)}</p>` : ''}
-    ${order.createdBy ? `<p>Mozo: ${esc(order.createdBy)}</p>` : ''}
+    <p><strong>Mozo: ${esc(order.createdBy || '—')}</strong></p>
+    ${billing}
     <hr class="dash" />
     ${items}
     ${order.notes ? `<p class="note">Nota: ${esc(order.notes)}</p>` : ''}
@@ -173,22 +191,9 @@ export function reportHtml(opts: {
   body { font-family: system-ui, sans-serif; color: #111; margin: 0; }
   .report { padding: 16px; }
   td { padding: 6px; border-bottom: 1px solid #ddd; }
-  .standalone-bar {
-    display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
-    padding: 12px 14px; padding-top: max(12px, env(safe-area-inset-top));
-    background: #0c0c0c; color: #fff;
-  }
-  .standalone-bar[hidden] { display: none !important; }
-  .standalone-bar p { margin: 0; flex: 1 1 120px; font-weight: 600; font-size: 14px; }
-  .standalone-bar button {
-    min-height: 44px; border: 0; border-radius: 12px; padding: 0 16px;
-    font-weight: 700; font-size: 14px; background: #fff; color: #111; cursor: pointer;
-  }
-  .standalone-bar button.print { background: #1a3d1a; color: #fff; }
   @media print { .noprint { display: none !important; } }
 </style></head>
 <body>
-${standaloneBar()}
 <div class="report">${inner}</div>
 </body></html>`
 }
@@ -276,12 +281,6 @@ function printHtmlFallback(html: string, opts: PreviewOptions = {}) {
     </div>
     ${opts.error ? `<p class="polleria-print-error">No se pudo imprimir: ${esc(opts.error)}</p>` : ''}
     <iframe title="Documento a imprimir"></iframe>
-    <div class="polleria-print-bar">
-      ${rawbtBtn}
-      ${shareBtn}
-      <button type="button" data-print>Imprimir</button>
-      <button type="button" data-close>Cerrar</button>
-    </div>
   `
 
   document.documentElement.style.overflow = 'hidden'
@@ -383,11 +382,12 @@ function getPrinterConfig(settings: Settings, kind: TicketKind): PrinterConfig |
   return printers.caja?.enabled ? printers.caja : null
 }
 
-export async function printTicket(order: Order, settings: Settings, kind: TicketKind) {
+export async function printTicket(order: Order, settings: Settings, kind: TicketKind, users: User[] = []) {
+  const labeled = { ...order, createdBy: staffLabel(order, users) }
   const config = getPrinterConfig(settings, kind)
-  const ticket = buildTicketDoc(order, settings, kind, config?.cols ?? 48)
+  const ticket = buildTicketDoc(labeled, settings, kind, config?.cols ?? 48)
   const preview = (error?: string) =>
-    printHtmlFallback(ticketHtml(order, settings, kind), { ticket, config: config ?? undefined, error })
+    printHtmlFallback(ticketHtml(labeled, settings, kind), { ticket, config: config ?? undefined, error })
 
   if (config && config.driver !== 'browser') {
     const result = await sendToPrinter(renderEscPos(ticket, config), config)
@@ -405,6 +405,53 @@ export async function printTicket(order: Order, settings: Settings, kind: Ticket
 
 export function printReport(html: string) {
   printHtmlFallback(html)
+}
+
+export function cashCloseHtml(opts: {
+  settings: Settings
+  fromAt: string
+  closedAt: string
+  ordersCount: number
+  sales: number
+  efectivo: number
+  yape: number
+  tarjeta: number
+  counted: number
+  difference: number
+  notes?: string
+  signature?: string
+}) {
+  const diffTxt =
+    Math.abs(opts.difference) < 0.01
+      ? 'Cuadra'
+      : opts.difference > 0
+        ? `Sobrante ${solesPrint(opts.difference)}`
+        : `Faltante ${solesPrint(Math.abs(opts.difference))}`
+  const sig = opts.signature
+    ? `<img alt="Firma" src="${opts.signature}" style="display:block;width:100%;max-height:90px;object-fit:contain;background:#fff" />`
+    : `<div style="height:72px"></div>`
+  const inner = `
+    <p class="center brand">${esc(opts.settings.name)}</p>
+    <p class="center muted">CIERRE DE CAJA / LIQUIDACIÓN</p>
+    <hr class="dash" />
+    <p>Turno: ${esc(formatDateTime(opts.fromAt))}</p>
+    <p>Cierre: ${esc(formatDateTime(opts.closedAt))}</p>
+    <hr class="dash" />
+    <div class="row"><span>Pedidos cobrados</span><span>${opts.ordersCount}</span></div>
+    <div class="row"><span>Ventas</span><span>${solesPrint(opts.sales)}</span></div>
+    <div class="row"><span>Efectivo esperado</span><span>${solesPrint(opts.efectivo)}</span></div>
+    <div class="row"><span>Yape</span><span>${solesPrint(opts.yape)}</span></div>
+    <div class="row"><span>Tarjeta</span><span>${solesPrint(opts.tarjeta)}</span></div>
+    <div class="row"><span>Efectivo contado</span><span>${solesPrint(opts.counted)}</span></div>
+    <p class="big center" style="margin-top:8px">${esc(diffTxt)}</p>
+    ${opts.notes ? `<p class="note">Nota: ${esc(opts.notes)}</p>` : ''}
+    <hr class="dash" />
+    <p class="muted">Entrega de efectivo y liquidación</p>
+    ${sig}
+    <p class="center muted" style="margin-top:4px">Firma de quien entrega / recibe</p>
+    <p class="cut">- - - corte aquí - - -</p>
+  `
+  return ticketShell(`Cierre de caja ${formatDateTime(opts.closedAt)}`, inner)
 }
 
 // Re-export for backward compatibility

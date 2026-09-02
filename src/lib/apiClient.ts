@@ -195,11 +195,19 @@ export async function apiStockRetorno(id: string, itemIds?: string[]) {
 
 export async function apiPayOrder(
   id: string,
-  payments: Array<{ method: string; amount: number; cashTendered?: number }>,
+  payments: Array<{ method: string; amount: number; cashTendered?: number; reference?: string }>,
+  billing?: {
+    docTipo?: string
+    docNumero?: string
+    docNombre?: string
+    docEmail?: string
+    docPhone?: string
+    docAddress?: string
+  },
 ) {
   return apiFetch<{ order: unknown; paid: boolean }>(`/api/orders/${id}/payments`, {
     method: 'POST',
-    body: JSON.stringify({ payments }),
+    body: JSON.stringify({ payments, billing }),
   })
 }
 
@@ -208,6 +216,46 @@ export async function apiSettleCashier(orderId: string) {
   return apiFetch<{ order: unknown; settled: boolean }>(`/api/orders/${orderId}/settle-cashier`, {
     method: 'POST',
   })
+}
+
+export type CashShift = {
+  fromAt: string
+  lastCloseAt: string | null
+  ordersCount: number
+  salesTotal: number
+  efectivo: number
+  yape: number
+  tarjeta: number
+  pendingUnpaid: number
+}
+
+export async function apiCashShift() {
+  return apiFetch<CashShift>('/api/cash/shift')
+}
+
+export async function apiCashClose(body: { countedCash: number; notes?: string; signature?: string }) {
+  return apiFetch<CashShift & { ok: boolean; countedCash: number; difference: number; notes?: string }>(
+    '/api/cash/close',
+    { method: 'POST', body: JSON.stringify(body) },
+  )
+}
+
+export type CashCloseRow = {
+  id: string
+  fromAt: string
+  closedAt: string
+  ordersCount: number
+  salesTotal: number
+  efectivo: number
+  yape: number
+  tarjeta: number
+  countedCash: number
+  difference: number
+  notes: string
+}
+
+export async function apiCashHistory() {
+  return apiFetch<CashCloseRow[]>('/api/cash/history')
 }
 
 export async function apiAddOrderItems(
@@ -259,6 +307,23 @@ export async function apiAdjustStock(
     method: 'POST',
     body: JSON.stringify({ delta, reason: extra?.reason, notes: extra?.notes }),
   })
+}
+
+export async function apiInventoryMovements() {
+  return apiFetch<
+    Array<{
+      id: string
+      inventoryId: string
+      name: string
+      unit: string
+      delta: number
+      stockAfter: number
+      reason: string
+      notes: string
+      createdAt: string
+      userName?: string
+    }>
+  >('/api/inventory/movements')
 }
 
 export async function apiUpdateTable(id: string, patch: Record<string, unknown>) {

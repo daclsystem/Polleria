@@ -4,6 +4,7 @@ import { useStore } from '../store/StoreContext'
 import { uid } from '../lib/format'
 import { ROLE_LABEL, type Role, type User } from '../types'
 import { Field, Modal, PageTitle, RoleBadge, inputClass } from '../components/ui'
+import { ConfirmProcess } from '../components/ConfirmProcess'
 import { defaultAvatarUrl, shortAccountId } from '../lib/avatar'
 
 const ROLES: Role[] = ['admin', 'cajero', 'cocina', 'mozo']
@@ -12,6 +13,7 @@ export function Usuarios() {
   const { state, saveUser, deleteUser } = useStore()
   const { user: me } = useAuth()
   const [editing, setEditing] = useState<User | null>(null)
+  const [dlg, setDlg] = useState<'confirm' | 'busy' | 'done' | null>(null)
 
   return (
     <div>
@@ -79,10 +81,7 @@ export function Usuarios() {
             className="space-y-3"
             onSubmit={(e) => {
               e.preventDefault()
-              const photoUrl =
-                editing.photoUrl || defaultAvatarUrl(editing.name || 'Usuario', 'staff')
-              saveUser({ ...editing, photoUrl })
-              setEditing(null)
+              setDlg('confirm')
             }}
           >
             <div className="flex items-center gap-3 rounded-2xl bg-cream px-3 py-3">
@@ -167,6 +166,31 @@ export function Usuarios() {
           </form>
         ) : null}
       </Modal>
+      <ConfirmProcess
+        open={!!dlg}
+        phase={dlg === 'done' ? 'done' : dlg === 'busy' ? 'busy' : 'confirm'}
+        title="¿Guardar usuario?"
+        message={<p>Se actualizan nombre, rol y datos de acceso.</p>}
+        confirmLabel="Sí, guardar"
+        doneTitle="Usuario procesado"
+        doneMessage="El usuario quedó guardado."
+        onConfirm={() => {
+          if (!editing) return
+          setDlg('busy')
+          const photoUrl = editing.photoUrl || defaultAvatarUrl(editing.name || 'Usuario', 'staff')
+          void saveUser({ ...editing, photoUrl })
+            .then(() => setDlg('done'))
+            .catch((err) => {
+              setDlg('confirm')
+              alert((err as Error).message || 'No se pudo guardar el usuario')
+            })
+        }}
+        onCancel={() => setDlg(null)}
+        onDone={() => {
+          setDlg(null)
+          setEditing(null)
+        }}
+      />
     </div>
   )
 }

@@ -1,16 +1,17 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { Bike, ChevronLeft, ChevronRight, Clock, Printer, Volume2 } from 'lucide-react'
+import { Bike, ChevronLeft, ChevronRight, Clock, Volume2 } from 'lucide-react'
 import { elapsedMinutes, padOrder } from '../lib/format'
-import { printTicket } from '../lib/print'
 import { playSound, unlockSounds } from '../lib/sounds'
 import {
   filterKitchenItems,
   filterKitchenWave,
   type KitchenWave,
 } from '../lib/kitchen'
+import { staffLabel } from '../lib/staffLabel'
 import { useStore } from '../store/StoreContext'
 import type { Order, OrderStatus } from '../types'
 import { PageTitle } from '../components/ui'
+import { CocinaPerdida } from '../components/CocinaPerdida'
 
 const COLS: { id: KitchenWave; title: string; hint: string; advanceTo: OrderStatus }[] = [
   { id: 'pendiente', title: 'Recibidos', hint: 'Nuevos y adicionales', advanceTo: 'en_cocina' },
@@ -37,7 +38,7 @@ function typeBadge(order: Order) {
 }
 
 export function Cocina() {
-  const { state, updateOrderStatus, stockSacar, stockRetorno } = useStore()
+  const { state, updateOrderStatus } = useStore()
   const products = state.products
 
   const tickets = useMemo(() => {
@@ -121,6 +122,7 @@ export function Cocina() {
       <div className="flex shrink-0 flex-wrap items-end justify-between gap-3">
         <PageTitle title="Pantalla de cocina" hint={`${tickets.length} tickets activos`} />
         <div className="flex items-center gap-2">
+          <CocinaPerdida />
           {!soundOn ? (
             <button
               type="button"
@@ -176,24 +178,6 @@ export function Cocina() {
                     kitchenItems={t.items}
                     wave={t.wave}
                     isAdditional={t.isAdditional}
-                    onPrint={() =>
-                      printTicket(
-                        {
-                          ...t.order,
-                          items: t.items,
-                          notes: [
-                            t.isAdditional ? 'ADICIONAL' : '',
-                            t.order.source === 'web' ? 'WEB / APP' : '',
-                            t.order.type === 'delivery' || t.order.type === 'web' ? 'DELIVERY' : '',
-                            t.order.notes || '',
-                          ]
-                            .filter(Boolean)
-                            .join(' · '),
-                        },
-                        state.settings,
-                        'cocina',
-                      )
-                    }
                     onAdvance={() => {
                       // Delivery: cocina no marca “entregado”; eso lo hace el repartidor
                       if (
@@ -209,14 +193,6 @@ export function Cocina() {
                       col.id === 'listo' &&
                       (t.order.type === 'delivery' || t.order.type === 'web')
                     }
-                    onSacar={() => {
-                      const ids = t.items.map((i) => i.id).filter(Boolean) as string[]
-                      void stockSacar(t.order.id, ids.length ? ids : undefined)
-                    }}
-                    onRetorno={() => {
-                      const ids = t.items.map((i) => i.id).filter(Boolean) as string[]
-                      void stockRetorno(t.order.id, ids.length ? ids : undefined)
-                    }}
                   />
                 ))}
                 {colTickets.length === 0 ? (
@@ -298,9 +274,6 @@ function KitchenCard({
   wave,
   isAdditional,
   onAdvance,
-  onPrint,
-  onSacar,
-  onRetorno,
   hideAdvance,
 }: {
   order: Order
@@ -308,11 +281,9 @@ function KitchenCard({
   wave: KitchenWave
   isAdditional: boolean
   onAdvance: () => void
-  onPrint: () => void
-  onSacar: () => void
-  onRetorno: () => void
   hideAdvance?: boolean
 }) {
+  const { state } = useStore()
   const mins = elapsedMinutes(order.updatedAt || order.createdAt)
   const late = mins >= 15 && wave !== 'listo'
   const isDelivery = order.type === 'delivery' || order.type === 'web'
@@ -332,9 +303,6 @@ function KitchenCard({
         ? `Mesa ${order.tableNumber}`
         : order.customerName || 'Cliente'
 
-  const canSacar = kitchenItems.some((i) => !i.stockDeducted)
-  const canRetorno = kitchenItems.some((i) => i.stockDeducted)
-
   return (
     <article
       className={`card rounded-xl p-3.5 text-ink ${late ? 'ring-2 ring-ember' : ''} ${isAdditional ? 'ring-2 ring-amber-400' : ''}`}
@@ -352,6 +320,8 @@ function KitchenCard({
           </div>
           <p className="mt-1 truncate text-xs text-ink/55">
             {who}
+            {' · '}
+            {staffLabel(order, state.users)}
             {isDelivery && order.driverId ? (
               <span className="ml-1 inline-flex items-center gap-0.5 font-semibold text-teal-700">
                 · <Bike size={11} /> asignado
@@ -370,11 +340,6 @@ function KitchenCard({
         {kitchenItems.map((i, idx) => (
           <li key={i.id || idx} className="text-sm leading-snug">
             <span className="font-bold">{i.qty}×</span> {i.name}
-            {i.stockDeducted ? (
-              <span className="ml-1.5 rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] font-bold text-emerald-800">
-                sacado
-              </span>
-            ) : null}
             {i.notes ? <span className="block text-xs text-ember">{i.notes}</span> : null}
           </li>
         ))}
@@ -385,39 +350,16 @@ function KitchenCard({
           Esta mesa ya tiene platos en fuego. Solo prepara lo de esta tarjeta.
         </p>
       ) : null}
-      {(canSacar || canRetorno) && wave !== 'listo' ? (
-        <div className="mt-2.5 grid grid-cols-2 gap-1.5">
-          <button
-            type="button"
-            disabled={!canSacar}
-            onClick={onSacar}
-            className="min-h-9 rounded-lg bg-ink/90 text-xs font-semibold text-cream disabled:opacity-35"
-          >
-            Sacar almacén
-          </button>
-          <button
-            type="button"
-            disabled={!canRetorno}
-            onClick={onRetorno}
-            className="min-h-9 rounded-lg bg-white text-xs font-semibold text-ink ring-1 ring-ink/15 disabled:opacity-35"
-          >
-            Retorno
-          </button>
-        </div>
-      ) : null}
-      <div className="mt-3 grid grid-cols-[1fr_auto] gap-2">
+      <div className="mt-3">
         {hideAdvance ? (
           <p className="flex min-h-11 items-center rounded-xl bg-white/90 px-3 text-xs font-semibold text-ink/70 ring-1 ring-ink/10">
             {order.driverId ? 'Listo · con repartidor' : 'Listo · asigna repartidor en Caja'}
           </p>
         ) : (
-          <button onClick={onAdvance} className="min-h-11 rounded-xl bg-ember py-2 text-sm font-semibold text-white">
+          <button onClick={onAdvance} className="min-h-11 w-full rounded-xl bg-ember py-2 text-sm font-semibold text-white">
             {btn}
           </button>
         )}
-        <button onClick={onPrint} className="tap rounded-xl bg-white px-3 ring-1 ring-ink/10" aria-label="Imprimir comanda">
-          <Printer size={16} />
-        </button>
       </div>
     </article>
   )

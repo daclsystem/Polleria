@@ -4,6 +4,7 @@ import { useStore } from '../store/StoreContext'
 import type { Branch, DeliveryRange } from '../types'
 import { soles, uid } from '../lib/format'
 import { Field, Modal, PageTitle, inputClass } from '../components/ui'
+import { ConfirmProcess } from '../components/ConfirmProcess'
 import {
   apiGetDeliveryRanges,
   apiSaveBranch,
@@ -48,7 +49,6 @@ export function Sucursales() {
       await apiSaveDeliveryRanges(ranges, id)
     }
     await reloadFromApi()
-    setShowForm(false)
   }
 
   const handleDelete = (id: string) => {
@@ -177,6 +177,7 @@ function BranchFormModal({
   const [detecting, setDetecting] = useState(false)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState<string | null>(null)
+  const [dlg, setDlg] = useState<'confirm' | 'busy' | 'done' | null>(null)
 
   useEffect(() => {
     if (!open) return
@@ -237,6 +238,7 @@ function BranchFormModal({
   const handleSubmit = async () => {
     if (!name.trim()) return
     setBusy(true)
+    setDlg('busy')
     setErr(null)
     try {
       await onSave(
@@ -251,8 +253,9 @@ function BranchFormModal({
         },
         ranges,
       )
-      onClose()
+      setDlg('done')
     } catch (e) {
+      setDlg('confirm')
       setErr((e as Error).message || 'No se pudo guardar')
     } finally {
       setBusy(false)
@@ -260,6 +263,7 @@ function BranchFormModal({
   }
 
   return (
+    <>
     <Modal
       open={open}
       title={branch ? 'Editar sucursal y envíos' : 'Nueva sucursal'}
@@ -440,7 +444,7 @@ function BranchFormModal({
         <button
           type="button"
           disabled={busy || !name.trim()}
-          onClick={() => void handleSubmit()}
+          onClick={() => setDlg('confirm')}
           className="w-full rounded-xl bg-ember py-3 font-semibold text-white disabled:opacity-40"
         >
           {busy ? 'Guardando…' : branch ? 'Guardar sede y tarifas' : 'Crear sucursal'}
@@ -452,5 +456,21 @@ function BranchFormModal({
         ) : null}
       </div>
     </Modal>
+    <ConfirmProcess
+      open={!!dlg}
+      phase={dlg === 'done' ? 'done' : dlg === 'busy' ? 'busy' : 'confirm'}
+      title={branch ? '¿Guardar sucursal?' : '¿Crear sucursal?'}
+      message={<p>Se guardan sede, ubicación y tarifas de envío.</p>}
+      confirmLabel="Sí, guardar"
+      doneTitle="Sucursal procesada"
+      doneMessage="Los datos de la sede quedaron guardados."
+      onConfirm={() => void handleSubmit()}
+      onCancel={() => setDlg(null)}
+      onDone={() => {
+        setDlg(null)
+        onClose()
+      }}
+    />
+    </>
   )
 }

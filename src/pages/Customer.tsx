@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import {
   Camera,
   Check,
@@ -14,6 +14,7 @@ import {
   Plus,
   Search,
   ShoppingCart,
+  Table2,
   TicketPercent,
   Trash2,
   User,
@@ -38,6 +39,7 @@ import { uploadAvatar } from '../lib/minio'
 import { BottomSheet } from '../components/BottomSheet'
 import { CustomerAddressesPanel } from '../components/CustomerAddressesPanel'
 import { PhoneOtpLogin } from '../components/PhoneOtpLogin'
+import { AuthSplitLayout } from '../components/AuthSplitLayout'
 import { ProductModal } from '../components/ProductModal'
 import { Field, PageTitle, inputClass } from '../components/ui'
 import { useDeviceLocation } from '../hooks/useDeviceLocation'
@@ -61,7 +63,8 @@ import { OrderContactCard } from '../components/OrderContactCard'
 
 const PERMS_SKIP_KEY = 'polleria-perms-skip-cliente'
 
-const MODES: { id: 'llevar' | 'delivery'; label: string }[] = [
+const MODES: { id: 'salon' | 'llevar' | 'delivery'; label: string }[] = [
+  { id: 'salon', label: 'En mesa' },
   { id: 'llevar', label: 'Recojo' },
   { id: 'delivery', label: 'Delivery' },
 ]
@@ -92,7 +95,7 @@ function ProductCard({
       <button
         type="button"
         onClick={() => onOpen(p)}
-        className="w-[10.75rem] shrink-0 snap-start overflow-hidden rounded-2xl bg-white text-left shadow-sm ring-1 ring-black/5"
+        className="w-[10.75rem] shrink-0 snap-start overflow-hidden rounded-2xl bg-surface text-left shadow-sm ring-1 ring-black/5"
       >
         <div
           className="relative aspect-[4/3] w-full overflow-hidden"
@@ -130,7 +133,7 @@ function ProductCard({
     <button
       type="button"
       onClick={() => onOpen(p)}
-      className="flex w-full min-w-0 items-center gap-3 rounded-2xl bg-white p-2.5 text-left shadow-sm ring-1 ring-black/5"
+      className="flex w-full min-w-0 items-center gap-3 rounded-2xl bg-surface p-2.5 text-left shadow-sm ring-1 ring-black/5"
     >
       <div
         className="relative h-[4.75rem] w-[4.75rem] shrink-0 overflow-hidden rounded-xl"
@@ -215,7 +218,7 @@ function ProductRail({ children }: { children: ReactNode }) {
         type="button"
         aria-label="Anterior"
         onClick={() => scrollBy(-1)}
-        className="absolute left-0 top-1/2 z-10 flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full bg-white/95 text-ink shadow ring-1 ring-black/10"
+        className="absolute left-0 top-1/2 z-10 flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full bg-surface/95 text-ink shadow ring-1 ring-black/10"
       >
         <ChevronLeft size={18} />
       </button>
@@ -223,7 +226,7 @@ function ProductRail({ children }: { children: ReactNode }) {
         type="button"
         aria-label="Siguiente"
         onClick={() => scrollBy(1)}
-        className="absolute right-0 top-1/2 z-10 flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full bg-white/95 text-ink shadow ring-1 ring-black/10"
+        className="absolute right-0 top-1/2 z-10 flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full bg-surface/95 text-ink shadow ring-1 ring-black/10"
       >
         <ChevronRight size={18} />
       </button>
@@ -258,7 +261,7 @@ function MyOrderCard({ order, onOpen }: { order: Order; onOpen: (o: Order) => vo
       <button
         type="button"
         onClick={() => onOpen(order)}
-        className={`w-full rounded-2xl bg-white p-4 text-left shadow-sm ring-1 ${
+        className={`w-full rounded-2xl bg-surface p-4 text-left shadow-sm ring-1 ${
           active ? 'ring-ember/20' : 'ring-ink/[0.04]'
         }`}
       >
@@ -302,6 +305,7 @@ function orderTrackPath(orderId: string, phone?: string) {
 
 function CustomerMenu() {
   const navigate = useNavigate()
+  const [params] = useSearchParams()
   const { state, createOrder } = useStore()
   const [tab, setTab] = useState<'inicio' | 'promos' | 'pedidos' | 'perfil'>('inicio')
   const [cat, setCat] = useState('Todos')
@@ -317,7 +321,8 @@ function CustomerMenu() {
   const [modalProduct, setModalProduct] = useState<Product | null>(null)
   const [myOrders, setMyOrders] = useState<Order[]>([])
   const [ordersBusy, setOrdersBusy] = useState(false)
-  const [mode, setMode] = useState<'llevar' | 'delivery'>('delivery')
+  const [mode, setMode] = useState<'salon' | 'llevar' | 'delivery'>('delivery')
+  const [tableId, setTableId] = useState('')
   const [name, setName] = useState('')
   const [phone, setPhone] = useState('')
   const [address, setAddress] = useState('')
@@ -387,6 +392,16 @@ function CustomerMenu() {
   useEffect(() => {
     if (addressHint) setAddress(addressHint)
   }, [addressHint])
+
+  useEffect(() => {
+    const raw = params.get('mesa')
+    if (!raw) return
+    const hit = state.tables.find((t) => String(t.number) === raw || t.id === raw)
+    if (hit) {
+      setMode('salon')
+      setTableId(hit.id)
+    }
+  }, [params, state.tables])
 
   useEffect(() => {
     if (mode !== 'delivery' || addressLat == null || addressLng == null) return
@@ -546,6 +561,10 @@ function CustomerMenu() {
       alert('Indica la dirección de entrega')
       return
     }
+    if (mode === 'salon' && !tableId) {
+      alert('Elige tu mesa')
+      return
+    }
     let lat = addressLat
     let lng = addressLng
     let dist = quoteKm
@@ -593,6 +612,7 @@ function CustomerMenu() {
         notes: note || undefined,
         createdBy: 'Cliente',
         source: 'web',
+        tableId: mode === 'salon' ? tableId : undefined,
         deliveryFee: mode === 'delivery' ? sendFee : 0,
         branchId: mode === 'delivery' ? pickDeliveryBranchId(state.branches) : undefined,
         deliveryDistanceKm: mode === 'delivery' ? dist ?? undefined : undefined,
@@ -634,7 +654,7 @@ function CustomerMenu() {
             <div className="mt-2 flex flex-wrap items-center gap-2">
               <button
                 type="button"
-                className="tap rounded-xl bg-white p-1.5 shadow-sm"
+                className="tap rounded-xl bg-surface p-1.5 shadow-sm"
                 onClick={() =>
                   setItems((p) =>
                     p
@@ -648,7 +668,7 @@ function CustomerMenu() {
               <span className="w-6 text-center text-sm font-black">{item.qty}</span>
               <button
                 type="button"
-                className="tap rounded-xl bg-white p-1.5 shadow-sm"
+                className="tap rounded-xl bg-surface p-1.5 shadow-sm"
                 onClick={() =>
                   setItems((p) => p.map((it, i) => (i === idx ? { ...it, qty: it.qty + 1 } : it)))
                 }
@@ -661,19 +681,44 @@ function CustomerMenu() {
       </ul>
 
       <div className="mt-4 space-y-3 border-t border-ink/[0.06] pt-4">
-        <div className="seg">
+        <div className="grid grid-cols-3 gap-1 rounded-2xl bg-ink/6 p-1">
           {MODES.map((m) => (
             <button
               key={m.id}
               type="button"
               onClick={() => setMode(m.id)}
-              className={`seg-btn ${mode === m.id ? 'seg-btn-on' : ''}`}
+              className={`min-h-11 rounded-xl px-1 text-xs font-bold sm:text-sm ${
+                mode === m.id ? 'bg-ink text-cream' : 'text-ink/55'
+              }`}
             >
               {m.label}
               {m.id === 'delivery' && fee > 0 ? ` (+${soles(fee)})` : ''}
             </button>
           ))}
         </div>
+
+        {mode === 'salon' ? (
+          <div>
+            <p className="text-sm font-semibold">Tu mesa</p>
+            <p className="mt-0.5 text-xs text-ink/45">Elige el número de la mesa donde estás sentado.</p>
+            <div className="mt-2 grid grid-cols-4 gap-1.5 sm:grid-cols-6">
+              {state.tables.map((t) => (
+                <button
+                  key={t.id}
+                  type="button"
+                  onClick={() => setTableId(t.id)}
+                  className={`min-h-11 rounded-xl text-sm font-black ring-1 ${
+                    tableId === t.id
+                      ? 'bg-gold text-[#1a3d1a] ring-gold'
+                      : 'bg-surface text-ink ring-ink/10'
+                  }`}
+                >
+                  {t.number}
+                </button>
+              ))}
+            </div>
+          </div>
+        ) : null}
 
         <Field label="Tu nombre">
           <input className={inputClass} value={name} onChange={(e) => setName(e.target.value)} required />
@@ -693,7 +738,7 @@ function CustomerMenu() {
             <button
               type="button"
               disabled={locBusy}
-              className="mt-2 inline-flex min-h-10 items-center gap-2 rounded-xl bg-white px-3 text-sm font-semibold ring-1 ring-ink/10"
+              className="mt-2 inline-flex min-h-10 items-center gap-2 rounded-xl bg-surface px-3 text-sm font-semibold ring-1 ring-ink/10"
               onClick={() => {
                 void (async () => {
                   setLocBusy(true)
@@ -770,7 +815,7 @@ function CustomerMenu() {
             </button>
             {saveAddrMsg ? <p className="text-xs">{saveAddrMsg}</p> : null}
             {customer ? (
-              <div className="mt-3 rounded-2xl bg-white p-3 ring-1 ring-ink/5">
+              <div className="mt-3 rounded-2xl bg-surface p-3 ring-1 ring-ink/5">
                 <p className="mb-2 text-[10px] font-bold tracking-wide text-ink/40 uppercase">Favoritas</p>
                 <CustomerAddressesPanel
                   pickMode
@@ -841,6 +886,9 @@ function CustomerMenu() {
             Efectivo
           </button>
         </div>
+        {mode === 'salon' ? (
+          <p className="text-xs text-ink/45">Pagas en la mesa cuando te cobren.</p>
+        ) : null}
 
         <div className="flex justify-between pt-1 font-display text-2xl tracking-tight">
           <span>Total</span>
@@ -856,59 +904,51 @@ function CustomerMenu() {
 
   if (!customer) {
     return (
-      <div className="relative flex h-dvh flex-col overflow-y-auto bg-[#f6f3ee] px-4 py-8">
-        <div className="absolute right-4 top-4 z-10">
-          <ThemeToggle />
-        </div>
-        <div className="mx-auto w-full max-w-md">
-          <img
-            src={withBase('logo-lopez.png')}
-            alt={state.settings.name}
-            className="mx-auto h-24 w-auto rounded-2xl shadow-md sm:h-28"
-          />
-          <p className="mt-5 text-center text-[10px] font-bold tracking-[0.2em] text-ember uppercase">
-            App de pedidos
-          </p>
-          <p className="mt-2 text-center text-sm text-ink/50">
-            Ingresa con tu celular para ver la carta y pedir.
-          </p>
-          <div className="mt-6 rounded-3xl bg-white p-5 shadow-sm ring-1 ring-black/5">
-            <PhoneOtpLogin
-              accountType="customer"
-              purpose={authPurpose}
-              showName={authPurpose === 'register'}
-              title={authPurpose === 'register' ? 'Crea tu cuenta' : 'Ingresa para pedir'}
-              hint="Con tu celular guardamos pedido, direcciones y comentarios."
-              onSwitchPurpose={() => setAuthPurpose((p) => (p === 'login' ? 'register' : 'login'))}
-              onSuccess={(data) => {
-                if (!data.customer) return
-                const cust: Customer = {
-                  id: data.customer.id,
-                  name: data.customer.name,
-                  phone: data.customer.phone,
-                  email: data.customer.email,
-                  password: '',
-                  address: data.customer.address,
-                  photoUrl: data.customer.photoUrl,
-                  createdAt: data.customer.createdAt,
-                }
-                setCustomerSession(cust, data.token, 'cliente')
-                setCustomer(cust)
-                setName(cust.name)
-                setPhone(cust.phone)
-                if (cust.address) setAddress(cust.address)
-                void loadMyOrders()
-                setPermsOpen(true)
-              }}
-            />
-          </div>
-        </div>
-      </div>
+      <AuthSplitLayout
+        kicker="Chifa-Pollería Lopez"
+        title="Pide a tu mesa o a casa"
+        subtitle="Entra con tu celular. Guardamos pedidos, direcciones y el seguimiento."
+        highlights={[
+          { icon: ShoppingCart, title: 'Carta al instante', desc: 'Platos, combos y extras.' },
+          { icon: Clock, title: 'Sigue tu pedido', desc: 'Cocina, listo y en camino.' },
+          { icon: MapPin, title: 'Delivery o recojo', desc: 'A tu dirección o en el local.' },
+        ]}
+        footer="Una sesión a la vez · código por WhatsApp"
+      >
+        <PhoneOtpLogin
+          accountType="customer"
+          purpose={authPurpose}
+          showName={authPurpose === 'register'}
+          title={authPurpose === 'register' ? 'Crea tu cuenta' : 'Ingresa para pedir'}
+          hint="Con tu celular guardamos pedido, direcciones y comentarios."
+          onSwitchPurpose={() => setAuthPurpose((p) => (p === 'login' ? 'register' : 'login'))}
+          onSuccess={(data) => {
+            if (!data.customer) return
+            const cust: Customer = {
+              id: data.customer.id,
+              name: data.customer.name,
+              phone: data.customer.phone,
+              email: data.customer.email,
+              password: '',
+              address: data.customer.address,
+              photoUrl: data.customer.photoUrl,
+              createdAt: data.customer.createdAt,
+            }
+            setCustomerSession(cust, data.token, 'cliente')
+            setCustomer(cust)
+            setName(cust.name)
+            setPhone(cust.phone)
+            if (cust.address) setAddress(cust.address)
+            void loadMyOrders()
+            setPermsOpen(true)
+          }}
+        />
+      </AuthSplitLayout>
     )
   }
 
   return (
-    <div className="flex h-dvh flex-col overflow-hidden bg-[#f6f3ee]">
+    <div className="flex h-dvh flex-col overflow-hidden bg-cream">
       <DevicePermissionsPrompt
         open={permsOpen}
         title="Activa ubicación y avisos"
@@ -1018,7 +1058,7 @@ function CustomerMenu() {
           <div className="relative mb-4">
             <Search size={20} className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" />
             <input
-              className="w-full rounded-2xl border border-gray-200 bg-white py-3.5 pl-12 pr-4 text-sm shadow-sm placeholder:text-gray-400 focus:border-ember focus:outline-none focus:ring-2 focus:ring-ember/20"
+              className="w-full rounded-2xl border border-gray-200 bg-surface py-3.5 pl-12 pr-4 text-sm shadow-sm placeholder:text-gray-400 focus:border-ember focus:outline-none focus:ring-2 focus:ring-ember/20"
               placeholder="🔍 ¿Qué te provoca hoy?"
               value={q}
               onChange={(e) => setQ(e.target.value)}
@@ -1156,7 +1196,7 @@ function CustomerMenu() {
           ) : ordersBusy && myOrders.length === 0 ? (
             <p className="mt-6 text-sm text-ink/50">Cargando…</p>
           ) : myOrders.length === 0 ? (
-            <p className="mt-6 rounded-2xl bg-white p-5 text-sm text-ink/50 shadow-sm">
+            <p className="mt-6 rounded-2xl bg-surface p-5 text-sm text-ink/50 shadow-sm">
               Aún no tienes pedidos. Ve a la carta y arma el tuyo.
             </p>
           ) : (
@@ -1176,7 +1216,7 @@ function CustomerMenu() {
                         </span>
                       </div>
                       {inProgress.length === 0 ? (
-                        <p className="rounded-2xl bg-white p-4 text-sm text-ink/45 shadow-sm">
+                        <p className="rounded-2xl bg-surface p-4 text-sm text-ink/45 shadow-sm">
                           No tienes pedidos en camino.
                         </p>
                       ) : (
@@ -1196,7 +1236,7 @@ function CustomerMenu() {
                         </span>
                       </div>
                       {delivered.length === 0 ? (
-                        <p className="rounded-2xl bg-white p-4 text-sm text-ink/45 shadow-sm">
+                        <p className="rounded-2xl bg-surface p-4 text-sm text-ink/45 shadow-sm">
                           Todavía no hay entregas cerradas.
                         </p>
                       ) : (
@@ -1248,7 +1288,7 @@ function CustomerMenu() {
                   setCustomerSession(updated)
                 }}
               />
-              <div className="rounded-2xl bg-white p-5 shadow-sm ring-1 ring-ink/[0.04]">
+              <div className="rounded-2xl bg-surface p-5 shadow-sm ring-1 ring-ink/[0.04]">
                 <p className="font-display text-2xl tracking-tight">{customer.name}</p>
                 <p className="mt-1 text-sm text-ink/50">{customer.phone}</p>
                 {locError ? <p className="mt-2 text-xs text-red-600">{locError}</p> : null}
@@ -1266,7 +1306,7 @@ function CustomerMenu() {
                   <MapPin size={16} /> Actualizar ubicación
                 </button>
               </div>
-              <div className="rounded-2xl bg-white p-5 shadow-sm ring-1 ring-ink/[0.04]">
+              <div className="rounded-2xl bg-surface p-5 shadow-sm ring-1 ring-ink/[0.04]">
                 <p className="mb-3 text-sm font-bold text-ink/70">Direcciones guardadas</p>
                 <CustomerAddressesPanel
                   reloadKey={addrReload}
@@ -1299,7 +1339,7 @@ function CustomerMenu() {
         </button>
       ) : null}
 
-      <nav className="safe-bottom shrink-0 border-t border-ink/10 bg-white/95">
+      <nav className="safe-bottom shrink-0 border-t border-ink/10 bg-surface/95">
         <div className="mx-auto grid max-w-lg grid-cols-4">
           {(
             [
@@ -1338,7 +1378,7 @@ function CustomerMenu() {
             onClick={() => setCartOpen(false)}
             aria-label="Cerrar"
           />
-          <div className="absolute inset-x-0 bottom-0 z-10 max-h-[85dvh] overflow-y-auto rounded-t-3xl bg-white px-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] pt-3 shadow-2xl">
+          <div className="absolute inset-x-0 bottom-0 z-10 max-h-[85dvh] overflow-y-auto rounded-t-3xl bg-surface px-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] pt-3 shadow-2xl">
             <div className="mx-auto mb-3 h-1 w-10 rounded-full bg-ink/15" />
             <div className="mb-3 flex items-center justify-between">
               <h2 className="font-display text-2xl tracking-tight">Ticket</h2>
@@ -1429,7 +1469,7 @@ function ProfilePhotoEditor({
   }
 
   return (
-    <div className="flex flex-col items-center rounded-2xl bg-white p-5 shadow-sm ring-1 ring-ink/[0.04]">
+    <div className="flex flex-col items-center rounded-2xl bg-surface p-5 shadow-sm ring-1 ring-ink/[0.04]">
       <div className="relative">
         <img
           src={customer.photoUrl || defaultAvatar}

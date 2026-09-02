@@ -8,9 +8,26 @@ import { defaultAvatarUrl } from '../lib/avatar'
 import { SessionReplacedDialog } from '../components/SessionReplacedDialog'
 
 const STAFF_SESSION_KEY = 'polleria-staff-session'
+const VIEW_KEY = 'polleria-staff-view'
+
+function isRole(v: string | null): v is Role {
+  return v === 'admin' || v === 'cajero' || v === 'cocina' || v === 'mozo'
+}
+
+function readStoredView(): Role | null {
+  try {
+    const v = localStorage.getItem(VIEW_KEY)
+    return isRole(v) ? v : null
+  } catch {
+    return null
+  }
+}
 
 interface AuthApi {
   user: User | null
+  /** Rol con el que se ve el POS (el admin de sistema puede cambiarlo). */
+  actingRole: Role
+  needsViewPick: boolean
   apiReady: boolean
   loginWithSession: (user: {
     id: string
@@ -22,6 +39,8 @@ interface AuthApi {
     photoUrl?: string
     isSystem?: boolean
   }) => Promise<void>
+  setViewRole: (role: Role) => void
+  patchSessionUser: (partial: Partial<Pick<User, 'name' | 'photoUrl' | 'phone' | 'pin'>>) => void
   logout: () => void
   can: (module: ModuleId) => boolean
   resetStaffPassword: (email: string, newPassword: string) => boolean
@@ -40,15 +59,39 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       return null
     }
   })
+  const [viewRole, setViewRoleState] = useState<Role | null>(() => readStoredView())
 
   const user = apiUser
+  const actingRole: Role = user?.isSystem ? viewRole || 'admin' : user?.role || 'admin'
+  const needsViewPick = Boolean(user?.isSystem && !viewRole)
 
   const logout = () => {
     void apiLogout('staff')
     localStorage.removeItem(STAFF_SESSION_KEY)
     localStorage.removeItem('polleria-api-user')
+    localStorage.removeItem(VIEW_KEY)
     setApiToken(null, 'staff')
     setApiUser(null)
+    setViewRoleState(null)
+  }
+
+  const setViewRole = (role: Role) => {
+    localStorage.setItem(VIEW_KEY, role)
+    setViewRoleState(role)
+    window.dispatchEvent(new Event('polleria-view-role'))
+  }
+
+  const patchSessionUser = (partial: Partial<Pick<User, 'name' | 'photoUrl' | 'phone' | 'pin'>>) => {
+    setApiUser((prev) => {
+      if (!prev) return prev
+      const next = { ...prev, ...partial }
+      try {
+        localStorage.setItem('polleria-api-user', JSON.stringify(next))
+      } catch {
+        /* ignore */
+      }
+      return next
+    })
   }
 
   const loginWithSession = async (uIn: {
@@ -79,11 +122,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
     localStorage.setItem(STAFF_SESSION_KEY, u.id)
     localStorage.setItem('polleria-api-user', JSON.stringify(u))
+    if (u.isSystem) {
+      localStorage.removeItem(VIEW_KEY)
+      setViewRoleState(null)
+    } else {
+      localStorage.setItem(VIEW_KEY, u.role)
+      setViewRoleState(u.role)
+    }
     setApiUser(u)
     await reloadFromApi()
   }
 
-  // Si el bootstrap trae foto/pin actualizados, reflejarlos en la sesión
   useEffect(() => {
     if (!apiUser) return
     const fresh = state.users.find((x) => x.id === apiUser.id)
@@ -129,9 +178,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const can = (module: ModuleId) => {
     if (!user) return false
-    /** Admin de sistema: acceso total (Página Web, cupones, etc.) */
-    if (user.isSystem) return true
-    return ROLE_MODULES[user.role]?.includes(module) ?? false
+    const role = user.isSystem ? viewRole || 'admin' : user.role
+    if (user.isSystem && !viewRole) return false
+    return ROLE_MODULES[role]?.includes(module) ?? false
   }
 
   const resetStaffPassword = (email: string, newPassword: string) => {
@@ -144,13 +193,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const api = useMemo<AuthApi>(
     () => ({
       user,
+      actingRole,
+      needsViewPick,
       apiReady: Boolean(getApiToken('staff')),
       loginWithSession,
+      setViewRole,
+      patchSessionUser,
       logout,
       can,
       resetStaffPassword,
     }),
-    [user, state.users],
+    [user, viewRole, state.users, actingRole, needsViewPick],
   )
 
   return (
