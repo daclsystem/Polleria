@@ -75,6 +75,7 @@ const NAV: { to: string; label: string; hint: string; icon: LucideIcon; module: 
     module: 'web-config',
   },
   { to: '/cupones', label: 'Cupones', hint: 'Descuentos y códigos', icon: TicketPercent, module: 'cupones' },
+  { to: '/imprimir-qr', label: 'Imprimir QR', hint: 'Códigos QR para mesas', icon: Camera, module: 'imprimir-qr' },
   { to: '/config', label: 'Ajustes', hint: 'Datos del local', icon: Settings, module: 'config' },
 ]
 
@@ -92,6 +93,7 @@ const GROUPS: { title: string; modules: ModuleId[] }[] = [
       'sucursales',
       'facturacion',
       'whatsapp',
+      'imprimir-qr',
       'config',
     ],
   },

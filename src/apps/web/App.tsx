@@ -10,6 +10,7 @@ import { BASENAME } from '../../lib/paths'
 import { VersionUpdateWatcher } from '../../components/VersionUpdateWatcher'
 import { OfflineBanner } from '../../components/OfflineBanner'
 import { ThemeProvider } from '../../components/ThemeProvider'
+import { ConfirmDialogProvider } from '../../components/ConfirmDialogContext'
 import { OtherAppHint } from './OtherAppHint'
 
 export default function App() {
@@ -17,6 +18,7 @@ export default function App() {
     <ThemeProvider>
     <StoreProvider>
       <AuthProvider>
+        <ConfirmDialogProvider>
         <OfflineBanner />
         <VersionUpdateWatcher />
         <BrowserRouter basename={BASENAME || undefined}>
@@ -32,6 +34,7 @@ export default function App() {
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </BrowserRouter>
+        </ConfirmDialogProvider>
       </AuthProvider>
     </StoreProvider>
     </ThemeProvider>

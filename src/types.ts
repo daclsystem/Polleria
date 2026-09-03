@@ -313,6 +313,7 @@ export const MODULES = [
   'whatsapp',
   'web-config',
   'cupones',
+  'imprimir-qr',
   'config',
 ] as const
 

@@ -10,6 +10,7 @@ import {
   startWhatsappSession,
   type WspgoConfig,
 } from '../lib/whatsapp'
+import { useConfirm } from '../components/ConfirmDialogContext'
 import {
   downloadMassTemplate,
   enqueueMass,
@@ -21,6 +22,7 @@ import {
 import { Field, Modal, PageTitle, inputClass } from '../components/ui'
 
 export function WhatsApp() {
+  const { confirmAction } = useConfirm()
   const [config, setConfig] = useState<WspgoConfig>(DEFAULT_WSPGO)
   const [configOpen, setConfigOpen] = useState(false)
   const [sendResult, setSendResult] = useState<string | null>(null)
@@ -84,9 +86,19 @@ export function WhatsApp() {
   }, [sessionStatus, loadQr])
 
   const handleLogoutQr = async () => {
-    if (!confirm('Se cierra WhatsApp de este local. Después escanea el QR de nuevo.')) return
-    setWantQr(true)
-    setQrBusy(true)
+    await confirmAction(
+      '¿Cerrar sesión de WhatsApp?',
+      async () => {
+        setWantQr(true)
+        setQrBusy(true)
+        await executeLogout()
+      },
+      'Se cierra WhatsApp de este local. Después escanea el QR de nuevo.',
+      'Cerrar sesión'
+    )
+  }
+
+  const executeLogout = async () => {
     setQrErr(null)
     try {
       await logoutWhatsappSession(config)

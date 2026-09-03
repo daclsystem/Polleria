@@ -14,6 +14,7 @@ import {
   Type,
 } from 'lucide-react'
 import { Field, Modal, PageTitle, inputClass } from '../components/ui'
+import { useConfirm } from '../components/ConfirmDialogContext'
 import { apiGetBanners, apiGetWebsite, apiSaveBanners, apiSaveWebsite } from '../lib/apiClient'
 import {
   DEFAULT_WEB_SITE,
@@ -59,6 +60,7 @@ const TABS: { id: Tab; label: string; hint: string; icon: typeof Clock }[] = [
 ]
 
 export function WebConfig() {
+  const { confirmDelete } = useConfirm()
   const [tab, setTab] = useState<Tab>('horarios')
   const [banners, setBanners] = useState<WebBanner[]>([])
   const [site, setSite] = useState<WebSiteContent>(DEFAULT_WEB_SITE)
@@ -251,11 +253,12 @@ export function WebConfig() {
                   <Pencil size={14} />
                 </button>
                 <button
-                  onClick={() => {
-                    if (confirm('¿Eliminar este banner?')) {
-                      void commitBanners(banners.filter((b) => b.id !== banner.id))
-                    }
-                  }}
+                  onClick={() =>
+                    void confirmDelete(
+                      '¿Eliminar este banner?',
+                      () => void commitBanners(banners.filter((b) => b.id !== banner.id))
+                    )
+                  }
                   className="flex h-8 w-8 items-center justify-center rounded-lg text-brick hover:bg-red-50"
                 >
                   <Trash2 size={14} />

@@ -6,6 +6,7 @@ import {
   apiSaveCustomerAddress,
   type CustomerAddressDto,
 } from '../lib/apiClient'
+import { useConfirm } from './ConfirmDialogContext'
 
 export function CustomerAddressesPanel({
   onPick,
@@ -17,6 +18,7 @@ export function CustomerAddressesPanel({
   /** Cambia este valor para forzar recarga (p. ej. tras guardar desde checkout). */
   reloadKey?: number
 }) {
+  const { confirmDelete } = useConfirm()
   const [list, setList] = useState<CustomerAddressDto[]>([])
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -57,13 +59,14 @@ export function CustomerAddressesPanel({
   }
 
   const remove = async (id: string) => {
-    if (!confirm('¿Eliminar esta dirección?')) return
-    try {
-      await apiDeleteCustomerAddress(id)
-      await load()
-    } catch (e) {
-      setError((e as Error).message)
-    }
+    await confirmDelete('¿Eliminar esta dirección?', async () => {
+      try {
+        await apiDeleteCustomerAddress(id)
+        await load()
+      } catch (e) {
+        setError((e as Error).message)
+      }
+    })
   }
 
   const setDefault = async (a: CustomerAddressDto) => {

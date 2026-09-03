@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import { MapPin, Printer, Usb, Wifi, Monitor, TestTube2, Moon, Sun, Smartphone, Share2 } from 'lucide-react'
 import { useStore } from '../store/StoreContext'
 import { useAuth } from '../auth/AuthContext'
+import { useConfirm } from '../components/ConfirmDialogContext'
 import type { PrinterConfig, PrinterDriver, PrinterSetup, Settings } from '../types'
 import {
   blockedByMixedContent,
@@ -264,6 +265,7 @@ function PrinterCard({
 }
 
 export function Configuracion() {
+  const { confirmAction } = useConfirm()
   const { state, saveSettings, resetDemo, reloadFromApi } = useStore()
   const { user: me } = useAuth()
   const { preference, setPreference } = useTheme()
@@ -490,9 +492,14 @@ export function Configuracion() {
       {me?.isSystem ? (
         <button
           className="mt-4 text-sm text-ink/40 underline"
-          onClick={() => {
-            if (confirm('Esto recarga los datos desde el API/SQL.')) resetDemo()
-          }}
+          onClick={() =>
+            void confirmAction(
+              '¿Recargar datos desde el API?',
+              () => resetDemo(),
+              'Esto recarga los datos desde el API/SQL.',
+              'Recargar'
+            )
+          }
         >
           Recargar datos desde el API
         </button>
@@ -532,14 +539,18 @@ function SystemPurgePanel({ onDone }: { onDone: () => void }) {
 
   const run = async () => {
     if (!canRun) return
-    if (
-      !confirm(
-        'Vas a dejar el sistema listo para el primer día real. Se borran las pruebas marcadas. El usuario de sistema no se elimina. ¿Poner en marcha?',
-      )
-    ) {
-      return
-    }
-    setBusy(true)
+    await confirmAction(
+      '¿Poner el sistema en marcha?',
+      async () => {
+        setBusy(true)
+        await executeRun()
+      },
+      'Vas a dejar el sistema listo para el primer día real. Se borran las pruebas marcadas. El usuario de sistema no se elimina.',
+      'Poner en marcha'
+    )
+  }
+
+  const executeRun = async () => {
     setErr(null)
     setMsg(null)
     try {
@@ -554,6 +565,8 @@ function SystemPurgePanel({ onDone }: { onDone: () => void }) {
       setBusy(false)
     }
   }
+
+  const { confirmAction } = useConfirm()
 
   const row = (key: SystemPurgeTarget, label: string, hint: string, count?: number) => (
     <label className="flex items-start gap-3 rounded-2xl bg-ink/[0.03] px-3 py-3">

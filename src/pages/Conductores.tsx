@@ -8,12 +8,14 @@ import {
 import type { Driver } from '../types'
 import { Field, Modal, PageTitle, inputClass } from '../components/ui'
 import { ConfirmProcess } from '../components/ConfirmProcess'
+import { useConfirm } from '../components/ConfirmDialogContext'
 import { uid } from '../lib/format'
 import { siteUrl } from '../lib/paths'
 import { uploadAvatar } from '../lib/minio'
 import { splitVehicle } from '../lib/vehicle'
 
 export function Conductores() {
+  const { confirmDelete } = useConfirm()
   const [drivers, setDrivers] = useState<Driver[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -71,13 +73,14 @@ export function Conductores() {
   }
 
   const deactivate = async (id: string) => {
-    if (!confirm('¿Desactivar este conductor?')) return
-    try {
-      await apiDeleteDriver(id)
-      await load()
-    } catch (e) {
-      alert((e as Error).message || 'No se pudo desactivar')
-    }
+    await confirmDelete('¿Desactivar este conductor?', async () => {
+      try {
+        await apiDeleteDriver(id)
+        await load()
+      } catch (e) {
+        alert((e as Error).message || 'No se pudo desactivar')
+      }
+    })
   }
 
   return (

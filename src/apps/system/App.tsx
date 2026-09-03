@@ -23,16 +23,19 @@ import { WhatsApp } from '../../pages/WhatsApp'
 import { Configuracion } from '../../pages/Configuracion'
 import { WebConfig } from '../../pages/WebConfig'
 import { Cupones } from '../../pages/Cupones'
+import { ImprimirQR } from '../../pages/ImprimirQR'
 import { BASENAME } from '../../lib/paths'
 import { VersionUpdateWatcher } from '../../components/VersionUpdateWatcher'
 import { OfflineBanner } from '../../components/OfflineBanner'
 import { ThemeProvider } from '../../components/ThemeProvider'
+import { ConfirmDialogProvider } from '../../components/ConfirmDialogContext'
 
 export default function App() {
   return (
     <ThemeProvider>
     <StoreProvider>
       <AuthProvider>
+        <ConfirmDialogProvider>
         <OfflineBanner />
         <VersionUpdateWatcher />
         <BrowserRouter basename={BASENAME || undefined}>
@@ -198,6 +201,14 @@ export default function App() {
                 }
               />
               <Route
+                path="/imprimir-qr"
+                element={
+                  <ProtectedRoute module="imprimir-qr">
+                    <ImprimirQR />
+                  </ProtectedRoute>
+                }
+              />
+              <Route
                 path="/cupones"
                 element={
                   <ProtectedRoute module="cupones">
@@ -209,6 +220,7 @@ export default function App() {
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </BrowserRouter>
+        </ConfirmDialogProvider>
       </AuthProvider>
     </StoreProvider>
     </ThemeProvider>
