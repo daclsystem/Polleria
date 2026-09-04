@@ -186,7 +186,10 @@ export function MenuPage() {
   return (
     <div>
       <div className="flex flex-wrap items-end justify-between gap-3">
-        <PageTitle title="Carta" hint="Platos visibles en POS y en el pedido del cliente. Fotos en MinIO (bucket pollerialopez)." />
+        <PageTitle
+          title="Carta"
+          hint="Acá armas cada plato: precio, opciones y qué se descuenta del almacén al cobrar (0.25, 0.50, 1 pollo, 1 gaseosa…)."
+        />
         <button
           onClick={() => setEditing(empty())}
           className="min-h-11 rounded-xl bg-ember px-4 py-2 text-sm font-semibold text-white"
@@ -222,6 +225,7 @@ export function MenuPage() {
                           ? ` · ${p.optionGroups.length} grupo${p.optionGroups.length === 1 ? '' : 's'}`
                           : ''}
                       </p>
+                      <p className="mt-1 text-xs text-ink/50">{recipeSummary(p, state.inventory)}</p>
                     </div>
                     <button
                       onClick={() => saveProduct({ ...p, available: !p.available })}
@@ -248,6 +252,7 @@ export function MenuPage() {
               <tr>
                 <th className="px-4 py-3">Plato</th>
                 <th className="px-4 py-3">Categoría</th>
+                <th className="px-4 py-3">Almacén</th>
                 <th className="px-4 py-3">Cocina</th>
                 <th className="px-4 py-3">Opciones</th>
                 <th className="px-4 py-3">Precio</th>
@@ -265,6 +270,7 @@ export function MenuPage() {
                     </div>
                   </td>
                   <td className="px-4 py-3">{p.category}</td>
+                  <td className="px-4 py-3 text-ink/60">{recipeSummary(p, state.inventory)}</td>
                   <td className="px-4 py-3">
                     <span
                       className={`rounded-full px-2 py-0.5 text-[11px] font-bold ${
@@ -396,9 +402,9 @@ export function MenuPage() {
                 }
               />
               <span>
-                <span className="block font-bold">Cuantificable (baja almacén)</span>
+                <span className="block font-bold">Baja almacén al cobrar</span>
                 <span className="block text-xs text-ink/45">
-                  1/2 pollo = 0.5, gaseosa = 1. Cocina puede registrar pérdida de este producto.
+                  Tú defines la receta abajo. El pedido no descuenta nada; al pagar en caja sí.
                 </span>
               </span>
             </label>
@@ -427,6 +433,7 @@ export function MenuPage() {
             </Field>
             <OptionGroupsEditor
               groups={editing.optionGroups || []}
+              inventory={state.inventory}
               onChange={(optionGroups) => setEditing({ ...editing, optionGroups })}
             />
             <button className="w-full rounded-xl bg-ember py-3 font-semibold text-white" disabled={uploading}>
@@ -459,6 +466,21 @@ export function MenuPage() {
   )
 }
 
+function recipeSummary(
+  p: Product,
+  inventory: { id: string; name: string }[],
+) {
+  if (!p.recipes?.length) return 'Sin receta · no descuenta'
+  return p.recipes
+    .map((r) => {
+      const inv = inventory.find((i) => i.id === r.inventoryId)
+      return `${r.qtyPerUnit} ${inv?.name || 'insumo'}`
+    })
+    .join(' + ')
+}
+
+const QTY_CHIPS = [0.25, 0.5, 0.75, 1, 1.25]
+
 function RecipeEditor({
   recipes,
   inventory,
@@ -469,49 +491,70 @@ function RecipeEditor({
   onChange: (recipes: ProductRecipe[]) => void
 }) {
   const add = () => {
-    const first = inventory[0]
+    const first = inventory.find((i) => !recipes.some((r) => r.inventoryId === i.id))
     if (!first) return
-    if (recipes.some((r) => r.inventoryId === first.id)) return
     onChange([...recipes, { inventoryId: first.id, qtyPerUnit: 1 }])
   }
   return (
     <div className="space-y-2 rounded-2xl border border-ink/8 bg-white p-3">
-      <p className="text-xs font-bold text-ink/50 uppercase tracking-wide">Receta por unidad vendida</p>
+      <p className="text-xs font-bold text-ink/50 uppercase tracking-wide">Receta (se descuenta al pagar)</p>
+      <p className="text-xs text-ink/45">
+        Un insumo por fila, con la cantidad de 1 plato. Pollo: 1/4 = 0.25, medio = 0.50, 3/4 = 0.75, entero = 1.
+        Si el combo lleva gaseosa incluida, agrega esa botella (cantidad 1). Si el cliente elige la marca, enlázala en Opciones.
+      </p>
       {inventory.length === 0 ? (
         <p className="text-xs text-ember">Crea insumos en Inventario primero.</p>
       ) : null}
       {recipes.map((r, idx) => (
-        <div key={`${r.inventoryId}-${idx}`} className="grid grid-cols-[1fr_5.5rem_2rem] items-center gap-2">
-          <select
-            className={inputClass}
-            value={r.inventoryId}
-            onChange={(e) =>
-              onChange(recipes.map((x, i) => (i === idx ? { ...x, inventoryId: e.target.value } : x)))
-            }
-          >
-            {inventory.map((i) => (
-              <option key={i.id} value={i.id}>
-                {i.name} ({i.unit})
-              </option>
+        <div key={`${r.inventoryId}-${idx}`} className="space-y-1.5">
+          <div className="grid grid-cols-[1fr_5.5rem_2rem] items-center gap-2">
+            <select
+              className={inputClass}
+              value={r.inventoryId}
+              onChange={(e) =>
+                onChange(recipes.map((x, i) => (i === idx ? { ...x, inventoryId: e.target.value } : x)))
+              }
+            >
+              {inventory.map((i) => (
+                <option key={i.id} value={i.id}>
+                  {i.name} ({i.unit})
+                </option>
+              ))}
+            </select>
+            <input
+              type="number"
+              min={0.01}
+              step="0.01"
+              className={inputClass}
+              value={r.qtyPerUnit}
+              onChange={(e) =>
+                onChange(recipes.map((x, i) => (i === idx ? { ...x, qtyPerUnit: Number(e.target.value) } : x)))
+              }
+            />
+            <button
+              type="button"
+              className="flex h-10 w-10 items-center justify-center rounded-lg text-brick"
+              onClick={() => onChange(recipes.filter((_, i) => i !== idx))}
+            >
+              <Trash2 size={16} />
+            </button>
+          </div>
+          <div className="flex flex-wrap gap-1">
+            {QTY_CHIPS.map((q) => (
+              <button
+                key={q}
+                type="button"
+                className={`rounded-full px-2 py-0.5 text-[11px] font-bold ${
+                  r.qtyPerUnit === q ? 'bg-ember text-white' : 'bg-cream text-ink/60'
+                }`}
+                onClick={() =>
+                  onChange(recipes.map((x, i) => (i === idx ? { ...x, qtyPerUnit: q } : x)))
+                }
+              >
+                {q}
+              </button>
             ))}
-          </select>
-          <input
-            type="number"
-            min={0.01}
-            step="0.01"
-            className={inputClass}
-            value={r.qtyPerUnit}
-            onChange={(e) =>
-              onChange(recipes.map((x, i) => (i === idx ? { ...x, qtyPerUnit: Number(e.target.value) } : x)))
-            }
-          />
-          <button
-            type="button"
-            className="flex h-10 w-10 items-center justify-center rounded-lg text-brick"
-            onClick={() => onChange(recipes.filter((_, i) => i !== idx))}
-          >
-            <Trash2 size={16} />
-          </button>
+          </div>
         </div>
       ))}
       <button
@@ -527,9 +570,11 @@ function RecipeEditor({
 
 function OptionGroupsEditor({
   groups,
+  inventory,
   onChange,
 }: {
   groups: ProductOptionGroup[]
+  inventory: { id: string; name: string; unit: string }[]
   onChange: (groups: ProductOptionGroup[]) => void
 }) {
   const patchGroup = (idx: number, next: ProductOptionGroup) => {
@@ -541,7 +586,7 @@ function OptionGroupsEditor({
       <div>
         <p className="text-[11px] font-bold tracking-[0.14em] text-ink/40 uppercase">Opciones del plato</p>
         <p className="mt-0.5 text-xs text-ink/45">
-          Lo que el cliente elige al pedir: presa, papas, cremas, extras, bebida.
+          Lo que el cliente elige al pedir: presa, papas, extras, bebida. Si una opción es un insumo (gaseosa, papas extra), enlázala para que al pagar se descuente del almacén.
         </p>
       </div>
       <div className="flex flex-wrap gap-1.5">
@@ -601,39 +646,85 @@ function OptionGroupsEditor({
           </div>
           <div className="space-y-1.5">
             {g.options.map((o, oi) => (
-              <div key={o.id} className="grid grid-cols-[1fr_5.5rem_auto] gap-2">
-                <input
-                  className={`${inputClass} py-2`}
-                  value={o.name}
-                  onChange={(e) => {
-                    const options = g.options.map((x, i) => (i === oi ? { ...x, name: e.target.value } : x))
-                    patchGroup(gi, { ...g, options })
-                  }}
-                  placeholder="Opción"
-                />
-                <input
-                  type="number"
-                  step="0.1"
-                  className={`${inputClass} py-2`}
-                  value={o.price}
-                  onChange={(e) => {
-                    const options = g.options.map((x, i) =>
-                      i === oi ? { ...x, price: Number(e.target.value) } : x,
-                    )
-                    patchGroup(gi, { ...g, options })
-                  }}
-                  title="Precio extra"
-                />
-                <button
-                  type="button"
-                  className="tap rounded-xl px-2 text-ink/35 hover:text-brick"
-                  onClick={() =>
-                    patchGroup(gi, { ...g, options: g.options.filter((_, i) => i !== oi) })
-                  }
-                  aria-label="Quitar opción"
-                >
-                  <Trash2 size={15} />
-                </button>
+              <div key={o.id} className="space-y-1.5 rounded-xl bg-cream/40 p-2">
+                <div className="grid grid-cols-[1fr_5.5rem_auto] gap-2">
+                  <input
+                    className={`${inputClass} py-2`}
+                    value={o.name}
+                    onChange={(e) => {
+                      const options = g.options.map((x, i) => (i === oi ? { ...x, name: e.target.value } : x))
+                      patchGroup(gi, { ...g, options })
+                    }}
+                    placeholder="Opción"
+                  />
+                  <input
+                    type="number"
+                    step="0.1"
+                    className={`${inputClass} py-2`}
+                    value={o.price}
+                    onChange={(e) => {
+                      const options = g.options.map((x, i) =>
+                        i === oi ? { ...x, price: Number(e.target.value) } : x,
+                      )
+                      patchGroup(gi, { ...g, options })
+                    }}
+                    title="Precio extra"
+                  />
+                  <button
+                    type="button"
+                    className="tap rounded-xl px-2 text-ink/35 hover:text-brick"
+                    onClick={() =>
+                      patchGroup(gi, { ...g, options: g.options.filter((_, i) => i !== oi) })
+                    }
+                    aria-label="Quitar opción"
+                  >
+                    <Trash2 size={15} />
+                  </button>
+                </div>
+                {inventory.length > 0 ? (
+                  <div className="grid grid-cols-[1fr_4.5rem] gap-2">
+                    <select
+                      className={`${inputClass} py-2 text-xs`}
+                      value={o.inventoryId || ''}
+                      onChange={(e) => {
+                        const inventoryId = e.target.value || undefined
+                        const options = g.options.map((x, i) =>
+                          i === oi
+                            ? {
+                                ...x,
+                                inventoryId,
+                                qtyPerUnit: inventoryId ? x.qtyPerUnit || 1 : undefined,
+                              }
+                            : x,
+                        )
+                        patchGroup(gi, { ...g, options })
+                      }}
+                    >
+                      <option value="">Sin insumo (no descuenta)</option>
+                      {inventory.map((inv) => (
+                        <option key={inv.id} value={inv.id}>
+                          Insumo: {inv.name} ({inv.unit})
+                        </option>
+                      ))}
+                    </select>
+                    {o.inventoryId ? (
+                      <input
+                        type="number"
+                        min={0.01}
+                        step="0.01"
+                        className={`${inputClass} py-2 text-xs`}
+                        value={o.qtyPerUnit || 1}
+                        title="Cantidad por unidad"
+                        onChange={(e) => {
+                          const options = g.options.map((x, i) =>
+                            i === oi ? { ...x, qtyPerUnit: Number(e.target.value) } : x,
+                          )
+                          patchGroup(gi, { ...g, options })
+                        }}
+                      />
+                    ) : null}
+                  </div>
+                ) : null}
               </div>
             ))}
             <button

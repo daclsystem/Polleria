@@ -82,6 +82,11 @@ export function round2(n: number) {
   return Math.round(n * 100) / 100
 }
 
+export function qtyLabel(n: number) {
+  const v = Math.round(Number(n || 0) * 1000) / 1000
+  return Number.isInteger(v) ? String(v) : String(v)
+}
+
 export function copyText(text: string) {
   return navigator.clipboard.writeText(text)
 }

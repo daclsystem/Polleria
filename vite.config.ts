@@ -82,7 +82,12 @@ export default defineConfig({
   resolve: {
     alias: {
       '@': path.resolve(__dirname, 'src'),
+      /** CJS con campo `browser` (fs: false); Vite no lo resuelve desde `apps/*`. */
+      qrcode: path.resolve(__dirname, 'node_modules/qrcode/lib/browser.js'),
     },
+  },
+  optimizeDeps: {
+    include: ['qrcode', 'jspdf'],
   },
   server: {
     port: cfg.port,

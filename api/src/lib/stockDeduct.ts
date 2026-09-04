@@ -60,6 +60,128 @@ function itemIdsFilterSql(itemIds?: string[]) {
   return { sql: `AND Id IN (${list})`, ids }
 }
 
+type InvLine = { inventoryId: string; qtyPerUnit: number; label: string }
+
+async function loadRecipeLines(
+  tx: InstanceType<typeof sql.Transaction>,
+  productId: string,
+): Promise<InvLine[]> {
+  const recipes = await new sql.Request(tx)
+    .input('productId', sql.UniqueIdentifier, productId)
+    .query(`
+      SELECT r.InventoryId, r.QtyPerUnit, i.Name
+      FROM dbo.ProductRecipes r
+      INNER JOIN dbo.Inventory i ON i.Id = r.InventoryId
+      WHERE r.ProductId = @productId
+    `)
+  return recipes.recordset.map((r: Record<string, unknown>) => ({
+    inventoryId: String(r.InventoryId),
+    qtyPerUnit: Number(r.QtyPerUnit),
+    label: String(r.Name || ''),
+  }))
+}
+
+async function loadOptionInvLines(
+  tx: InstanceType<typeof sql.Transaction>,
+  itemId: string,
+): Promise<InvLine[]> {
+  try {
+    const hasCol = await new sql.Request(tx).query(`
+      SELECT CASE WHEN COL_LENGTH('dbo.ProductOptions', 'InventoryId') IS NULL THEN 0 ELSE 1 END AS ok
+    `)
+    if (!Number(hasCol.recordset[0]?.ok)) return []
+    const opts = await new sql.Request(tx)
+      .input('itemId', sql.UniqueIdentifier, itemId)
+      .query(`
+        SELECT po.InventoryId, po.QtyPerUnit, i.Name, oio.Name AS OptionName
+        FROM dbo.OrderItemOptions oio
+        INNER JOIN dbo.ProductOptions po ON po.Id = oio.OptionId
+        INNER JOIN dbo.Inventory i ON i.Id = po.InventoryId
+        WHERE oio.OrderItemId = @itemId
+          AND po.InventoryId IS NOT NULL
+          AND ISNULL(po.QtyPerUnit, 0) > 0
+      `)
+    return opts.recordset.map((r: Record<string, unknown>) => ({
+      inventoryId: String(r.InventoryId),
+      qtyPerUnit: Number(r.QtyPerUnit),
+      label: String(r.OptionName || r.Name || ''),
+    }))
+  } catch {
+    return []
+  }
+}
+
+async function applyStockDelta(
+  tx: InstanceType<typeof sql.Transaction>,
+  result: DeductResult,
+  opts: {
+    inventoryId: string
+    delta: number
+    orderId: string
+    itemId: string
+    notes: string
+    reason: string
+    userId?: string | null
+    clampZero?: boolean
+  },
+) {
+  const delta = Math.round(opts.delta * 1000) / 1000
+  if (!delta) return
+  const upd = await new sql.Request(tx)
+    .input('id', sql.UniqueIdentifier, opts.inventoryId)
+    .input('delta', sql.Decimal(12, 3), delta)
+    .query(
+      opts.clampZero
+        ? `
+          UPDATE dbo.Inventory
+          SET Stock = CASE WHEN Stock + @delta < 0 THEN 0 ELSE Stock + @delta END,
+              UpdatedAt = SYSUTCDATETIME()
+          OUTPUT INSERTED.Stock, INSERTED.MinStock, INSERTED.Name
+          WHERE Id = @id
+        `
+        : `
+          UPDATE dbo.Inventory
+          SET Stock = Stock + @delta, UpdatedAt = SYSUTCDATETIME()
+          OUTPUT INSERTED.Stock, INSERTED.MinStock, INSERTED.Name
+          WHERE Id = @id
+        `,
+    )
+  const row = upd.recordset[0]
+  const stockAfter = Number(row?.Stock ?? 0)
+  const minStock = Number(row?.MinStock ?? 0)
+  const name = String(row?.Name || '')
+  result.deducted.push({
+    inventoryId: opts.inventoryId,
+    name,
+    delta,
+    stockAfter,
+  })
+  if (delta < 0 && stockAfter <= minStock) {
+    result.lowStock.push({ inventoryId: opts.inventoryId, name, stock: stockAfter, minStock })
+  }
+  try {
+    await new sql.Request(tx)
+      .input('id', sql.UniqueIdentifier, uuid())
+      .input('inventoryId', sql.UniqueIdentifier, opts.inventoryId)
+      .input('delta', sql.Decimal(12, 3), delta)
+      .input('stockAfter', sql.Decimal(12, 3), stockAfter)
+      .input('orderId', sql.UniqueIdentifier, opts.orderId)
+      .input('orderItemId', sql.UniqueIdentifier, opts.itemId)
+      .input('notes', sql.NVarChar, opts.notes)
+      .input('userId', sql.UniqueIdentifier, opts.userId || null)
+      .input('reason', sql.NVarChar, opts.reason)
+      .query(`
+        IF OBJECT_ID(N'dbo.InventoryMovements', N'U') IS NOT NULL
+        INSERT INTO dbo.InventoryMovements
+          (Id, InventoryId, Delta, StockAfter, Reason, OrderId, OrderItemId, Notes, CreatedByUserId)
+        VALUES
+          (@id, @inventoryId, @delta, @stockAfter, @reason, @orderId, @orderItemId, @notes, @userId)
+      `)
+  } catch {
+    /* kardex opcional */
+  }
+}
+
 /**
  * Baja de almacén según receta × qty.
  * Idempotente vía OrderItems.StockDeducted.
@@ -100,17 +222,11 @@ export async function deductStockForOrderItems(
     const qty = Number(it.Qty || 0)
     if (!qty) continue
 
-    const recipes = await new sql.Request(tx)
-      .input('productId', sql.UniqueIdentifier, productId)
-      .query(`
-        SELECT r.InventoryId, r.QtyPerUnit, i.Name, i.Stock, i.MinStock
-        FROM dbo.ProductRecipes r
-        INNER JOIN dbo.Inventory i ON i.Id = r.InventoryId
-        WHERE r.ProductId = @productId
-      `)
-
-    if (!recipes.recordset.length) {
-      // Sin receta: marcar para no reintentar
+    const lines = [
+      ...(await loadRecipeLines(tx, productId)),
+      ...(await loadOptionInvLines(tx, itemId)),
+    ]
+    if (!lines.length) {
       await new sql.Request(tx)
         .input('id', sql.UniqueIdentifier, itemId)
         .query(`UPDATE dbo.OrderItems SET StockDeducted = 1 WHERE Id = @id`)
@@ -118,57 +234,19 @@ export async function deductStockForOrderItems(
       continue
     }
 
-    for (const r of recipes.recordset) {
-      const invId = String(r.InventoryId)
-      const consume = Math.round(Number(r.QtyPerUnit) * qty * 1000) / 1000
+    for (const line of lines) {
+      const consume = Math.round(line.qtyPerUnit * qty * 1000) / 1000
       if (consume <= 0) continue
-
-      const upd = await new sql.Request(tx)
-        .input('id', sql.UniqueIdentifier, invId)
-        .input('delta', sql.Decimal(12, 3), -consume)
-        .query(`
-          UPDATE dbo.Inventory
-          SET Stock = CASE WHEN Stock + @delta < 0 THEN 0 ELSE Stock + @delta END,
-              UpdatedAt = SYSUTCDATETIME()
-          OUTPUT INSERTED.Stock, INSERTED.MinStock, INSERTED.Name
-          WHERE Id = @id
-        `)
-      const row = upd.recordset[0]
-      const stockAfter = Number(row?.Stock ?? 0)
-      const minStock = Number(row?.MinStock ?? 0)
-      const name = String(row?.Name || r.Name || '')
-
-      result.deducted.push({
-        inventoryId: invId,
-        name,
+      await applyStockDelta(tx, result, {
+        inventoryId: line.inventoryId,
         delta: -consume,
-        stockAfter,
+        orderId,
+        itemId,
+        notes: `${prefix} · ${it.Name} ×${qty}${line.label ? ` · ${line.label}` : ''}`,
+        reason,
+        userId,
+        clampZero: true,
       })
-      if (stockAfter <= minStock) {
-        result.lowStock.push({ inventoryId: invId, name, stock: stockAfter, minStock })
-      }
-
-      try {
-        await new sql.Request(tx)
-          .input('id', sql.UniqueIdentifier, uuid())
-          .input('inventoryId', sql.UniqueIdentifier, invId)
-          .input('delta', sql.Decimal(12, 3), -consume)
-          .input('stockAfter', sql.Decimal(12, 3), stockAfter)
-          .input('orderId', sql.UniqueIdentifier, orderId)
-          .input('orderItemId', sql.UniqueIdentifier, itemId)
-          .input('notes', sql.NVarChar, `${prefix} · ${it.Name} ×${qty}`)
-          .input('userId', sql.UniqueIdentifier, userId || null)
-          .input('reason', sql.NVarChar, reason)
-          .query(`
-            IF OBJECT_ID(N'dbo.InventoryMovements', N'U') IS NOT NULL
-            INSERT INTO dbo.InventoryMovements
-              (Id, InventoryId, Delta, StockAfter, Reason, OrderId, OrderItemId, Notes, CreatedByUserId)
-            VALUES
-              (@id, @inventoryId, @delta, @stockAfter, @reason, @orderId, @orderItemId, @notes, @userId)
-          `)
-      } catch {
-        /* ignore if table missing */
-      }
     }
 
     await new sql.Request(tx)
@@ -258,59 +336,29 @@ export async function restoreStockForOrderItems(
     `)
 
   for (const it of items.recordset) {
+    const itemId = String(it.Id)
     const qty = Number(it.Qty || 0)
-    const recipes = await new sql.Request(tx)
-      .input('productId', sql.UniqueIdentifier, String(it.ProductId))
-      .query(`
-        SELECT InventoryId, QtyPerUnit FROM dbo.ProductRecipes WHERE ProductId = @productId
-      `)
-    for (const r of recipes.recordset) {
-      const restore = Math.round(Number(r.QtyPerUnit) * qty * 1000) / 1000
+    const lines = [
+      ...(await loadRecipeLines(tx, String(it.ProductId))),
+      ...(await loadOptionInvLines(tx, itemId)),
+    ]
+    for (const line of lines) {
+      const restore = Math.round(line.qtyPerUnit * qty * 1000) / 1000
       if (restore <= 0) continue
-      const upd = await new sql.Request(tx)
-        .input('id', sql.UniqueIdentifier, String(r.InventoryId))
-        .input('delta', sql.Decimal(12, 3), restore)
-        .query(`
-          UPDATE dbo.Inventory
-          SET Stock = Stock + @delta, UpdatedAt = SYSUTCDATETIME()
-          OUTPUT INSERTED.Stock, INSERTED.MinStock, INSERTED.Name
-          WHERE Id = @id
-        `)
-      const row = upd.recordset[0]
-      const stockAfter = Number(row?.Stock ?? 0)
-      const name = String(row?.Name || '')
-      result.deducted.push({
-        inventoryId: String(r.InventoryId),
-        name,
+      await applyStockDelta(tx, result, {
+        inventoryId: line.inventoryId,
         delta: restore,
-        stockAfter,
+        orderId,
+        itemId,
+        notes: `${prefix} · ${it.Name}${line.label ? ` · ${line.label}` : ''}`,
+        reason,
+        userId,
       })
-      try {
-        await new sql.Request(tx)
-          .input('id', sql.UniqueIdentifier, uuid())
-          .input('inventoryId', sql.UniqueIdentifier, String(r.InventoryId))
-          .input('delta', sql.Decimal(12, 3), restore)
-          .input('stockAfter', sql.Decimal(12, 3), stockAfter)
-          .input('orderId', sql.UniqueIdentifier, orderId)
-          .input('orderItemId', sql.UniqueIdentifier, String(it.Id))
-          .input('notes', sql.NVarChar, `${prefix} · ${it.Name}`)
-          .input('userId', sql.UniqueIdentifier, userId || null)
-          .input('reason', sql.NVarChar, reason)
-          .query(`
-            IF OBJECT_ID(N'dbo.InventoryMovements', N'U') IS NOT NULL
-            INSERT INTO dbo.InventoryMovements
-              (Id, InventoryId, Delta, StockAfter, Reason, OrderId, OrderItemId, Notes, CreatedByUserId)
-            VALUES
-              (@id, @inventoryId, @delta, @stockAfter, @reason, @orderId, @orderItemId, @notes, @userId)
-          `)
-      } catch {
-        /* ignore */
-      }
     }
     await new sql.Request(tx)
-      .input('id', sql.UniqueIdentifier, String(it.Id))
+      .input('id', sql.UniqueIdentifier, itemId)
       .query(`UPDATE dbo.OrderItems SET StockDeducted = 0 WHERE Id = @id`)
-    result.itemIds.push(String(it.Id))
+    result.itemIds.push(itemId)
   }
 
   return result

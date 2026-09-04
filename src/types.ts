@@ -29,6 +29,9 @@ export interface ProductOption {
   id: string
   name: string
   price: number
+  /** Si se elige esta opción, descuenta este insumo al pagar. */
+  inventoryId?: string
+  qtyPerUnit?: number
 }
 
 export interface ProductOptionGroup {

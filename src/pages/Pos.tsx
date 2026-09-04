@@ -322,7 +322,7 @@ export function Pos() {
         source: 'pos',
         codPaymentMethod: type === 'delivery' ? (payMethod === 'yape' ? 'yape' : 'efectivo') : undefined,
       })
-      if (paid && mayCharge) payOrder(order.id, payMethod)
+      if (paid && mayCharge) await payOrder(order.id, payMethod)
       const kitchenItems = filterKitchenItems(order.items, state.products)
       if (kitchenItems.length > 0) {
         printTicket({ ...order, items: kitchenItems }, state.settings, 'cocina', state.users)

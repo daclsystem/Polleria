@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Search } from 'lucide-react'
 import { useStore } from '../store/StoreContext'
-import { formatDateTime, soles, uid } from '../lib/format'
-import { apiInventoryMovements } from '../lib/apiClient'
+import { formatDateTime, qtyLabel, soles, uid } from '../lib/format'
+import { apiInventoryFlow, apiInventoryMovements } from '../lib/apiClient'
 import { downloadInventoryXlsx } from '../lib/exportInventory'
 import type { InventoryItem } from '../types'
 import { Field, Modal, PageTitle, inputClass } from '../components/ui'
@@ -32,13 +32,19 @@ export function Inventario() {
   const [saveDlg, setSaveDlg] = useState<'confirm' | 'busy' | 'done' | null>(null)
   const [q, setQ] = useState('')
   const [movs, setMovs] = useState<Mov[]>([])
+  const [flow, setFlow] = useState<Array<{ inventoryId: string; had: number; out: number; in: number; left: number }>>([])
   const [saveErr, setSaveErr] = useState('')
 
   useEffect(() => {
     void apiInventoryMovements()
       .then(setMovs)
       .catch(() => setMovs([]))
+    void apiInventoryFlow()
+      .then(setFlow)
+      .catch(() => setFlow([]))
   }, [state.inventory])
+
+  const flowBy = useMemo(() => new Map(flow.map((f) => [f.inventoryId, f])), [flow])
 
   const list = useMemo(() => {
     const term = q.trim().toLowerCase()
@@ -78,13 +84,13 @@ export function Inventario() {
       <div className="flex flex-wrap items-end justify-between gap-3">
         <PageTitle
           title="Inventario"
-          hint="Costo de compra y precio de venta. Rojo = bajo el mínimo."
+          hint="Saldo = lo que queda. Salió hoy = ventas, cocina y salidas de hoy (Lima). Rojo = bajo el mínimo."
         />
         <div className="flex flex-wrap gap-2">
           <button
             type="button"
             className="min-h-11 rounded-xl bg-cream px-4 py-2 text-sm font-semibold"
-            onClick={() => downloadInventoryXlsx(state.inventory, movs)}
+            onClick={() => downloadInventoryXlsx(state.inventory, movs, flow)}
           >
             Exportar XLSX
           </button>
@@ -112,13 +118,18 @@ export function Inventario() {
       <div className="mt-4 space-y-3 md:hidden">
         {list.map((i) => {
           const low = i.stock <= i.minStock
+          const f = flowBy.get(i.id)
           return (
             <article key={i.id} className={`card p-4 ${low ? 'ring-1 ring-brick/30' : ''}`}>
               <button className="font-semibold" onClick={() => setEditing(i)}>
                 {i.name}
               </button>
               <p className={`text-sm ${low ? 'text-brick' : 'text-ink/50'}`}>
-                {i.stock} {i.unit} · mín {i.minStock}
+                Saldo {qtyLabel(i.stock)} {i.unit} · mín {qtyLabel(i.minStock)}
+              </p>
+              <p className="text-xs text-ink/45">
+                Salió hoy {qtyLabel(f?.out ?? 0)} {i.unit}
+                {f ? ` · había ${qtyLabel(f.had)}` : ''}
               </p>
               <p className="text-xs text-ink/45">
                 Costo {soles(i.cost)}
@@ -144,7 +155,9 @@ export function Inventario() {
           <thead className="text-xs text-ink/40 uppercase">
             <tr>
               <th className="px-4 py-3">Insumo</th>
-              <th className="px-4 py-3">Stock</th>
+              <th className="px-4 py-3">Había</th>
+              <th className="px-4 py-3">Salió hoy</th>
+              <th className="px-4 py-3">Saldo</th>
               <th className="px-4 py-3">Mínimo</th>
               <th className="px-4 py-3">Costo</th>
               <th className="px-4 py-3">Venta</th>
@@ -154,16 +167,21 @@ export function Inventario() {
           <tbody>
             {list.map((i) => {
               const low = i.stock <= i.minStock
+              const f = flowBy.get(i.id)
               return (
-                <tr key={i.id} className={`border-t border-ink/5 ${low ? 'bg-rose-50' : ''}`}>
+                <tr key={i.id} className={`border-t border-ink/5 ${low ? 'bg-rose-50 dark:bg-brick/15' : ''}`}>
                   <td className="px-4 py-3">
                     <button className="font-medium hover:text-ember" onClick={() => setEditing(i)}>
                       {i.name}
                     </button>
                     <p className="text-xs text-ink/40">{i.unit}</p>
                   </td>
-                  <td className={`px-4 py-3 font-semibold ${low ? 'text-brick' : ''}`}>{i.stock}</td>
-                  <td className="px-4 py-3">{i.minStock}</td>
+                  <td className="px-4 py-3 text-ink/55">{qtyLabel(f?.had ?? i.stock)}</td>
+                  <td className="px-4 py-3 font-semibold text-brick">
+                    {qtyLabel(f?.out ?? 0)}
+                  </td>
+                  <td className={`px-4 py-3 font-semibold ${low ? 'text-brick' : ''}`}>{qtyLabel(i.stock)}</td>
+                  <td className="px-4 py-3">{qtyLabel(i.minStock)}</td>
                   <td className="px-4 py-3">{soles(i.cost)}</td>
                   <td className="px-4 py-3">{i.salePrice ? soles(i.salePrice) : '—'}</td>
                   <td className="px-4 py-3">
@@ -232,7 +250,7 @@ export function Inventario() {
         {salida ? (
           <div className="space-y-3">
             <p className="text-sm text-ink/55">
-              {salida.name} · hay {salida.stock} {salida.unit}
+              {salida.name} · saldo {qtyLabel(salida.stock)} {salida.unit}
             </p>
             <Field label="Cantidad a sacar">
               <input
@@ -326,7 +344,7 @@ export function Inventario() {
               <Field label="Unidad">
                 <input className={inputClass} value={editing.unit} onChange={(e) => setEditing({ ...editing, unit: e.target.value })} />
               </Field>
-              <Field label="Stock">
+              <Field label="Saldo">
                 <input type="number" className={inputClass} value={editing.stock} onChange={(e) => setEditing({ ...editing, stock: Number(e.target.value) })} />
               </Field>
               <Field label="Mínimo">

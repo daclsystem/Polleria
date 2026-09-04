@@ -336,6 +336,18 @@ export async function apiInventoryMovements() {
   >('/api/inventory/movements')
 }
 
+export async function apiInventoryFlow() {
+  return apiFetch<
+    Array<{
+      inventoryId: string
+      had: number
+      out: number
+      in: number
+      left: number
+    }>
+  >('/api/inventory/flow')
+}
+
 export async function apiUpdateTable(id: string, patch: Record<string, unknown>) {
   return apiFetch(`/api/tables/${id}`, { method: 'PUT', body: JSON.stringify(patch) })
 }

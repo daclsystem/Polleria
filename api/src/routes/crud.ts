@@ -50,7 +50,10 @@ crudRouter.post('/products', authRequired, requireRoles('admin'), async (req, re
   await replaceProductOptions(id, p.optionGroups)
   await replaceProductTags(id, p.tags)
   await replaceProductRecipes(id, p.recipes)
-  await setProductCuantificable(id, p.cuantificable === true || (Array.isArray(p.recipes) && p.recipes.length > 0))
+  await setProductCuantificable(
+    id,
+    p.cuantificable === true || (Array.isArray(p.recipes) && p.recipes.length > 0) || groupsHaveInventory(p.optionGroups),
+  )
   res.status(201).json({ id })
 })
 
@@ -88,7 +91,10 @@ crudRouter.put('/products/:id', authRequired, requireRoles('admin'), async (req,
   await replaceProductOptions(id, p.optionGroups)
   await replaceProductTags(id, p.tags)
   await replaceProductRecipes(id, p.recipes)
-  await setProductCuantificable(id, p.cuantificable === true || (Array.isArray(p.recipes) && p.recipes.length > 0))
+  await setProductCuantificable(
+    id,
+    p.cuantificable === true || (Array.isArray(p.recipes) && p.recipes.length > 0) || groupsHaveInventory(p.optionGroups),
+  )
   res.json({ ok: true })
 })
 
@@ -101,7 +107,7 @@ crudRouter.delete('/products/:id', authRequired, requireRoles('admin'), async (r
   res.json({ ok: true })
 })
 
-type OptionIn = { id?: string; name?: string; price?: number }
+type OptionIn = { id?: string; name?: string; price?: number; inventoryId?: string; qtyPerUnit?: number }
 type GroupIn = {
   id?: string
   title?: string
@@ -110,9 +116,31 @@ type GroupIn = {
   options?: OptionIn[]
 }
 
+async function ensureProductOptionInventoryCols() {
+  const pool = await getPool()
+  await pool.request().query(`
+    IF COL_LENGTH('dbo.ProductOptions', 'InventoryId') IS NULL
+      ALTER TABLE dbo.ProductOptions ADD InventoryId UNIQUEIDENTIFIER NULL;
+    IF COL_LENGTH('dbo.ProductOptions', 'QtyPerUnit') IS NULL
+      ALTER TABLE dbo.ProductOptions ADD QtyPerUnit DECIMAL(12,4) NULL;
+  `)
+}
+
+function groupsHaveInventory(raw: unknown) {
+  if (!Array.isArray(raw)) return false
+  return (raw as GroupIn[]).some((g) =>
+    (g.options || []).some((o) => Boolean(o.inventoryId) && Number(o.qtyPerUnit || 0) > 0),
+  )
+}
+
 async function replaceProductOptions(productId: string, raw: unknown) {
   if (!Array.isArray(raw)) return
   const pool = await getPool()
+  try {
+    await ensureProductOptionInventoryCols()
+  } catch {
+    /* columnas nuevas opcionales */
+  }
   await pool
     .request()
     .input('pid', sql.UniqueIdentifier, productId)
@@ -147,17 +175,35 @@ async function replaceProductOptions(productId: string, raw: unknown) {
     for (const opt of g.options || []) {
       const name = String(opt.name || '').trim()
       if (!name) continue
-      await pool
+      const invId = isGuid(String(opt.inventoryId || '')) ? String(opt.inventoryId) : null
+      const qty = invId ? Math.max(0, Number(opt.qtyPerUnit || 1)) : null
+      const req = pool
         .request()
         .input('id', sql.UniqueIdentifier, isGuid(opt.id) ? String(opt.id) : uuid())
         .input('gid', sql.UniqueIdentifier, gid)
         .input('name', sql.NVarChar, name)
         .input('price', sql.Decimal(10, 2), Number(opt.price || 0))
         .input('sort', sql.Int, oSort++)
-        .query(`
-          INSERT INTO dbo.ProductOptions (Id, GroupId, Name, Price, SortOrder)
-          VALUES (@id, @gid, @name, @price, @sort)
+        .input('iid', sql.UniqueIdentifier, invId)
+        .input('qty', sql.Decimal(12, 4), qty)
+      try {
+        await req.query(`
+          INSERT INTO dbo.ProductOptions (Id, GroupId, Name, Price, SortOrder, InventoryId, QtyPerUnit)
+          VALUES (@id, @gid, @name, @price, @sort, @iid, @qty)
         `)
+      } catch {
+        await pool
+          .request()
+          .input('id', sql.UniqueIdentifier, isGuid(opt.id) ? String(opt.id) : uuid())
+          .input('gid', sql.UniqueIdentifier, gid)
+          .input('name', sql.NVarChar, name)
+          .input('price', sql.Decimal(10, 2), Number(opt.price || 0))
+          .input('sort', sql.Int, oSort - 1)
+          .query(`
+            INSERT INTO dbo.ProductOptions (Id, GroupId, Name, Price, SortOrder)
+            VALUES (@id, @gid, @name, @price, @sort)
+          `)
+      }
     }
   }
 }
@@ -178,36 +224,65 @@ async function setProductCuantificable(productId: string, value: boolean) {
   }
 }
 
+async function ensureRecipeTables() {
+  const pool = await getPool()
+  await pool.request().query(`
+    IF OBJECT_ID(N'dbo.ProductRecipes', N'U') IS NULL
+    BEGIN
+      CREATE TABLE dbo.ProductRecipes (
+        Id           UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_ProductRecipes PRIMARY KEY DEFAULT NEWID(),
+        ProductId    UNIQUEIDENTIFIER NOT NULL,
+        InventoryId  UNIQUEIDENTIFIER NOT NULL,
+        QtyPerUnit   DECIMAL(12,4)    NOT NULL,
+        Notes        NVARCHAR(120)    NULL,
+        CONSTRAINT FK_ProductRecipes_Product FOREIGN KEY (ProductId) REFERENCES dbo.Products(Id) ON DELETE CASCADE,
+        CONSTRAINT FK_ProductRecipes_Inventory FOREIGN KEY (InventoryId) REFERENCES dbo.Inventory(Id),
+        CONSTRAINT CK_ProductRecipes_Qty CHECK (QtyPerUnit > 0),
+        CONSTRAINT UQ_ProductRecipes UNIQUE (ProductId, InventoryId)
+      );
+    END
+    IF OBJECT_ID(N'dbo.InventoryMovements', N'U') IS NULL
+    BEGIN
+      CREATE TABLE dbo.InventoryMovements (
+        Id              UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_InvMov PRIMARY KEY DEFAULT NEWID(),
+        InventoryId     UNIQUEIDENTIFIER NOT NULL,
+        Delta           DECIMAL(12,3)    NOT NULL,
+        StockAfter      DECIMAL(12,3)    NOT NULL,
+        Reason          NVARCHAR(40)     NOT NULL,
+        OrderId         UNIQUEIDENTIFIER NULL,
+        OrderItemId     UNIQUEIDENTIFIER NULL,
+        Notes           NVARCHAR(255)    NULL,
+        CreatedAt       DATETIME2(0)     NOT NULL CONSTRAINT DF_InvMov_CreatedAt DEFAULT (SYSUTCDATETIME()),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        CONSTRAINT FK_InvMov_Inventory FOREIGN KEY (InventoryId) REFERENCES dbo.Inventory(Id)
+      );
+    END
+  `)
+}
+
 async function replaceProductRecipes(productId: string, raw: unknown) {
   if (raw === undefined) return
   const pool = await getPool()
-  try {
+  await ensureRecipeTables()
+  await pool
+    .request()
+    .input('pid', sql.UniqueIdentifier, productId)
+    .query(`DELETE FROM dbo.ProductRecipes WHERE ProductId = @pid`)
+  if (!Array.isArray(raw)) return
+  for (const row of raw as Array<{ inventoryId?: string; qtyPerUnit?: number }>) {
+    const inventoryId = String(row.inventoryId || '')
+    const qty = Number(row.qtyPerUnit || 0)
+    if (!isGuid(inventoryId) || qty <= 0) continue
     await pool
       .request()
+      .input('id', sql.UniqueIdentifier, uuid())
       .input('pid', sql.UniqueIdentifier, productId)
+      .input('iid', sql.UniqueIdentifier, inventoryId)
+      .input('qty', sql.Decimal(12, 4), qty)
       .query(`
-        IF OBJECT_ID(N'dbo.ProductRecipes', N'U') IS NOT NULL
-          DELETE FROM dbo.ProductRecipes WHERE ProductId = @pid
+        INSERT INTO dbo.ProductRecipes (Id, ProductId, InventoryId, QtyPerUnit)
+        VALUES (@id, @pid, @iid, @qty)
       `)
-    if (!Array.isArray(raw)) return
-    for (const row of raw as Array<{ inventoryId?: string; qtyPerUnit?: number }>) {
-      const inventoryId = String(row.inventoryId || '')
-      const qty = Number(row.qtyPerUnit || 0)
-      if (!isGuid(inventoryId) || qty <= 0) continue
-      await pool
-        .request()
-        .input('id', sql.UniqueIdentifier, uuid())
-        .input('pid', sql.UniqueIdentifier, productId)
-        .input('iid', sql.UniqueIdentifier, inventoryId)
-        .input('qty', sql.Decimal(12, 4), qty)
-        .query(`
-          IF OBJECT_ID(N'dbo.ProductRecipes', N'U') IS NOT NULL
-          INSERT INTO dbo.ProductRecipes (Id, ProductId, InventoryId, QtyPerUnit)
-          VALUES (@id, @pid, @iid, @qty)
-        `)
-    }
-  } catch {
-    /* recetas opcionales */
   }
 }
 
@@ -437,6 +512,50 @@ crudRouter.get('/inventory/movements', authRequired, requireRoles('admin', 'caje
         createdAt: new Date(row.CreatedAt as string).toISOString(),
         userName: row.UserName ? String(row.UserName) : '',
       })),
+    )
+  } catch {
+    res.json([])
+  }
+})
+
+crudRouter.get('/inventory/flow', authRequired, requireRoles('admin', 'cajero', 'cocina'), async (_req, res) => {
+  const pool = await getPool()
+  try {
+    const limaStartUtc = new Date(`${new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Lima' }).format(new Date())}T05:00:00.000Z`)
+    const r = await pool.request().input('from', sql.DateTime2, limaStartUtc).query(`
+      SELECT
+        i.Id,
+        CAST(i.Stock AS DECIMAL(12,3)) AS Stock,
+        ISNULL((
+          SELECT SUM(CASE WHEN m.Delta < 0 THEN -m.Delta ELSE 0 END)
+          FROM dbo.InventoryMovements m
+          WHERE m.InventoryId = i.Id AND m.CreatedAt >= @from
+        ), 0) AS QtyOut,
+        ISNULL((
+          SELECT SUM(CASE WHEN m.Delta > 0 THEN m.Delta ELSE 0 END)
+          FROM dbo.InventoryMovements m
+          WHERE m.InventoryId = i.Id AND m.CreatedAt >= @from
+        ), 0) AS QtyIn,
+        ISNULL((
+          SELECT SUM(m.Delta)
+          FROM dbo.InventoryMovements m
+          WHERE m.InventoryId = i.Id AND m.CreatedAt >= @from
+        ), 0) AS DeltaNeto
+      FROM dbo.Inventory i
+    `)
+    const round3 = (n: number) => Math.round(n * 1000) / 1000
+    res.json(
+      r.recordset.map((row: Record<string, unknown>) => {
+        const left = Number(row.Stock || 0)
+        const delta = Number(row.DeltaNeto || 0)
+        return {
+          inventoryId: String(row.Id),
+          had: round3(left - delta),
+          out: round3(Number(row.QtyOut || 0)),
+          in: round3(Number(row.QtyIn || 0)),
+          left: round3(left),
+        }
+      }),
     )
   } catch {
     res.json([])

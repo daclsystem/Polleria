@@ -73,7 +73,7 @@ function mapProduct(r: Record<string, unknown>) {
       title: string
       required: boolean
       maxSelect: number
-      options: Array<{ id: string; name: string; price: number }>
+      options: Array<{ id: string; name: string; price: number; inventoryId?: string; qtyPerUnit?: number }>
     }>,
     soldCount: 0,
     ratingAvg: 0,
@@ -285,18 +285,39 @@ async function attachProductExtras<T extends ReturnType<typeof mapProduct>>(prod
     ORDER BY SortOrder
   `)
   const groupIds = (groupsR.recordset as Array<{ Id: string }>).map((g) => String(g.Id))
-  const optsByGroup = new Map<string, Array<{ id: string; name: string; price: number }>>()
+  const optsByGroup = new Map<
+    string,
+    Array<{ id: string; name: string; price: number; inventoryId?: string; qtyPerUnit?: number }>
+  >()
   if (groupIds.length) {
-    const optsR = await pool.request().query(`
-      SELECT Id, GroupId, Name, Price, SortOrder
-      FROM dbo.ProductOptions
-      WHERE GroupId IN (${groupIds.map((id) => `'${id}'`).join(',')})
-      ORDER BY SortOrder
-    `)
-    for (const o of optsR.recordset as Array<{ Id: string; GroupId: string; Name: string; Price: number }>) {
+    let optsR: { recordset: Array<Record<string, unknown>> }
+    try {
+      optsR = await pool.request().query(`
+        SELECT Id, GroupId, Name, Price, SortOrder, InventoryId, QtyPerUnit
+        FROM dbo.ProductOptions
+        WHERE GroupId IN (${groupIds.map((id) => `'${id}'`).join(',')})
+        ORDER BY SortOrder
+      `)
+    } catch {
+      optsR = await pool.request().query(`
+        SELECT Id, GroupId, Name, Price, SortOrder
+        FROM dbo.ProductOptions
+        WHERE GroupId IN (${groupIds.map((id) => `'${id}'`).join(',')})
+        ORDER BY SortOrder
+      `)
+    }
+    for (const o of optsR.recordset) {
       const gid = String(o.GroupId)
       const list = optsByGroup.get(gid) || []
-      list.push({ id: String(o.Id), name: String(o.Name), price: Number(o.Price) })
+      const inventoryId = o.InventoryId ? String(o.InventoryId) : undefined
+      list.push({
+        id: String(o.Id),
+        name: String(o.Name),
+        price: Number(o.Price),
+        ...(inventoryId
+          ? { inventoryId, qtyPerUnit: Number(o.QtyPerUnit || 1) }
+          : {}),
+      })
       optsByGroup.set(gid, list)
     }
   }
@@ -305,7 +326,7 @@ async function attachProductExtras<T extends ReturnType<typeof mapProduct>>(prod
     title: string
     required: boolean
     maxSelect: number
-    options: Array<{ id: string; name: string; price: number }>
+    options: Array<{ id: string; name: string; price: number; inventoryId?: string; qtyPerUnit?: number }>
   }
   const groupsBy = new Map<string, OptionGroup[]>()
   for (const g of groupsR.recordset as Array<{
