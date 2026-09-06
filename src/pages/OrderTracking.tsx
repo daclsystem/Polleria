@@ -421,7 +421,7 @@ export function OrderTracking() {
             {order.items.map((i, idxItem) => (
               <li key={idxItem} className="flex justify-between text-sm">
                 <span>
-                  {i.qty}× {i.name}
+                  {i.qty} {i.name}
                 </span>
                 <span className="font-semibold">{soles(i.price * i.qty)}</span>
               </li>

@@ -284,7 +284,7 @@ function MyOrderCard({ order, onOpen }: { order: Order; onOpen: (o: Order) => vo
           </span>
         </div>
         <p className="mt-2 line-clamp-2 text-xs text-ink/50">
-          {order.items.map((i) => `${i.qty}× ${i.name}`).join(' · ')}
+          {order.items.map((i) => `${i.qty} ${i.name}`).join(' · ')}
         </p>
         <div className="mt-3 flex items-center justify-between gap-3">
           <p className="font-extrabold text-ink">{soles(order.total)}</p>

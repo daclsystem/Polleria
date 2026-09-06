@@ -64,7 +64,7 @@ export function shouldNotifyCustomerWhatsApp(order: Pick<OrderLike, 'Type' | 'So
 function detalle(order: OrderLike) {
   const items = order.items || []
   if (!items.length) return '(ver detalle en el enlace)'
-  return items.map((i) => `${i.Qty}x ${i.Name}`).join('\n')
+  return items.map((i) => `${i.Qty} ${i.Name}`).join('\n')
 }
 
 function tipoLabel(type: string, address?: string | null) {

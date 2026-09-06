@@ -82,7 +82,7 @@ export function toChatId(phone: string): string {
 }
 
 function fill(template: string, order: Order, extra: Record<string, string> = {}) {
-  const detalle = order.items.map((i) => `${i.qty}x ${i.name}`).join('\n')
+  const detalle = order.items.map((i) => `${i.qty} ${i.name}`).join('\n')
   const tipoEntrega =
     order.type === 'delivery'
       ? '🛵 Delivery a tu dirección.'

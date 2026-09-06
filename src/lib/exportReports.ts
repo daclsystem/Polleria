@@ -78,7 +78,7 @@ export function downloadReportsXlsx(opts: {
       o.subtotal,
       o.igv,
       o.total,
-      o.items.map((i) => `${i.qty}x ${i.name}`).join(' | '),
+      o.items.map((i) => `${i.qty} ${i.name}`).join(' | '),
     ]),
   ]
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(pedidos), 'Pedidos')

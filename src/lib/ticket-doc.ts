@@ -158,7 +158,7 @@ function buildCaja(order: Order, settings: Settings, cols: number): TicketDoc {
   ]
 
   for (const item of order.items) {
-    lines.push({ t: 'row', left: `${item.qty}x ${item.name}`, right: solesPrint(item.qty * item.price) })
+    lines.push({ t: 'row', left: `${item.qty} ${item.name}`, right: solesPrint(item.qty * item.price) })
     if (item.notes) lines.push({ t: 'text', text: `   ** ${item.notes}` })
   }
   if (order.notes) lines.push({ t: 'text', text: `Nota: ${order.notes}` })
@@ -198,7 +198,7 @@ function buildCocina(order: Order, settings: Settings, cols: number): TicketDoc 
   ]
 
   for (const item of order.items) {
-    lines.push({ t: 'text', text: `${item.qty}x ${item.name}`, bold: true, size: 'wide' })
+    lines.push({ t: 'text', text: `${item.qty} ${item.name}`, bold: true, size: 'wide' })
     if (item.notes) lines.push({ t: 'text', text: `   >> ${item.notes}` })
   }
 
@@ -230,7 +230,7 @@ function buildCuenta(order: Order, settings: Settings, cols: number): TicketDoc 
   ]
 
   for (const item of order.items) {
-    lines.push({ t: 'row', left: `${item.qty}x ${item.name}`, right: solesPrint(item.qty * item.price) })
+    lines.push({ t: 'row', left: `${item.qty} ${item.name}`, right: solesPrint(item.qty * item.price) })
   }
 
   lines.push(...totals(order, settings))

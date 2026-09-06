@@ -820,7 +820,7 @@ export function Pos() {
         <ul className="mt-3 max-h-40 space-y-1 overflow-y-auto text-sm">
           {items.map((i, idx) => (
             <li key={`${i.productId}-${idx}`}>
-              {i.qty}× {i.name}
+              {i.qty} {i.name}
             </li>
           ))}
         </ul>

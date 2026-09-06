@@ -324,7 +324,7 @@ export function PedidosWeb({ vista = 'curso' }: { vista?: 'curso' | 'historial' 
                   return (
                     <li key={iidx} className="flex flex-wrap items-center gap-2">
                       <span>
-                        {i.qty}× {i.name}
+                        {i.qty} {i.name}
                       </span>
                       <span
                         className={`rounded-full px-1.5 py-0.5 text-[10px] font-bold ${

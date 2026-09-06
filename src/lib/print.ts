@@ -94,8 +94,8 @@ export function ticketHtml(order: Order, settings: Settings, kind: TicketKind) {
     .map((i) => {
       const line =
         kind === 'cocina'
-          ? `<div class="item"><strong>${i.qty}x</strong> ${esc(i.name)}${i.notes ? `<div class="note">** ${esc(i.notes)}</div>` : ''}</div>`
-          : `<div class="item"><div class="row"><span>${i.qty}x ${esc(i.name)}</span><span>${esc(solesPrint(i.qty * i.price))}</span></div>${i.notes ? `<div class="note">${esc(i.notes)}</div>` : ''}</div>`
+          ? `<div class="item"><strong>${i.qty}</strong> ${esc(i.name)}${i.notes ? `<div class="note">** ${esc(i.notes)}</div>` : ''}</div>`
+          : `<div class="item"><div class="row"><span>${i.qty} ${esc(i.name)}</span><span>${esc(solesPrint(i.qty * i.price))}</span></div>${i.notes ? `<div class="note">${esc(i.notes)}</div>` : ''}</div>`
       return line
     })
     .join('')

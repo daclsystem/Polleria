@@ -515,7 +515,7 @@ export function Comandas() {
               {current.items.map((i, idx) => (
                 <li key={idx} className="flex justify-between px-3 py-2 text-sm">
                   <span>
-                    {i.qty}× {i.name}
+                    {i.qty} {i.name}
                     {i.notes ? <span className="block text-xs text-ember">{i.notes}</span> : null}
                   </span>
                   <span>{soles(i.qty * i.price)}</span>

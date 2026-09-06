@@ -134,7 +134,7 @@ export function Dashboard() {
                   </span>
                   <span className="truncate text-sm">{p.name}</span>
                 </span>
-                <span className="shrink-0 text-sm font-semibold">{p.qty}×</span>
+                <span className="shrink-0 text-sm font-semibold">{p.qty}</span>
               </li>
             ))}
           </ul>

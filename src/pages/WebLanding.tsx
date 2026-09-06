@@ -867,7 +867,7 @@ export function WebLanding() {
                 {items.map((i, idx) => (
                   <li key={idx} className="text-sm">
                     <div className="flex justify-between">
-                      <span className="text-gray-600">{i.qty}× {i.name}</span>
+                      <span className="text-gray-600">{i.qty} {i.name}</span>
                       <span className="font-bold text-gray-900">{soles(i.qty * i.price)}</span>
                     </div>
                     {i.selectedOptions && i.selectedOptions.length > 0 && (

@@ -341,7 +341,7 @@ function OrderCard({ order, onTrack }: { order: Order; onTrack: () => void }) {
 
       <div className="mt-3 space-y-1">
         {order.items.slice(0, 3).map((item, i) => (
-          <p key={i} className="text-sm text-gray-600">{item.qty}× {item.name}</p>
+          <p key={i} className="text-sm text-gray-600">{item.qty} {item.name}</p>
         ))}
         {order.items.length > 3 && (
           <p className="text-sm text-gray-400">+{order.items.length - 3} más...</p>
@@ -523,7 +523,7 @@ function TrackingView({ order }: { order?: Order }) {
           {order.items.map((item, i) => (
             <li key={i} className="flex justify-between text-sm">
               <div>
-                <span className="text-gray-700">{item.qty}× {item.name}</span>
+                <span className="text-gray-700">{item.qty} {item.name}</span>
                 {item.selectedOptions && item.selectedOptions.length > 0 && (
                   <p className="text-xs text-gray-400">{item.selectedOptions.map((o) => o.name).join(', ')}</p>
                 )}

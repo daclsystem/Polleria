@@ -339,7 +339,7 @@ function KitchenCard({
       <ul className="mt-2.5 space-y-1">
         {kitchenItems.map((i, idx) => (
           <li key={i.id || idx} className="text-sm leading-snug">
-            <span className="font-bold">{i.qty}×</span> {i.name}
+            <span className="font-bold">{i.qty}</span> {i.name}
             {i.notes ? <span className="block text-xs text-ember">{i.notes}</span> : null}
           </li>
         ))}
