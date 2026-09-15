@@ -31,7 +31,7 @@ import {
 import { useEffect, useRef, useState } from 'react'
 import { useAuth } from '../auth/AuthContext'
 import { useStore } from '../store/StoreContext'
-import { ROLE_HOME, ROLE_LABEL, STAFF_VIEW_OPTIONS, type ModuleId, type Role } from '../types'
+import { ROLE_HOME, ROLE_LABEL, viewOptionsForUser, type ModuleId, type Role } from '../types'
 import { withBase } from '../lib/paths'
 import { APP_VERSION } from '../lib/version'
 import { LiveToasts } from './LiveToasts'
@@ -107,7 +107,7 @@ const GROUPS: { title: string; modules: ModuleId[] }[] = [
 
 const BOTTOM: Record<Role, ModuleId[]> = {
   admin: ['dashboard', 'pos', 'comandas', 'cocina'],
-  cajero: ['dashboard', 'comandas'],
+  cajero: ['mesas', 'pedidos-web', 'comandas', 'historial'],
   cocina: ['cocina'],
   mozo: ['mesas', 'pedidos-web', 'reservas', 'historial'],
 }
@@ -140,6 +140,7 @@ export function Layout() {
     }
   }, [collapsed])
 
+  const viewOptions = viewOptionsForUser(user)
   const items = NAV.filter((i) => {
     if (!can(i.module)) return false
     if (actingRole === 'mozo' && i.module === 'pos') return false
@@ -147,7 +148,7 @@ export function Layout() {
   })
   const bottomIds = user ? BOTTOM[actingRole] : []
   const bottom = NAV.filter((i) => bottomIds.includes(i.module) && can(i.module))
-  const compactBottom = actingRole === 'mozo'
+  const compactBottom = actingRole === 'mozo' || actingRole === 'cajero'
   const visibleBottom = compactBottom ? bottom : bottom.slice(0, 3)
   const bottomCount = visibleBottom.length + (compactBottom ? 0 : 1)
   const [photo, setPhoto] = useState(() =>
@@ -372,7 +373,7 @@ export function Layout() {
             </p>
           </div>
           <div className="ml-auto flex items-center gap-2">
-            {user?.isSystem ? (
+            {viewOptions.length > 1 ? (
               <label className="min-w-0">
                 <span className="sr-only">Ver como</span>
                 <select
@@ -384,7 +385,7 @@ export function Layout() {
                   }}
                   className="max-w-[9.5rem] truncate rounded-full border border-ink/10 bg-surface px-3 py-1.5 text-[11px] font-bold text-ink outline-none focus:border-gold"
                 >
-                  {STAFF_VIEW_OPTIONS.map((opt) => (
+                  {viewOptions.map((opt) => (
                     <option key={opt.id} value={opt.id}>
                       {opt.label}
                     </option>

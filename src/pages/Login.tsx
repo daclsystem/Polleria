@@ -3,7 +3,7 @@ import { Navigate, useLocation, useNavigate } from 'react-router-dom'
 import { AuthSplitLayout } from '../components/AuthSplitLayout'
 import { PhoneOtpLogin } from '../components/PhoneOtpLogin'
 import { useAuth } from '../auth/AuthContext'
-import { ROLE_HOME, STAFF_VIEW_OPTIONS, type Role } from '../types'
+import { ROLE_HOME, viewOptionsForUser, type Role } from '../types'
 import { setApiToken } from '../lib/apiClient'
 
 const HIGHLIGHTS = [
@@ -53,7 +53,7 @@ export function Login() {
             Elige el puesto. Puedes cambiarlo después sin volver a entrar.
           </p>
           <div className="mt-5 grid gap-2.5">
-            {STAFF_VIEW_OPTIONS.map((opt) => {
+            {viewOptionsForUser(user).map((opt) => {
               const Icon = VIEW_ICONS[opt.id]
               return (
                 <button
@@ -93,7 +93,7 @@ export function Login() {
               photoUrl: data.user.photoUrl,
               isSystem: data.user.isSystem,
             })
-            if (!data.user.isSystem) {
+            if (!viewOptionsForUser(data.user as { role: Role; isSystem?: boolean }).length) {
               navigate(from || ROLE_HOME[data.user.role as Role] || '/', { replace: true })
             }
           }}

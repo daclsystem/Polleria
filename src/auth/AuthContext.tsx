@@ -1,7 +1,15 @@
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react'
 import { useStore } from '../store/StoreContext'
-import type { ModuleId, Role, User } from '../types'
-import { ROLE_MODULES } from '../types'
+import {
+  isAllowedStaffView,
+  needsStaffViewPick,
+  resolveActingRole,
+  ROLE_MODULES,
+  viewOptionsForUser,
+  type ModuleId,
+  type Role,
+  type User,
+} from '../types'
 import { apiFetch, apiLogout, getApiToken, setApiToken } from '../lib/apiClient'
 import { APP_NAME, siteUrl } from '../lib/paths'
 import { defaultAvatarUrl } from '../lib/avatar'
@@ -62,8 +70,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [viewRole, setViewRoleState] = useState<Role | null>(() => readStoredView())
 
   const user = apiUser
-  const actingRole: Role = user?.isSystem ? viewRole || 'admin' : user?.role || 'admin'
-  const needsViewPick = Boolean(user?.isSystem && !viewRole)
+  const actingRole: Role = resolveActingRole(user, viewRole)
+  const needsViewPick = needsStaffViewPick(user, viewRole)
 
   const logout = () => {
     void apiLogout('staff')
@@ -76,6 +84,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }
 
   const setViewRole = (role: Role) => {
+    if (apiUser && !isAllowedStaffView(apiUser, role)) return
     localStorage.setItem(VIEW_KEY, role)
     setViewRoleState(role)
     window.dispatchEvent(new Event('polleria-view-role'))
@@ -122,7 +131,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
     localStorage.setItem(STAFF_SESSION_KEY, u.id)
     localStorage.setItem('polleria-api-user', JSON.stringify(u))
-    if (u.isSystem) {
+    if (viewOptionsForUser(u).length > 0) {
       localStorage.removeItem(VIEW_KEY)
       setViewRoleState(null)
     } else {
@@ -177,10 +186,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const can = (module: ModuleId) => {
-    if (!user) return false
-    const role = user.isSystem ? viewRole || 'admin' : user.role
-    if (user.isSystem && !viewRole) return false
-    return ROLE_MODULES[role]?.includes(module) ?? false
+    if (!user || needsStaffViewPick(user, viewRole)) return false
+    return ROLE_MODULES[actingRole]?.includes(module) ?? false
   }
 
   const resetStaffPassword = (email: string, newPassword: string) => {

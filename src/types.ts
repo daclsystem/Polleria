@@ -326,8 +326,8 @@ export type ModuleId = (typeof MODULES)[number]
 export const ROLE_MODULES: Record<Role, ModuleId[]> = {
   /** Solo admin ve “Administrar” (carta, equipo, clientes, conductores, etc.) */
   admin: [...MODULES],
-  /** Cajero: solo cobrar y liquidar */
-  cajero: ['dashboard', 'comandas'],
+  /** Cajero: cobra y también atiende como mozo (doble función) */
+  cajero: ['dashboard', 'comandas', 'mesas', 'pedidos-web', 'reservas', 'historial', 'pos'],
   /** Cocina: solo preparar */
   cocina: ['cocina'],
   /** Mozo: mesas, pedidos, reservas, historial */
@@ -358,6 +358,37 @@ export const STAFF_VIEW_OPTIONS: { id: Role; label: string; hint: string }[] = [
   { id: 'cocina', label: 'Cocina', hint: 'Preparar comandas' },
   { id: 'cajero', label: 'Caja', hint: 'Cobrar y liquidar' },
 ]
+
+export function viewOptionsForUser(user: { role: Role; isSystem?: boolean } | null | undefined) {
+  if (!user) return []
+  if (user.isSystem) return STAFF_VIEW_OPTIONS
+  return []
+}
+
+export function isAllowedStaffView(
+  user: { role: Role; isSystem?: boolean } | null | undefined,
+  view: Role | null | undefined,
+): view is Role {
+  if (!user || !view) return false
+  return viewOptionsForUser(user).some((o) => o.id === view)
+}
+
+export function resolveActingRole(
+  user: { role: Role; isSystem?: boolean } | null | undefined,
+  viewRole: Role | null,
+): Role {
+  if (!user) return 'admin'
+  if (isAllowedStaffView(user, viewRole)) return viewRole
+  if (user.isSystem) return 'admin'
+  return user.role
+}
+
+export function needsStaffViewPick(
+  user: { role: Role; isSystem?: boolean } | null | undefined,
+  viewRole: Role | null,
+): boolean {
+  return Boolean(user && viewOptionsForUser(user).length > 0 && !isAllowedStaffView(user, viewRole))
+}
 
 export const TYPE_LABEL: Record<OrderType, string> = {
   salon: 'Salón',

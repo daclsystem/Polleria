@@ -68,7 +68,8 @@ export function Dashboard() {
             icon={ShoppingBag}
             accent
           />
-        ) : can('pedidos-web') ? (
+        ) : null}
+        {can('pedidos-web') ? (
           <Action to="/pedidos-web" title="Pedidos" hint="Mesa, recojo y delivery" icon={ShoppingBag} />
         ) : null}
         {can('cocina') ? (

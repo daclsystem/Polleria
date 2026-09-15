@@ -18,7 +18,7 @@ export function Usuarios() {
   return (
     <div>
       <div className="flex flex-wrap items-end justify-between gap-3">
-        <PageTitle title="Usuarios y roles" hint="Admin, cajero, cocina y mozo ven módulos distintos." />
+        <PageTitle title="Usuarios y roles" hint="Admin, cajero, cocina y mozo ven módulos distintos. El cajero también atiende mesas (doble función)." />
         <button
           className="rounded-xl bg-ember px-4 py-2 text-sm font-semibold text-white"
           onClick={() =>

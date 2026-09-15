@@ -1,6 +1,6 @@
 import { io, type Socket } from 'socket.io-client'
 import { API_URL } from './api'
-import type { Role } from '../types'
+import { isAllowedStaffView, type Role } from '../types'
 
 export type RealtimeEvent =
   | 'order:created'
@@ -231,17 +231,16 @@ export function orderLabel(payload: unknown) {
   return { n, name, status, createdByUserId, createdBy, id }
 }
 
-/** Lee rol staff guardado en sesión local (respeta la vista del admin de sistema). */
+/** Lee rol staff guardado en sesión local (respeta la vista del admin/cajero). */
 export function readStaffRole(): Role | null {
   try {
     const raw = localStorage.getItem('polleria-api-user')
     if (!raw) return null
     const u = JSON.parse(raw) as { role?: Role; isSystem?: boolean }
-    if (u.isSystem) {
-      const view = localStorage.getItem('polleria-staff-view')
-      if (view === 'admin' || view === 'cajero' || view === 'cocina' || view === 'mozo') return view
-    }
-    return u.role || null
+    if (!u.role) return null
+    const view = localStorage.getItem('polleria-staff-view') as Role | null
+    if (isAllowedStaffView({ role: u.role, isSystem: u.isSystem }, view)) return view
+    return u.role
   } catch {
     return null
   }
