@@ -1,4 +1,5 @@
 import fs from 'node:fs'
+import net from 'node:net'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { defineConfig, type Plugin } from 'vite'
@@ -33,6 +34,34 @@ const API_TARGET = (process.env.VITE_API_URL || 'https://apipchifapollerialopez.
   /\/$/,
   '',
 )
+
+/** POS / driver / cliente: la web no debe saltar a estos si 5174 está ocupado. */
+const OTHER_APP_PORTS = new Set(
+  Object.entries(APP_CFG)
+    .filter(([name]) => name !== APP)
+    .map(([, c]) => c.port),
+)
+
+function isPortFree(port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const server = net.createServer()
+    server.unref()
+    server.once('error', () => resolve(false))
+    server.once('listening', () => {
+      server.close(() => resolve(true))
+    })
+    server.listen(port)
+  })
+}
+
+async function resolveDevPort(preferred: number): Promise<number> {
+  if (await isPortFree(preferred)) return preferred
+  for (let port = preferred + 1; port < preferred + 40; port++) {
+    if (OTHER_APP_PORTS.has(port)) continue
+    if (await isPortFree(port)) return port
+  }
+  return preferred
+}
 
 /** Escribe version.json en cada build para que el cliente detecte actualizaciones. */
 function emitVersionJson(): Plugin {
@@ -70,48 +99,55 @@ function emitVersionJson(): Plugin {
   }
 }
 
-export default defineConfig({
-  root: appRoot,
-  base: cfg.base,
-  cacheDir: path.resolve(__dirname, `node_modules/.vite/${APP}`),
-  publicDir: path.resolve(__dirname, 'public'),
-  plugins: [react(), tailwindcss(), emitVersionJson()],
-  define: {
-    'import.meta.env.VITE_APP': JSON.stringify(APP),
-  },
-  resolve: {
-    alias: {
-      '@': path.resolve(__dirname, 'src'),
-      /** CJS con campo `browser` (fs: false); Vite no lo resuelve desde `apps/*`. */
-      qrcode: path.resolve(__dirname, 'node_modules/qrcode/lib/browser.js'),
+export default defineConfig(async () => {
+  const port = await resolveDevPort(cfg.port)
+  if (port !== cfg.port) {
+    console.log(`[vite] Puerto ${cfg.port} ocupado. ${APP} usa ${port}.`)
+  }
+
+  return {
+    root: appRoot,
+    base: cfg.base,
+    cacheDir: path.resolve(__dirname, `node_modules/.vite/${APP}`),
+    publicDir: path.resolve(__dirname, 'public'),
+    plugins: [react(), tailwindcss(), emitVersionJson()],
+    define: {
+      'import.meta.env.VITE_APP': JSON.stringify(APP),
     },
-  },
-  optimizeDeps: {
-    include: ['qrcode', 'jspdf'],
-  },
-  server: {
-    port: cfg.port,
-    /** La web se queda en 5174. Si ese puerto está ocupado, falla en vez de robar el 5175 del POS. */
-    strictPort: APP === 'web',
-    host: true,
-    fs: {
-      allow: [__dirname],
-    },
-    proxy: {
-      '/api': { target: API_TARGET, changeOrigin: true, secure: true },
-      '/health': { target: API_TARGET, changeOrigin: true, secure: true },
-      '/realtime': { target: API_TARGET, changeOrigin: true, ws: true, secure: true },
-    },
-  },
-  build: {
-    outDir: outDirAbs,
-    emptyOutDir: true,
-    rollupOptions: {
-      output: {
-        entryFileNames: `assets/app-${readAppVersion().build.replace(/[^a-zA-Z0-9]/g, '')}.js`,
-        chunkFileNames: 'assets/[name].js',
-        assetFileNames: 'assets/[name][extname]',
+    resolve: {
+      alias: {
+        '@': path.resolve(__dirname, 'src'),
+        /** CJS con campo `browser` (fs: false); Vite no lo resuelve desde `apps/*`. */
+        qrcode: path.resolve(__dirname, 'node_modules/qrcode/lib/browser.js'),
       },
     },
-  },
+    optimizeDeps: {
+      include: ['qrcode', 'jspdf'],
+    },
+    server: {
+      port,
+      /** El puerto ya se eligió libre, sin pisar POS/driver/cliente. */
+      strictPort: true,
+      host: true,
+      fs: {
+        allow: [__dirname],
+      },
+      proxy: {
+        '/api': { target: API_TARGET, changeOrigin: true, secure: true },
+        '/health': { target: API_TARGET, changeOrigin: true, secure: true },
+        '/realtime': { target: API_TARGET, changeOrigin: true, ws: true, secure: true },
+      },
+    },
+    build: {
+      outDir: outDirAbs,
+      emptyOutDir: true,
+      rollupOptions: {
+        output: {
+          entryFileNames: `assets/app-${readAppVersion().build.replace(/[^a-zA-Z0-9]/g, '')}.js`,
+          chunkFileNames: 'assets/[name].js',
+          assetFileNames: 'assets/[name][extname]',
+        },
+      },
+    },
+  }
 })

@@ -398,6 +398,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           return
         }
 
+        if (event === 'table:updated' || event === 'reservation:updated') {
+          scheduleReload()
+          return
+        }
+
         scheduleReload()
         const { n, name, status, createdByUserId, createdBy } = orderLabel(payload)
         const currentRole = readStaffRole()

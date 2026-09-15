@@ -4,6 +4,7 @@ import bcrypt from 'bcryptjs'
 import { getPool, sql } from '../db.js'
 import { persistablePhotoUrl } from '../photoUrl.js'
 import { authRequired, requireRoles } from '../auth.js'
+import { emitEvent } from '../realtime.js'
 
 export const crudRouter = Router()
 
@@ -13,6 +14,15 @@ function isGuid(id?: string) {
 
 function paramId(value: string | string[]) {
   return Array.isArray(value) ? value[0] : value
+}
+
+function isUniqueErr(e: unknown) {
+  const err = e as {
+    number?: number
+    originalError?: { number?: number; info?: { number?: number } }
+  }
+  const n = Number(err.number ?? err.originalError?.number ?? err.originalError?.info?.number)
+  return n === 2601 || n === 2627
 }
 
 /* ─── Products ─── */
@@ -668,28 +678,181 @@ crudRouter.post('/inventory/:id/adjust', authRequired, requireRoles('admin', 'ca
 })
 
 /* ─── Tables ─── */
-crudRouter.put('/tables/:id', authRequired, async (req, res) => {
-  const patch = req.body as { seats?: number; zone?: string; status?: string; orderId?: string | null }
-  const pool = await getPool()
-  const cur = await pool
-    .request()
-    .input('id', sql.UniqueIdentifier, paramId(req.params.id))
-    .query(`SELECT * FROM dbo.Tables WHERE Id=@id`)
-  const row = cur.recordset[0]
-  if (!row) return res.status(404).json({ error: 'Mesa no encontrada' })
+crudRouter.post('/tables', authRequired, requireRoles('admin'), async (req, res) => {
+  const body = req.body as {
+    id?: string
+    number?: number
+    seats?: number
+    zone?: string
+    branchId?: string | null
+  }
+  const number = Number(body.number)
+  if (!Number.isInteger(number) || number < 1) {
+    return res.status(400).json({ error: 'Número de mesa inválido' })
+  }
+  const seats = Math.max(1, Number(body.seats) || 4)
+  const zone = String(body.zone || 'Salón').trim() || 'Salón'
+  const branchId = isGuid(body.branchId || '') ? body.branchId! : null
+  const id = isGuid(body.id) ? body.id! : uuid()
+  try {
+    const pool = await getPool()
+    await pool
+      .request()
+      .input('id', sql.UniqueIdentifier, id)
+      .input('number', sql.Int, number)
+      .input('seats', sql.Int, seats)
+      .input('zone', sql.NVarChar, zone)
+      .input('branchId', sql.UniqueIdentifier, branchId)
+      .query(`
+        INSERT INTO dbo.Tables (Id, Number, Seats, Zone, Status, BranchId)
+        VALUES (@id, @number, @seats, @zone, N'libre', @branchId)
+      `)
+    emitEvent('table:updated', { id, number }, ['ops', 'mesas', 'caja'])
+    res.status(201).json({ id })
+  } catch (e) {
+    if (isUniqueErr(e)) {
+      return res.status(409).json({ error: `Ya existe la mesa ${number} en esa sucursal` })
+    }
+    res.status(500).json({ error: (e as Error).message })
+  }
+})
 
-  await pool
-    .request()
-    .input('id', sql.UniqueIdentifier, paramId(req.params.id))
-    .input('seats', sql.Int, patch.seats ?? row.Seats)
-    .input('zone', sql.NVarChar, patch.zone ?? row.Zone)
-    .input('status', sql.NVarChar, patch.status ?? row.Status)
-    .input('orderId', sql.UniqueIdentifier, patch.orderId === null ? null : patch.orderId ?? row.CurrentOrderId)
-    .query(`
-      UPDATE dbo.Tables SET Seats=@seats, Zone=@zone, Status=@status, CurrentOrderId=@orderId
+crudRouter.post('/tables/batch', authRequired, requireRoles('admin'), async (req, res) => {
+  const body = req.body as {
+    count?: number
+    fromNumber?: number
+    seats?: number
+    zone?: string
+    branchId?: string | null
+  }
+  const count = Math.min(40, Math.max(1, Math.floor(Number(body.count) || 0)))
+  if (!count) return res.status(400).json({ error: 'Indica cuántas mesas crear' })
+  const seats = Math.max(1, Number(body.seats) || 4)
+  const zone = String(body.zone || 'Salón').trim() || 'Salón'
+  const branchId = isGuid(body.branchId || '') ? body.branchId! : null
+  try {
+    const pool = await getPool()
+    const existing = await pool.request().query(`SELECT Number FROM dbo.Tables`)
+    const used = new Set(existing.recordset.map((r: { Number: number }) => Number(r.Number)))
+    let from = Number(body.fromNumber)
+    if (!Number.isInteger(from) || from < 1) {
+      from = 1
+      while (used.has(from)) from += 1
+    }
+    const ids: string[] = []
+    const numbers: number[] = []
+    const tx = new sql.Transaction(pool)
+    await tx.begin()
+    try {
+      for (let i = 0; i < count; i++) {
+        let n = from + i
+        while (used.has(n)) n += 1
+        used.add(n)
+        const id = uuid()
+        await new sql.Request(tx)
+          .input('id', sql.UniqueIdentifier, id)
+          .input('number', sql.Int, n)
+          .input('seats', sql.Int, seats)
+          .input('zone', sql.NVarChar, zone)
+          .input('branchId', sql.UniqueIdentifier, branchId)
+          .query(`
+            INSERT INTO dbo.Tables (Id, Number, Seats, Zone, Status, BranchId)
+            VALUES (@id, @number, @seats, @zone, N'libre', @branchId)
+          `)
+        ids.push(id)
+        numbers.push(n)
+      }
+      await tx.commit()
+    } catch (e) {
+      await tx.rollback()
+      throw e
+    }
+    emitEvent('table:updated', { ids, numbers }, ['ops', 'mesas', 'caja'])
+    res.status(201).json({ ids, numbers, count: ids.length })
+  } catch (e) {
+    if (isUniqueErr(e)) {
+      return res.status(409).json({ error: 'Ya hay mesas con esos números' })
+    }
+    res.status(500).json({ error: (e as Error).message })
+  }
+})
+
+crudRouter.put('/tables/:id', authRequired, async (req, res) => {
+  const patch = req.body as {
+    number?: number
+    seats?: number
+    zone?: string
+    status?: string
+    orderId?: string | null
+    branchId?: string | null
+  }
+  try {
+    const pool = await getPool()
+    const cur = await pool
+      .request()
+      .input('id', sql.UniqueIdentifier, paramId(req.params.id))
+      .query(`SELECT * FROM dbo.Tables WHERE Id=@id`)
+    const row = cur.recordset[0]
+    if (!row) return res.status(404).json({ error: 'Mesa no encontrada' })
+
+    const number = patch.number != null ? Number(patch.number) : Number(row.Number)
+    if (!Number.isInteger(number) || number < 1) {
+      return res.status(400).json({ error: 'Número de mesa inválido' })
+    }
+    const branchId =
+      patch.branchId === null
+        ? null
+        : isGuid(patch.branchId || '')
+          ? patch.branchId
+          : row.BranchId
+
+    const rq = pool
+      .request()
+      .input('id', sql.UniqueIdentifier, paramId(req.params.id))
+      .input('number', sql.Int, number)
+      .input('seats', sql.Int, patch.seats ?? row.Seats)
+      .input('zone', sql.NVarChar, patch.zone ?? row.Zone)
+      .input('status', sql.NVarChar, patch.status ?? row.Status)
+      .input('orderId', sql.UniqueIdentifier, patch.orderId === null ? null : patch.orderId ?? row.CurrentOrderId)
+    const setBranch = patch.branchId !== undefined
+    if (setBranch) rq.input('branchId', sql.UniqueIdentifier, branchId)
+    await rq.query(`
+      UPDATE dbo.Tables
+      SET Number=@number, Seats=@seats, Zone=@zone, Status=@status, CurrentOrderId=@orderId
+        ${setBranch ? ', BranchId=@branchId' : ''}
       WHERE Id=@id
     `)
-  res.json({ ok: true })
+    emitEvent('table:updated', { id: paramId(req.params.id), number }, ['ops', 'mesas', 'caja'])
+    res.json({ ok: true })
+  } catch (e) {
+    if (isUniqueErr(e)) {
+      return res.status(409).json({ error: 'Ya existe una mesa con ese número en la sucursal' })
+    }
+    res.status(500).json({ error: (e as Error).message })
+  }
+})
+
+crudRouter.delete('/tables/:id', authRequired, requireRoles('admin'), async (req, res) => {
+  try {
+    const pool = await getPool()
+    const cur = await pool
+      .request()
+      .input('id', sql.UniqueIdentifier, paramId(req.params.id))
+      .query(`SELECT Status, CurrentOrderId, Number FROM dbo.Tables WHERE Id=@id`)
+    const row = cur.recordset[0]
+    if (!row) return res.status(404).json({ error: 'Mesa no encontrada' })
+    if (row.CurrentOrderId || String(row.Status) !== 'libre') {
+      return res.status(409).json({ error: `La mesa ${row.Number} está ocupada. Ciérrala antes de borrarla.` })
+    }
+    await pool
+      .request()
+      .input('id', sql.UniqueIdentifier, paramId(req.params.id))
+      .query(`DELETE FROM dbo.Tables WHERE Id=@id`)
+    emitEvent('table:updated', { id: paramId(req.params.id) }, ['ops', 'mesas', 'caja'])
+    res.json({ ok: true })
+  } catch (e) {
+    res.status(500).json({ error: (e as Error).message })
+  }
 })
 
 /* ─── Settings ─── */

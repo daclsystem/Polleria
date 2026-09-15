@@ -53,6 +53,7 @@ const NAV: { to: string; label: string; hint: string; icon: LucideIcon; module: 
   { to: '/comandas', label: 'Caja', hint: 'Cobrar y liquidar', icon: Wallet, module: 'comandas' },
   { to: '/cocina', label: 'Cocina', hint: 'Preparar platos', icon: ChefHat, module: 'cocina' },
   { to: '/menu', label: 'Carta', hint: 'Precios y platos', icon: ShoppingBag, module: 'menu' },
+  { to: '/admin-mesas', label: 'Mesas', hint: 'Crear y editar mesas', icon: Table2, module: 'admin-mesas' },
   { to: '/inventario', label: 'Inventario', hint: 'Insumos y stock', icon: Package, module: 'inventario' },
   { to: '/usuarios', label: 'Equipo', hint: 'Usuarios y roles', icon: Users, module: 'usuarios' },
   { to: '/clientes', label: 'Clientes', hint: 'Agenda de clientes', icon: Contact, module: 'clientes' },
@@ -85,6 +86,7 @@ const GROUPS: { title: string; modules: ModuleId[] }[] = [
     title: 'Administrar',
     modules: [
       'menu',
+      'admin-mesas',
       'inventario',
       'usuarios',
       'clientes',

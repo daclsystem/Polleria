@@ -24,6 +24,7 @@ import { Configuracion } from '../../pages/Configuracion'
 import { WebConfig } from '../../pages/WebConfig'
 import { Cupones } from '../../pages/Cupones'
 import { ImprimirQR } from '../../pages/ImprimirQR'
+import { SalonMesas } from '../../pages/SalonMesas'
 import { BASENAME } from '../../lib/paths'
 import { VersionUpdateWatcher } from '../../components/VersionUpdateWatcher'
 import { OfflineBanner } from '../../components/OfflineBanner'
@@ -101,6 +102,14 @@ export default function App() {
                 element={
                   <ProtectedRoute module="menu">
                     <MenuPage />
+                  </ProtectedRoute>
+                }
+              />
+              <Route
+                path="/admin-mesas"
+                element={
+                  <ProtectedRoute module="admin-mesas">
+                    <SalonMesas />
                   </ProtectedRoute>
                 }
               />

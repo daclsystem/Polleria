@@ -36,7 +36,10 @@ export function siteUrl(app: keyof typeof APP_BASE, path = '/') {
   let origin = fallbackOrigin
   if (typeof window !== 'undefined' && window.location?.origin) {
     if (import.meta.env.DEV) {
-      origin = `${window.location.protocol}//${window.location.hostname}:${DEV_PORTS[app]}`
+      origin =
+        app === APP_NAME
+          ? window.location.origin
+          : `${window.location.protocol}//${window.location.hostname}:${DEV_PORTS[app]}`
     } else {
       origin = window.location.origin
     }

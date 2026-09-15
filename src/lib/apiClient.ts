@@ -352,6 +352,37 @@ export async function apiUpdateTable(id: string, patch: Record<string, unknown>)
   return apiFetch(`/api/tables/${id}`, { method: 'PUT', body: JSON.stringify(patch) })
 }
 
+export async function apiSaveTable(table: {
+  id?: string
+  number: number
+  seats: number
+  zone: string
+  branchId?: string | null
+  status?: string
+}) {
+  if (isGuid(table.id)) {
+    return apiFetch(`/api/tables/${table.id}`, { method: 'PUT', body: JSON.stringify(table) })
+  }
+  return apiFetch<{ id: string }>('/api/tables', { method: 'POST', body: JSON.stringify(table) })
+}
+
+export async function apiDeleteTable(id: string) {
+  return apiFetch(`/api/tables/${id}`, { method: 'DELETE' })
+}
+
+export async function apiCreateTables(data: {
+  count: number
+  fromNumber?: number
+  seats: number
+  zone: string
+  branchId?: string | null
+}) {
+  return apiFetch<{ ids: string[]; numbers: number[]; count: number }>('/api/tables/batch', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  })
+}
+
 export async function apiSaveSettings(settings: Settings) {
   return apiFetch('/api/settings', { method: 'PUT', body: JSON.stringify(settings) })
 }

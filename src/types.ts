@@ -304,6 +304,7 @@ export const MODULES = [
   'mesas',
   'reservas',
   'menu',
+  'admin-mesas',
   'inventario',
   'usuarios',
   'clientes',

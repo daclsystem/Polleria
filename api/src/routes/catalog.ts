@@ -439,6 +439,7 @@ function mapTable(r: Record<string, unknown>) {
     zone: r.Zone,
     status: r.Status,
     orderId: r.CurrentOrderId ? String(r.CurrentOrderId) : undefined,
+    branchId: r.BranchId ? String(r.BranchId) : undefined,
   }
 }
 
@@ -488,15 +489,19 @@ catalogRouter.get('/bootstrap', authRequired, async (_req, res) => {
     await ensureProducts()
     await ensureProductExtras()
     const pool = await getPool()
+    const col = await pool.request().query(`
+      SELECT COL_LENGTH(N'dbo.Users', N'BranchId') AS usersBranch
+    `)
+    const usersHaveBranch = col.recordset[0]?.usersBranch != null
+    const usersSql = usersHaveBranch
+      ? `SELECT Id, Name, Email, Role, Active, Pin, Phone, PhotoUrl, Dni, BranchId
+         FROM dbo.Users WHERE ISNULL(IsSystem, 0) = 0 ORDER BY Name`
+      : `SELECT Id, Name, Email, Role, Active, Pin, Phone, PhotoUrl, Dni
+         FROM dbo.Users WHERE ISNULL(IsSystem, 0) = 0 ORDER BY Name`
 
     const [users, products, tables, inventory, settings, orders, customers, reservations, branches, ranges] =
       await Promise.all([
-        pool.request().query(`
-          SELECT Id, Name, Email, Role, Active, Pin, Phone, PhotoUrl, Dni
-          FROM dbo.Users
-          WHERE ISNULL(IsSystem, 0) = 0
-          ORDER BY Name
-        `),
+        pool.request().query(usersSql),
         pool.request().query(`SELECT * FROM dbo.Products ORDER BY Category, Name`),
         pool.request().query(`SELECT * FROM dbo.Tables ORDER BY Number`),
         pool.request().query(`SELECT * FROM dbo.Inventory ORDER BY Name`),
@@ -551,6 +556,7 @@ catalogRouter.get('/bootstrap', authRequired, async (_req, res) => {
         phone: u.Phone || undefined,
         dni: u.Dni ? String(u.Dni) : undefined,
         isSystem: false,
+        branchId: u.BranchId ? String(u.BranchId) : undefined,
         photoUrl:
           u.PhotoUrl ||
           `https://ui-avatars.com/api/?name=${encodeURIComponent(String(u.Name || 'Usuario'))}&background=e11d2e&color=ffffff&size=128&bold=true`,
@@ -665,6 +671,7 @@ catalogRouter.get('/floor', async (_req, res) => {
         seats: Number(row.Seats),
         zone: String(row.Zone || 'Salón'),
         status: String(row.Status || 'libre'),
+        branchId: row.BranchId ? String(row.BranchId) : undefined,
       })),
     })
   } catch (e) {
