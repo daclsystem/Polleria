@@ -35,6 +35,7 @@ export function SalonMesas() {
   const [dlg, setDlg] = useState<'confirm' | 'busy' | 'done' | null>(null)
   const [removing, setRemoving] = useState<Table | null>(null)
   const [delDlg, setDelDlg] = useState<'confirm' | 'busy' | 'done' | null>(null)
+  const [createdNums, setCreatedNums] = useState<number[]>([])
 
   const branches = state.branches?.filter((b) => b.active !== false) || []
   const sorted = useMemo(
@@ -69,13 +70,14 @@ export function SalonMesas() {
     setDlg('busy')
     setErr(null)
     try {
-      await apiCreateTables({
+      const created = await apiCreateTables({
         count: batch.count,
         fromNumber: batch.fromNumber,
         seats: batch.seats,
         zone: batch.zone.trim() || 'Salón',
         branchId: batch.branchId || null,
       })
+      setCreatedNums(created.numbers || [])
       await reloadFromApi()
       setDlg('done')
     } catch (e) {
@@ -122,7 +124,7 @@ export function SalonMesas() {
       <div className="flex flex-wrap items-end justify-between gap-3">
         <PageTitle
           title="Mesas"
-          hint="Crea una o varias mesas. Quedan en el API y salen en el salón para pedir."
+          hint="Crea, edita o borra mesas. El número no puede repetirse en la misma sucursal."
         />
         <button
           type="button"
@@ -398,7 +400,11 @@ export function SalonMesas() {
         message="Queda en el API y se ve en el salón."
         confirmLabel={batch ? 'Sí, crear' : 'Sí, guardar'}
         doneTitle={batch ? 'Mesas creadas' : 'Mesa guardada'}
-        doneMessage="Ya están en el salón."
+        doneMessage={
+          batch && createdNums.length
+            ? `Mesas ${createdNums.join(', ')} ya están en el salón.`
+            : 'Ya está en el salón.'
+        }
         onConfirm={() => void (batch ? create() : save())}
         onCancel={() => setDlg(null)}
         onDone={() => {
@@ -412,7 +418,7 @@ export function SalonMesas() {
         open={!!delDlg}
         phase={delDlg || 'confirm'}
         title={`¿Borrar mesa ${removing?.number ?? ''}?`}
-        message="Solo si está libre. No se puede deshacer."
+        message="Solo si está libre. Los pedidos viejos se quedan en historial con el número de mesa."
         confirmLabel="Sí, borrar"
         tone="brick"
         doneTitle="Mesa eliminada"
