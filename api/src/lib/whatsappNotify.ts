@@ -48,6 +48,7 @@ type OrderLike = {
   Address?: string | null
   Total: number
   CodPaymentMethod?: string | null
+  TableNumber?: number | null
   Source?: string | null
   items?: Array<{ Name: string; Qty: number; Price: number }>
 }
@@ -67,9 +68,10 @@ function detalle(order: OrderLike) {
   return items.map((i) => `${i.Qty} ${i.Name}`).join('\n')
 }
 
-function tipoLabel(type: string, address?: string | null) {
+function tipoLabel(type: string, address?: string | null, tableNumber?: number | null) {
   if (type === 'delivery' || type === 'web') return address ? `🛵 Delivery\n📍 ${address}` : '🛵 Delivery'
   if (type === 'llevar') return '🏪 Recojo en local'
+  if (tableNumber) return `🍽️ Mesa ${tableNumber}`
   return '🍽️ Mesa / salón'
 }
 
@@ -103,7 +105,7 @@ export async function notifyOrderCreatedServer(order: OrderLike) {
       `*Detalle:*\n${detalle(order)}\n\n` +
       `Total: *${soles(Number(order.Total))}*\n` +
       `Pago: ${pago}\n` +
-      `${tipoLabel(String(order.Type), order.Address)}\n\n` +
+      `${tipoLabel(String(order.Type), order.Address, order.TableNumber)}\n\n` +
       `📍 *Sigue tu pedido aquí:*\n${track}\n\n` +
       `Te avisaremos cuando esté *listo* y cuando se *entregue*.`
     jobs.push(sendText(phone, text))
@@ -187,11 +189,13 @@ export async function notifyOrderPaidServer(order: OrderLike) {
   const rate = ratingUrl(String(order.Id), phone)
   const carta = `${FRONT_URL}/`
   const mesa =
-    order.Type === 'salon'
-      ? 'en mesa'
-      : order.Type === 'llevar'
-        ? 'para llevar'
-        : 'por delivery'
+    order.TableNumber
+      ? `mesa ${order.TableNumber}`
+      : order.Type === 'salon'
+        ? 'en mesa'
+        : order.Type === 'llevar'
+          ? 'para llevar'
+          : 'por delivery'
 
   const text =
     `🍗 *Chifa-Pollería Lopez*\n` +

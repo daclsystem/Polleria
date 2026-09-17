@@ -8,7 +8,7 @@
  */
 
 import { EscPosBuilder, rowText } from './escpos'
-import { formatDate, formatTime, padOrder, solesPrint } from './format'
+import { formatDate, formatTime, padOrder, reconcileOrderMoney, solesPrint } from './format'
 import { publicWebHost } from './paths'
 import { ticketPublicPhone } from './webSite'
 import type { Order, PrinterConfig, Settings } from '../types'
@@ -83,6 +83,16 @@ function orderMeta(
     lines.push({
       t: 'text',
       text: `MESA ${order.tableNumber}`,
+      align: 'center',
+      bold: true,
+      size: 'double',
+    })
+  } else if (order.type === 'salon') {
+    lines.push({ t: 'text', text: 'SALON', align: 'center', bold: true, size: 'double' })
+  } else {
+    lines.push({
+      t: 'text',
+      text: order.type === 'llevar' ? 'RECOJO' : 'DELIVERY',
       align: 'center',
       bold: true,
       size: 'double',
@@ -255,6 +265,7 @@ export function buildTicketDoc(
   kind: TicketKind,
   cols = 48,
 ): TicketDoc {
+  order = reconcileOrderMoney(order, settings.igvRate)
   if (kind === 'cocina') return buildCocina(order, settings, cols)
   if (kind === 'cuenta') return buildCuenta(order, settings, cols)
   return buildCaja(order, settings, cols)

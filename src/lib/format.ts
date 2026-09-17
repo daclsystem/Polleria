@@ -67,15 +67,35 @@ export function uid(prefix = 'id') {
 }
 
 export function totalsFromItems(items: { qty: number; price: number }[], discount = 0, igvRate = 0.18) {
-  const gross = items.reduce((s, i) => s + i.qty * i.price, 0)
-  const afterDiscount = Math.max(0, gross - discount)
-  const subtotal = afterDiscount / (1 + igvRate)
+  const gross = items.reduce((s, i) => s + Number(i.qty || 0) * Number(i.price || 0), 0)
+  const afterDiscount = Math.max(0, gross - Number(discount || 0))
+  const subtotal = afterDiscount / (1 + (igvRate > 0 ? igvRate : 0.18))
   const igv = afterDiscount - subtotal
   return {
     subtotal: round2(subtotal),
     igv: round2(igv),
     total: round2(afterDiscount),
   }
+}
+
+/** Si el total guardado no cuadra con los ítems, se usa la suma de ítems (menos descuento). */
+export function reconcileOrderMoney<
+  T extends {
+    items?: Array<{ qty: number; price: number }>
+    discount?: number
+    subtotal?: number
+    igv?: number
+    total: number
+  },
+>(order: T, igvRate = 0.18): T {
+  const items = order.items || []
+  if (!items.length) return order
+  const computed = totalsFromItems(items, Number(order.discount) || 0, igvRate)
+  const stored = Number(order.total)
+  if (!Number.isFinite(stored) || Math.abs(stored - computed.total) > 0.01) {
+    return { ...order, subtotal: computed.subtotal, igv: computed.igv, total: computed.total }
+  }
+  return order
 }
 
 export function round2(n: number) {

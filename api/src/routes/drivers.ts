@@ -5,6 +5,7 @@ import { persistablePhotoUrl } from '../photoUrl.js'
 import { authRequired, requireRoles } from '../auth.js'
 import { emitEvent, roomsForOrderStatus } from '../realtime.js'
 import { notifyOrderStatusServer } from '../lib/whatsappNotify.js'
+import { num } from '../lib/money.js'
 
 export const driversRouter = Router()
 
@@ -55,9 +56,9 @@ function mapDeliveryOrder(o: Record<string, unknown>) {
     address: o.Address ? String(o.Address) : undefined,
     addressLat: o.AddressLat != null ? Number(o.AddressLat) : undefined,
     addressLng: o.AddressLng != null ? Number(o.AddressLng) : undefined,
-    total: Number(o.Total),
+    total: num(o.Total),
     paid: Boolean(o.Paid),
-    deliveryFee: Number(o.DeliveryFee || 0),
+    deliveryFee: num(o.DeliveryFee || 0),
     deliveryDistanceKm: o.DeliveryDistanceKm != null ? Number(o.DeliveryDistanceKm) : undefined,
     driverId: o.DriverId ? String(o.DriverId) : undefined,
     driverLat: o.DriverLat != null ? Number(o.DriverLat) : undefined,
@@ -71,7 +72,7 @@ function mapDeliveryOrder(o: Record<string, unknown>) {
     deliveryPhotoUrl: o.DeliveryPhotoUrl ? String(o.DeliveryPhotoUrl) : undefined,
     driverCollectedMethod: o.DriverCollectedMethod ? String(o.DriverCollectedMethod) : undefined,
     driverCollectedAmount:
-      o.DriverCollectedAmount != null ? Number(o.DriverCollectedAmount) : undefined,
+      o.DriverCollectedAmount != null ? num(o.DriverCollectedAmount) : undefined,
     driverSettledAt: o.DriverSettledAt
       ? new Date(o.DriverSettledAt as string).toISOString()
       : undefined,

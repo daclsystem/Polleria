@@ -32,3 +32,12 @@ export function needsDriver(o: Pick<Order, 'type' | 'status' | 'driverId'>) {
     o.status !== 'entregado'
   )
 }
+
+/** Dónde va el pedido: Mesa N, Recojo o Delivery. Siempre hay texto. */
+export function orderPlaceLabel(o: { type?: string; tableNumber?: number | null }) {
+  if (o.tableNumber != null && Number(o.tableNumber) > 0) return `Mesa ${o.tableNumber}`
+  if (isDeliveryOrder(o)) return 'Delivery'
+  if (isPickupOrder(o)) return 'Recojo'
+  if (isSalonOrder(o)) return 'Salón (sin mesa)'
+  return 'Pedido'
+}

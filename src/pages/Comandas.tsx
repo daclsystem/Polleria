@@ -3,13 +3,13 @@ import { useEffect, useMemo, useState } from 'react'
 import { Search } from 'lucide-react'
 import { useStore } from '../store/StoreContext'
 import { useAuth } from '../auth/AuthContext'
-import { formatDateTime, padOrder, soles } from '../lib/format'
+import { formatDateTime, padOrder, reconcileOrderMoney, soles } from '../lib/format'
 import { printTicket } from '../lib/print'
 import { staffLabel } from '../lib/staffLabel'
 import { orderBelongsToStaff } from '../lib/realtime'
 import { apiAssignDriver, apiListDrivers, apiSettleCashier } from '../lib/apiClient'
 import { siteUrl } from '../lib/paths'
-import { isDeliveryOrder, needsDriver } from '../lib/orderType'
+import { isDeliveryOrder, needsDriver, orderPlaceLabel } from '../lib/orderType'
 import type { Driver, Order, OrderStatus } from '../types'
 import { canCharge, isVoidOrder } from '../types'
 import { Empty, Modal, PageTitle, StatusBadge, TypeBadge } from '../components/ui'
@@ -387,22 +387,20 @@ export function Comandas() {
                 <div className="flex items-start justify-between gap-3">
                   <div>
                     <p className="font-display text-xl tracking-tight">{padOrder(o.number)}</p>
+                    <p className="mt-0.5 font-display text-3xl text-ember">{orderPlaceLabel(o)}</p>
                     <p className="text-sm font-medium text-ink/55">{o.customerName}</p>
-                    {o.tableNumber ? (
-                      <p className="mt-0.5 font-display text-2xl text-ember">Mesa {o.tableNumber}</p>
-                    ) : null}
                     <p className="text-xs text-ink/40">Mozo: {staffLabel(o, state.users)}</p>
                   </div>
-                  <p className="font-extrabold text-ember">{soles(o.total)}</p>
+                  <p className="font-extrabold text-ember">
+                    {soles(reconcileOrderMoney(o, state.settings.igvRate).total)}
+                  </p>
                 </div>
                 <div className="mt-3 flex flex-wrap items-center gap-2">
                   <StatusBadge status={o.status} />
                   <TypeBadge type={o.type} />
-                  {o.tableNumber ? (
-                    <span className="rounded-full bg-gold px-2 py-0.5 text-[11px] font-black text-[#1a3d1a]">
-                      Mesa {o.tableNumber}
-                    </span>
-                  ) : null}
+                  <span className="rounded-full bg-gold px-2 py-0.5 text-[11px] font-black text-[#1a3d1a]">
+                    {orderPlaceLabel(o)}
+                  </span>
                   {isDeliveryOrder(o) && !o.driverId && o.status !== 'entregado' && !isVoidOrder(o.status) ? (
                     <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-bold text-amber-900">
                       Sin repartidor
@@ -427,6 +425,7 @@ export function Comandas() {
               <thead className="text-xs tracking-wide text-ink/40 uppercase">
                 <tr>
                   <th className="px-4 py-3">Nº</th>
+                  <th className="px-4 py-3">Mesa / canal</th>
                   <th className="px-4 py-3">Cliente</th>
                   <th className="px-4 py-3">Tipo</th>
                   <th className="px-4 py-3">Estado</th>
@@ -444,17 +443,17 @@ export function Comandas() {
                   >
                     <td className="px-4 py-3 font-semibold">{padOrder(o.number)}</td>
                     <td className="px-4 py-3">
+                      <span className="rounded-full bg-gold px-2.5 py-1 text-xs font-black text-[#1a3d1a]">
+                        {orderPlaceLabel(o)}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3">
                       <p>{o.customerName}</p>
                       <p className="text-xs text-ink/40">{staffLabel(o, state.users)}</p>
                     </td>
                     <td className="px-4 py-3">
                       <div className="flex flex-wrap items-center gap-1.5">
                         <TypeBadge type={o.type} />
-                        {o.tableNumber ? (
-                          <span className="rounded-full bg-gold px-2 py-0.5 text-[10px] font-black text-[#1a3d1a]">
-                            Mesa {o.tableNumber}
-                          </span>
-                        ) : null}
                       </div>
                     </td>
                     <td className="px-4 py-3">
@@ -479,7 +478,9 @@ export function Comandas() {
                       )}
                     </td>
                     <td className="px-4 py-3 text-ink/50">{formatDateTime(o.createdAt)}</td>
-                    <td className="px-4 py-3 text-right font-medium">{soles(o.total)}</td>
+                    <td className="px-4 py-3 text-right font-medium">
+                      {soles(reconcileOrderMoney(o, state.settings.igvRate).total)}
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -490,20 +491,27 @@ export function Comandas() {
 
       <Modal
         open={!!current}
-        title={current ? `Comanda ${padOrder(current.number)}` : ''}
+        title={
+          current
+            ? `Comanda ${padOrder(current.number)} · ${orderPlaceLabel(current)}`
+            : ''
+        }
         onClose={() => setSelected(null)}
         wide
       >
         {current ? (
           <div className="space-y-4">
+            <div className="rounded-2xl bg-gold px-4 py-3 text-center">
+              <p className="text-[11px] font-black tracking-[0.18em] text-[#1a3d1a]/70 uppercase">
+                {current.tableNumber ? 'Mesa' : 'Canal'}
+              </p>
+              <p className="font-display text-4xl font-black tracking-tight text-[#1a3d1a]">
+                {current.tableNumber ? current.tableNumber : orderPlaceLabel(current)}
+              </p>
+            </div>
             <div className="flex flex-wrap gap-2">
               <StatusBadge status={current.status} />
               <TypeBadge type={current.type} />
-              {current.tableNumber ? (
-                <span className="rounded-full bg-gold px-2.5 py-0.5 text-sm font-black text-[#1a3d1a]">
-                  Mesa {current.tableNumber}
-                </span>
-              ) : null}
             </div>
             <p className="text-sm font-semibold text-ink">Mozo: {staffLabel(current, state.users)}</p>
             <p className="text-sm text-ink/60">
@@ -523,7 +531,9 @@ export function Comandas() {
               ))}
             </ul>
             <div className="text-sm text-ink/50">
-              <p className="font-display text-xl text-ink">Total {soles(current.total)}</p>
+              <p className="font-display text-xl text-ink">
+                Total {soles(reconcileOrderMoney(current, state.settings.igvRate).total)}
+              </p>
             </div>
             {current.notes ? <p className="text-sm">Nota: {current.notes}</p> : null}
 
@@ -696,6 +706,7 @@ export function Comandas() {
             ) : null}
             {mayCharge && !current.paid && !isVoidOrder(current.status) ? (
               <CajaCobro
+                key={current.id}
                 order={current}
                 busy={paying}
                 onConfirm={async (payload) => {
@@ -706,7 +717,7 @@ export function Comandas() {
                       updateOrderStatus(current.id, 'entregado')
                     }
                     const paidOrder = {
-                      ...current,
+                      ...reconcileOrderMoney(current, state.settings.igvRate),
                       paid: true,
                       paymentMethod: payload.payments[0]?.method ?? 'efectivo',
                       docTipo: payload.billing.docTipo,

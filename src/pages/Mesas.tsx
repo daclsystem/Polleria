@@ -2,7 +2,7 @@ import { ChevronRight, Plus, Printer, Users } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { useStore } from '../store/StoreContext'
 import { useAuth } from '../auth/AuthContext'
-import { padOrder, soles } from '../lib/format'
+import { padOrder, reconcileOrderMoney, soles } from '../lib/format'
 import { printTicket } from '../lib/print'
 import { staffLabel } from '../lib/staffLabel'
 import { orderBelongsToStaff } from '../lib/realtime'
@@ -121,7 +121,7 @@ export function Mesas() {
                           <div className="text-sm">
                             <p className="font-black">{padOrder(order.number)}</p>
                             <p className="text-xs font-semibold opacity-85">
-                              {soles(order.total)} · {order.items.length} platos
+                              {soles(reconcileOrderMoney(order).total)} · {order.items.length} platos
                             </p>
                             <p className="mt-0.5 text-[11px] font-semibold opacity-80">
                               {staffLabel(order, state.users)}

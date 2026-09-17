@@ -1,8 +1,8 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Plus, X } from 'lucide-react'
 import { Field, inputClass } from './ui'
 import { ConfirmProcess } from './ConfirmProcess'
-import { round2, soles } from '../lib/format'
+import { reconcileOrderMoney, round2, soles } from '../lib/format'
 import type { FiscalDocTipo, Order, PaySplit } from '../types'
 
 type ExtraKind = 'yape' | 'tarjeta'
@@ -33,7 +33,8 @@ export function CajaCobro({
   }) => Promise<void>
   onFinished?: () => void
 }) {
-  const total = round2(order.total)
+  const money = useMemo(() => reconcileOrderMoney(order), [order])
+  const total = round2(money.total)
   const [efectivo, setEfectivo] = useState(total)
   const [extras, setExtras] = useState<{ kind: ExtraKind; amount: number; op: string }[]>([])
   const [docTipo, setDocTipo] = useState<FiscalDocTipo>('ninguno')
@@ -45,6 +46,11 @@ export function CajaCobro({
   const [err, setErr] = useState('')
   const [dlg, setDlg] = useState<'confirm' | 'busy' | 'done' | null>(null)
   const [pending, setPending] = useState<Parameters<typeof onConfirm>[0] | null>(null)
+
+  useEffect(() => {
+    setEfectivo(total)
+    setExtras([])
+  }, [order.id, total])
 
   const extraSum = round2(extras.reduce((s, e) => s + e.amount, 0))
   const suma = round2(efectivo + extraSum)
@@ -135,15 +141,22 @@ export function CajaCobro({
   return (
     <div className="space-y-3 rounded-xl bg-white p-3">
       <p className="text-xs font-semibold uppercase text-ink/40">Cobrar</p>
+      {order.tableNumber ? (
+        <p className="rounded-xl bg-gold px-3 py-2 text-center font-display text-3xl font-black text-[#1a3d1a]">
+          Mesa {order.tableNumber}
+        </p>
+      ) : (
+        <p className="text-sm font-bold text-ink/70">{order.type === 'llevar' ? 'Recojo' : order.type === 'delivery' || order.type === 'web' ? 'Delivery' : 'Salón'}</p>
+      )}
       {isFactura ? (
         <div className="space-y-0.5 text-sm text-ink/55">
           <p className="flex justify-between">
             <span>Op. gravadas</span>
-            <span>{soles(order.subtotal)}</span>
+            <span>{soles(money.subtotal)}</span>
           </p>
           <p className="flex justify-between">
             <span>IGV incluido</span>
-            <span>{soles(order.igv)}</span>
+            <span>{soles(money.igv)}</span>
           </p>
           <p className="font-display text-2xl tracking-tight text-ember">{soles(total)}</p>
         </div>

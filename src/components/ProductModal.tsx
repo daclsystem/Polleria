@@ -67,8 +67,8 @@ export function ProductModal({ product, suggestions, onAdd, onAddSuggestion, onC
     }
   }, [product.id])
 
-  const optionsTotal = selected.reduce((s, o) => s + o.price, 0)
-  const unitPrice = product.price + optionsTotal
+  const optionsTotal = selected.reduce((s, o) => s + (Number(o.price) || 0), 0)
+  const unitPrice = (Number(product.price) || 0) + optionsTotal
   const total = unitPrice * qty
   const summaryStep = groups.length
   const currentGroup: ProductOptionGroup | null =

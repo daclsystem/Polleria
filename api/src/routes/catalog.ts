@@ -2,6 +2,7 @@ import { Router } from 'express'
 import { v4 as uuid } from 'uuid'
 import { getPool, sql } from '../db.js'
 import { authRequired } from '../auth.js'
+import { num, pickOrderMoney } from '../lib/money.js'
 
 export const catalogRouter = Router()
 
@@ -57,8 +58,8 @@ function mapProduct(r: Record<string, unknown>) {
     name: r.Name,
     description: r.Description || '',
     category,
-    price: Number(r.Price),
-    originalPrice: r.OriginalPrice != null ? Number(r.OriginalPrice) : undefined,
+    price: num(r.Price),
+    originalPrice: r.OriginalPrice != null ? num(r.OriginalPrice) : undefined,
     emoji: r.Emoji || '🍗',
     tone: r.Tone || '#E85D04',
     imageUrl: r.ImageUrl || undefined,
@@ -313,7 +314,7 @@ async function attachProductExtras<T extends ReturnType<typeof mapProduct>>(prod
       list.push({
         id: String(o.Id),
         name: String(o.Name),
-        price: Number(o.Price),
+        price: num(o.Price),
         ...(inventoryId
           ? { inventoryId, qtyPerUnit: Number(o.QtyPerUnit || 1) }
           : {}),
@@ -446,6 +447,8 @@ function mapTable(r: Record<string, unknown>) {
 function mapOrder(r: Record<string, unknown>, items: unknown[] = []) {
   const userId = r.CreatedByUserId ? String(r.CreatedByUserId) : undefined
   const byName = r.CreatedByName ? String(r.CreatedByName) : undefined
+  const itemRows = items as Array<{ qty?: unknown; price?: unknown }>
+  const money = pickOrderMoney(r, itemRows)
   return {
     id: String(r.Id),
     number: Number(r.Number),
@@ -458,10 +461,10 @@ function mapOrder(r: Record<string, unknown>, items: unknown[] = []) {
     customerId: r.CustomerId ? String(r.CustomerId) : undefined,
     address: r.Address || undefined,
     items,
-    discount: Number(r.Discount || 0),
-    subtotal: Number(r.Subtotal),
-    igv: Number(r.Igv),
-    total: Number(r.Total),
+    discount: money.discount,
+    subtotal: money.subtotal,
+    igv: money.igv,
+    total: money.total,
     paymentMethod: r.Paid ? 'efectivo' : 'pendiente',
     paid: Boolean(r.Paid),
     codPaymentMethod: r.CodPaymentMethod ? String(r.CodPaymentMethod) : undefined,
@@ -533,8 +536,8 @@ catalogRouter.get('/bootstrap', authRequired, async (_req, res) => {
           id: String(it.Id),
           productId: it.ProductId ? String(it.ProductId) : 'x',
           name: it.Name,
-          qty: Number(it.Qty),
-          price: Number(it.Price),
+          qty: num(it.Qty),
+          price: num(it.Price),
           notes: it.Notes || undefined,
           kitchenStatus: it.KitchenStatus ? String(it.KitchenStatus) : undefined,
           stockDeducted: Boolean(it.StockDeducted),
@@ -567,10 +570,10 @@ catalogRouter.get('/bootstrap', authRequired, async (_req, res) => {
         id: String(r.Id),
         name: r.Name,
         unit: r.Unit,
-        stock: Number(r.Stock),
-        minStock: Number(r.MinStock),
-        cost: Number(r.Cost),
-        salePrice: r.SalePrice != null ? Number(r.SalePrice) : undefined,
+        stock: num(r.Stock),
+        minStock: num(r.MinStock),
+        cost: num(r.Cost),
+        salePrice: r.SalePrice != null ? num(r.SalePrice) : undefined,
       })),
       settings: {
         name: s.Name || 'Chifa-Pollería Lopez',

@@ -1,4 +1,4 @@
-import { formatDate, formatDateTime, formatTime, padOrder, solesPrint } from './format'
+import { formatDate, formatDateTime, formatTime, padOrder, reconcileOrderMoney, solesPrint } from './format'
 import { getDeviceOS } from './platform'
 import { printRawbt, sendToPrinter } from './printer-driver'
 import { defaultPrinterSetup, loadPrinterSetup } from './printerStore'
@@ -79,6 +79,7 @@ function headerContactHtml(settings: Settings) {
 }
 
 export function ticketHtml(order: Order, settings: Settings, kind: TicketKind) {
+  order = reconcileOrderMoney(order, settings.igvRate)
   const printedAt = new Date().toISOString()
   const heading =
     kind === 'cocina'
@@ -120,7 +121,9 @@ export function ticketHtml(order: Order, settings: Settings, kind: TicketKind) {
 
   const mesa = order.tableNumber
     ? `<p class="center mesa">MESA ${esc(String(order.tableNumber))}</p>`
-    : ''
+    : order.type === 'salon'
+      ? `<p class="center mesa">SALON</p>`
+      : `<p class="center big">${esc(order.type === 'llevar' ? 'RECOJO' : 'DELIVERY')}</p>`
 
   const inner = `
     <div class="center">

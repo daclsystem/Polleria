@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { Bike, CalendarRange, MapPin, Search, ShoppingBag, Table2, Trash2, UtensilsCrossed } from 'lucide-react'
 import { useAuth } from '../auth/AuthContext'
 import { useStore } from '../store/StoreContext'
-import { formatDateTime, padOrder, soles } from '../lib/format'
+import { formatDateTime, padOrder, reconcileOrderMoney, soles } from '../lib/format'
 import { filterKitchenItems } from '../lib/kitchen'
 import { staffLabel } from '../lib/staffLabel'
 import {
@@ -319,7 +319,9 @@ export function PedidosWeb({ vista = 'curso' }: { vista?: 'curso' | 'historial' 
                       {mins} min
                     </p>
                   ) : null}
-                  <p className="mt-1 font-black text-ember">{soles(o.total)}</p>
+                  <p className="mt-1 font-black text-ember">
+                    {soles(reconcileOrderMoney(o).total)}
+                  </p>
                   {o.paid ? (
                     <p className="text-[11px] font-bold text-emerald-700 uppercase">Pagado</p>
                   ) : o.codPaymentMethod ? (

@@ -217,7 +217,7 @@ export function Pos() {
     setItems((prev) => {
       const found = prev.find((i) => i.productId === p.id && !i.notes)
       if (found) return prev.map((i) => (i === found ? { ...i, qty: i.qty + 1 } : i))
-      return [...prev, { productId: p.id, name: p.name, qty: 1, price: p.price }]
+      return [...prev, { productId: p.id, name: p.name, qty: 1, price: Number(p.price) || 0 }]
     })
   }
 

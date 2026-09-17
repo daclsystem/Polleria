@@ -8,7 +8,7 @@ import {
   useState,
   type ReactNode,
 } from 'react'
-import { totalsFromItems, uid } from '../lib/format'
+import { reconcileOrderMoney, totalsFromItems, uid } from '../lib/format'
 import { enrichProducts } from '../lib/enrichProducts'
 import {
   apiAddOrderItems,
@@ -335,7 +335,12 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         tables: data.tables as Table[],
         inventory: data.inventory as InventoryItem[],
         settings: data.settings as Settings,
-        orders: mergeOrdersKitchenWaves(data.orders as Order[], prev.orders),
+        orders: mergeOrdersKitchenWaves(
+          (data.orders as Order[]).map((o) =>
+            reconcileOrderMoney(o, (data.settings as Settings)?.igvRate),
+          ),
+          prev.orders,
+        ),
         customers: data.customers as Customer[],
         reservations: data.reservations as Reservation[],
         branches: data.branches as AppState['branches'],
@@ -747,43 +752,38 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const addItemsToOrder = useCallback(
     (id: string, newItems: OrderItem[], createdBy: string) => {
       requireApi()
-      let money = { subtotal: 0, igv: 0, total: 0 }
-      let discount = 0
-      const kitchenNew = filterKitchenItems(newItems, stateRef.current.products)
-      patchLocal((prev) => {
-        const order = prev.orders.find((o) => o.id === id)
-        if (!order) return prev
-        const mergedItems = [...order.items]
-        for (const item of newItems) {
-          const goesKitchen = filterKitchenItems([item], prev.products).length > 0
-          mergedItems.push({
-            ...item,
-            kitchenStatus: goesKitchen ? 'pendiente' : null,
-          })
-        }
-        money = totalsFromItems(mergedItems, order.discount, prev.settings.igvRate)
-        discount = order.discount
-        // No reiniciar comanda entera: si ya estaba en fuego, se queda; adicionales van como pendiente
-        let nextStatus = order.status
-        if (kitchenNew.length > 0 && (order.status === 'listo' || order.status === 'entregado')) {
-          nextStatus = 'nuevo'
-        }
-        return {
-          ...prev,
-          orders: prev.orders.map((o) =>
-            o.id === id
-              ? {
-                  ...o,
-                  items: mergedItems,
-                  ...money,
-                  status: nextStatus,
-                  updatedAt: new Date().toISOString(),
-                  createdBy: `${o.createdBy} / ${createdBy}`,
-                }
-              : o,
-          ),
-        }
-      })
+      const snapshot = stateRef.current
+      const order = snapshot.orders.find((o) => o.id === id)
+      if (!order) return
+      const kitchenNew = filterKitchenItems(newItems, snapshot.products)
+      const mergedItems = [...order.items]
+      for (const item of newItems) {
+        const goesKitchen = filterKitchenItems([item], snapshot.products).length > 0
+        mergedItems.push({
+          ...item,
+          kitchenStatus: goesKitchen ? 'pendiente' : null,
+        })
+      }
+      const money = totalsFromItems(mergedItems, order.discount, snapshot.settings.igvRate)
+      let nextStatus = order.status
+      if (kitchenNew.length > 0 && (order.status === 'listo' || order.status === 'entregado')) {
+        nextStatus = 'nuevo'
+      }
+      patchLocal((prev) => ({
+        ...prev,
+        orders: prev.orders.map((o) =>
+          o.id === id
+            ? {
+                ...o,
+                items: mergedItems,
+                ...money,
+                status: nextStatus,
+                updatedAt: new Date().toISOString(),
+                createdBy: `${o.createdBy} / ${createdBy}`,
+              }
+            : o,
+        ),
+      }))
       void apiAddOrderItems(
         id,
         newItems.map((i) => ({
@@ -794,7 +794,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           notes: i.notes,
           options: i.selectedOptions,
         })),
-        { ...money, discount },
+        { ...money, discount: order.discount },
       )
         .then(() => reloadFromApi())
         .catch((e) => setApiError((e as Error).message))
@@ -821,7 +821,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     ) => {
       requireApi()
       const current = stateRef.current.orders.find((o) => o.id === id)
-      const amount = current?.total ?? 0
+      const amount = current
+        ? reconcileOrderMoney(current, stateRef.current.settings.igvRate).total
+        : 0
       const payload =
         typeof input === 'string'
           ? {

@@ -17,6 +17,7 @@ import {
   customerCouponUses,
   loadCouponByCode,
 } from './coupons.js'
+import { moneyFromItemLines, num, persistOrderTotals, pickOrderMoney } from '../lib/money.js'
 
 export const ordersRouter = Router()
 
@@ -136,6 +137,8 @@ function mapTrackOrder(
   } | null,
   localWhatsapp?: string,
 ) {
+  const itemRows = items as Array<Record<string, unknown>>
+  const money = pickOrderMoney(order, itemRows)
   return {
     id: String(order.Id),
     number: Number(order.Number),
@@ -150,13 +153,13 @@ function mapTrackOrder(
     addressLng: order.AddressLng != null ? Number(order.AddressLng) : undefined,
     items: (items as Array<Record<string, unknown>>).map((it) => ({
       name: it.Name,
-      qty: Number(it.Qty),
-      price: Number(it.Price),
+      qty: num(it.Qty),
+      price: num(it.Price),
     })),
-    discount: Number(order.Discount || 0),
-    subtotal: Number(order.Subtotal),
-    igv: Number(order.Igv),
-    total: Number(order.Total),
+    discount: money.discount,
+    subtotal: money.subtotal,
+    igv: money.igv,
+    total: money.total,
     paid: Boolean(order.Paid),
     deliveryFee: Number(order.DeliveryFee || 0),
     driverId: order.DriverId ? String(order.DriverId) : undefined,
@@ -312,10 +315,11 @@ ordersRouter.get('/mine', authRequired, async (req, res) => {
         id: String(it.Id || it.id || ''),
         productId: it.ProductId ? String(it.ProductId) : 'x',
         name: String(it.Name || ''),
-        qty: Number(it.Qty || 0),
-        price: Number(it.Price || 0),
+        qty: num(it.Qty || 0),
+        price: num(it.Price || 0),
         notes: it.Notes ? String(it.Notes) : undefined,
       }))
+      const money = pickOrderMoney(full as Record<string, unknown>, items)
       orders.push({
         id: String(full.Id),
         number: Number(full.Number),
@@ -326,10 +330,10 @@ ordersRouter.get('/mine', authRequired, async (req, res) => {
         customerId: full.CustomerId ? String(full.CustomerId) : u.id,
         address: full.Address || undefined,
         items,
-        discount: Number(full.Discount || 0),
-        subtotal: Number(full.Subtotal),
-        igv: Number(full.Igv),
-        total: Number(full.Total),
+        discount: money.discount,
+        subtotal: money.subtotal,
+        igv: money.igv,
+        total: money.total,
         paymentMethod: full.Paid ? 'efectivo' : 'pendiente',
         paid: Boolean(full.Paid),
         codPaymentMethod: full.CodPaymentMethod || undefined,
@@ -485,7 +489,15 @@ ordersRouter.post('/', async (req, res) => {
     body.subtotal = Math.round((after / (1 + igvRate)) * 100) / 100
     body.igv = Math.round((after - body.subtotal) * 100) / 100
     body.discount = appliedDiscount
-    if (body.codPaymentMethod === 'efectivo') body.codCashAmount = after
+    if (body.codPaymentMethod === 'efectivo')     body.codCashAmount = after
+  }
+
+  const computedMoney = moneyFromItemLines(body.items, appliedDiscount)
+  body.subtotal = computedMoney.subtotal
+  body.igv = computedMoney.igv
+  body.total = computedMoney.total
+  if (body.codPaymentMethod === 'efectivo' && !(num(body.codCashAmount) > 0)) {
+    body.codCashAmount = computedMoney.total
   }
 
   const pool = await getPool()
@@ -557,7 +569,7 @@ ordersRouter.post('/', async (req, res) => {
         .input('productId', sql.UniqueIdentifier, item.productId || null)
         .input('name', sql.NVarChar, item.name)
         .input('qty', sql.Int, item.qty)
-        .input('price', sql.Decimal(10, 2), item.price)
+        .input('price', sql.Decimal(10, 2), num(item.price))
         .input('notes', sql.NVarChar, item.notes || null)
         .input('sort', sql.Int, sort++)
         .input('kitchenStatus', sql.NVarChar, kStatus)
@@ -573,13 +585,15 @@ ordersRouter.post('/', async (req, res) => {
           .input('groupId', sql.UniqueIdentifier, opt.groupId || null)
           .input('optionId', sql.UniqueIdentifier, opt.optionId || null)
           .input('name', sql.NVarChar, opt.name)
-          .input('price', sql.Decimal(10, 2), opt.price)
+          .input('price', sql.Decimal(10, 2), num(opt.price))
           .query(`
             INSERT INTO dbo.OrderItemOptions (Id, OrderItemId, GroupId, OptionId, Name, Price)
             VALUES (@id, @itemId, @groupId, @optionId, @name, @price)
           `)
       }
     }
+
+    await persistOrderTotals(tx, orderId, appliedDiscount)
 
     if (body.tableId) {
       await new sql.Request(tx)
@@ -627,6 +641,7 @@ ordersRouter.post('/', async (req, res) => {
       CustomerName: (order as { CustomerName: string }).CustomerName,
       CustomerPhone: (order as { CustomerPhone?: string }).CustomerPhone,
       Address: (order as { Address?: string }).Address,
+      TableNumber: (order as { TableNumber?: number }).TableNumber ?? body.tableNumber ?? null,
       Total: (order as { Total: number }).Total,
       CodPaymentMethod: (order as { CodPaymentMethod?: string }).CodPaymentMethod,
       Source: (order as { Source?: string }).Source || body.source,
@@ -888,7 +903,7 @@ ordersRouter.post('/:id/items', authRequired, async (req, res) => {
         .input('productId', sql.UniqueIdentifier, item.productId || null)
         .input('name', sql.NVarChar, item.name)
         .input('qty', sql.Int, item.qty)
-        .input('price', sql.Decimal(10, 2), item.price)
+        .input('price', sql.Decimal(10, 2), num(item.price))
         .input('notes', sql.NVarChar, item.notes || null)
         .input('sort', sql.Int, sort++)
         .input('kitchenStatus', sql.NVarChar, kStatus)
@@ -904,7 +919,7 @@ ordersRouter.post('/:id/items', authRequired, async (req, res) => {
           .input('groupId', sql.UniqueIdentifier, opt.groupId || null)
           .input('optionId', sql.UniqueIdentifier, opt.optionId || null)
           .input('name', sql.NVarChar, opt.name)
-          .input('price', sql.Decimal(10, 2), opt.price)
+          .input('price', sql.Decimal(10, 2), num(opt.price))
           .query(`
             INSERT INTO dbo.OrderItemOptions (Id, OrderItemId, GroupId, OptionId, Name, Price)
             VALUES (@id, @itemId, @groupId, @optionId, @name, @price)
@@ -912,24 +927,9 @@ ordersRouter.post('/:id/items', authRequired, async (req, res) => {
       }
     }
 
-    if (totals) {
-      await new sql.Request(tx)
-        .input('id', sql.UniqueIdentifier, orderId)
-        .input('discount', sql.Decimal(10, 2), totals.discount ?? existing.Discount)
-        .input('subtotal', sql.Decimal(10, 2), totals.subtotal)
-        .input('igv', sql.Decimal(10, 2), totals.igv)
-        .input('total', sql.Decimal(10, 2), totals.total)
-        .query(`
-          UPDATE dbo.Orders
-          SET Discount=@discount, Subtotal=@subtotal, Igv=@igv, Total=@total,
-              UpdatedAt=SYSUTCDATETIME()
-          WHERE Id=@id
-        `)
-    } else {
-      await new sql.Request(tx)
-        .input('id', sql.UniqueIdentifier, orderId)
-        .query(`UPDATE dbo.Orders SET UpdatedAt=SYSUTCDATETIME() WHERE Id=@id`)
-    }
+    const discountForTotals =
+      totals?.discount != null ? num(totals.discount) : num(existing.Discount)
+    await persistOrderTotals(tx, orderId, discountForTotals)
 
     // Adicionales de prep: NO reinician toda la comanda.
     // Si ya estaba en fuego/listo, se mantiene; solo hay ítems "pendiente" nuevos.
@@ -996,10 +996,12 @@ ordersRouter.post('/:id/payments', authRequired, async (req, res) => {
   const existing = await loadOrder(paramId(req.params.id))
   if (!existing) return res.status(404).json({ error: 'Pedido no encontrado' })
 
-  const already = (existing.payments as Array<{ Amount: number }>).reduce((s, x) => s + Number(x.Amount), 0)
-  const incoming = payments.reduce((s, p) => s + Number(p.amount), 0)
+  const already = (existing.payments as Array<{ Amount: number }>).reduce((s, x) => s + num(x.Amount), 0)
+  const incoming = payments.reduce((s, p) => s + num(p.amount), 0)
   const totalPaid = already + incoming
-  const orderTotal = Number(existing.Total)
+  const items = (existing.items as Array<{ Qty: number; Price: number }>) || []
+  const money = pickOrderMoney(existing as Record<string, unknown>, items)
+  const orderTotal = money.total
 
   if (totalPaid > orderTotal + 0.01) {
     return res.status(400).json({ error: 'La suma de pagos supera el total' })
@@ -1008,6 +1010,10 @@ ordersRouter.post('/:id/payments', authRequired, async (req, res) => {
   const tx = new sql.Transaction(pool)
   await tx.begin()
   try {
+    if (Math.abs(num(existing.Total) - orderTotal) > 0.01) {
+      await persistOrderTotals(tx, paramId(req.params.id), money.discount)
+    }
+
     for (const p of payments) {
       const change =
         p.method === 'efectivo' && p.cashTendered != null
@@ -1093,6 +1099,7 @@ ordersRouter.post('/:id/payments', authRequired, async (req, res) => {
           CustomerPhone: paidOrder.CustomerPhone ? String(paidOrder.CustomerPhone) : null,
           Address: paidOrder.Address ? String(paidOrder.Address) : null,
           Total: Number(paidOrder.Total),
+          TableNumber: paidOrder.TableNumber != null ? Number(paidOrder.TableNumber) : null,
           CodPaymentMethod: paidOrder.CodPaymentMethod ? String(paidOrder.CodPaymentMethod) : null,
           Source: paidOrder.Source ? String(paidOrder.Source) : null,
           items: Array.isArray(paidOrder.items)

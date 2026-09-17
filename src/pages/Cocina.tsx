@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Bike, ChevronLeft, ChevronRight, Clock, Volume2 } from 'lucide-react'
 import { elapsedMinutes, padOrder } from '../lib/format'
+import { orderPlaceLabel } from '../lib/orderType'
 import { playSound, unlockSounds } from '../lib/sounds'
 import {
   filterKitchenItems,
@@ -296,12 +297,7 @@ function KitchenCard({
           ? 'Listo p/ repartir'
           : 'Entregar'
   const badge = typeBadge(order)
-  const who =
-    isDelivery
-      ? order.customerName || 'Cliente'
-      : order.tableNumber
-        ? `Mesa ${order.tableNumber}`
-        : order.customerName || 'Cliente'
+  const who = orderPlaceLabel(order)
 
   return (
     <article
@@ -318,8 +314,9 @@ function KitchenCard({
               <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-bold text-emerald-800">APP</span>
             ) : null}
           </div>
-          <p className="mt-1 truncate text-xs text-ink/55">
-            {who}
+          <p className="mt-1 font-display text-3xl tracking-tight text-ember">{who}</p>
+          <p className="truncate text-xs text-ink/55">
+            {order.customerName || 'Cliente'}
             {' · '}
             {staffLabel(order, state.users)}
             {isDelivery && order.driverId ? (
