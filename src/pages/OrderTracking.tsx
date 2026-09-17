@@ -84,6 +84,7 @@ const STATUS_NOTIFY: Record<string, string> = {
   en_camino: 'Tu pedido va en camino',
   entregado: 'Pedido entregado. ¡Buen provecho!',
   cancelado: 'Tu pedido fue cancelado',
+  eliminado: 'Este pedido fue anulado',
 }
 
 function isDeliveryType(type?: string) {
@@ -99,7 +100,7 @@ function stepIndex(
   status: string,
   opts: { isDelivery: boolean; hasDriver: boolean },
 ) {
-  if (status === 'cancelado') return -1
+  if (status === 'cancelado' || status === 'eliminado') return -1
   if (!opts.isDelivery) {
     const i = STEPS_PICKUP.findIndex((s) => s.key === status)
     return i >= 0 ? i : 0
@@ -300,8 +301,10 @@ export function OrderTracking() {
 
       <main className="-mt-4 space-y-4 px-4 pb-10">
         <section className="rounded-2xl bg-white p-5 shadow-sm ring-1 ring-black/5">
-          {order.status === 'cancelado' ? (
-            <p className="rounded-xl bg-red-50 px-3 py-2 text-sm font-semibold text-red-700">Pedido cancelado</p>
+          {order.status === 'cancelado' || order.status === 'eliminado' ? (
+            <p className="rounded-xl bg-red-50 px-3 py-2 text-sm font-semibold text-red-700">
+              {order.status === 'eliminado' ? 'Pedido anulado' : 'Pedido cancelado'}
+            </p>
           ) : (
             <ol className="space-y-4">
               {steps.map((s, i) => {
@@ -356,7 +359,7 @@ export function OrderTracking() {
           )}
         </section>
 
-        {isDelivery && order.status !== 'cancelado' ? (
+        {isDelivery && order.status !== 'cancelado' && order.status !== 'eliminado' ? (
           <section className="overflow-hidden rounded-2xl bg-white shadow-sm ring-1 ring-black/5">
             <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-3">
               <div className="flex items-center gap-2 text-sm font-bold text-gray-800">

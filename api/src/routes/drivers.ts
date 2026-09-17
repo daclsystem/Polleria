@@ -403,7 +403,7 @@ driversRouter.post('/me/arrived', authRequired, async (req, res) => {
       .query(`SELECT TOP 1 * FROM dbo.Orders WHERE Id=@id AND DriverId=@driverId`)
     const row = existing.recordset[0]
     if (!row) return res.status(404).json({ error: 'Pedido no asignado a ti' })
-    if (row.Status === 'cancelado') return res.status(400).json({ error: 'Pedido cancelado' })
+    if (row.Status === 'cancelado' || row.Status === 'eliminado') return res.status(400).json({ error: 'Pedido cancelado' })
     if (row.Status === 'entregado') return res.json({ ok: true, order: mapDeliveryOrder(row) })
 
     await pool
@@ -450,7 +450,7 @@ driversRouter.post('/me/delivered', authRequired, async (req, res) => {
     if (row.Status === 'entregado') {
       return res.json({ ok: true, order: mapDeliveryOrder(row) })
     }
-    if (row.Status === 'cancelado') return res.status(400).json({ error: 'Pedido cancelado' })
+    if (row.Status === 'cancelado' || row.Status === 'eliminado') return res.status(400).json({ error: 'Pedido cancelado' })
     if (!row.DriverArrivedAt) {
       return res.status(400).json({ error: 'Primero marca Ubicado en el domicilio' })
     }

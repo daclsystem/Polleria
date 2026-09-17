@@ -3,16 +3,17 @@ import { Link } from 'react-router-dom'
 import { useAuth } from '../auth/AuthContext'
 import { useStore } from '../store/StoreContext'
 import { elapsedMinutes, formatTime, isSameDay, limaYmd, padOrder, soles } from '../lib/format'
+import { isVoidOrder } from '../types'
 import { PageTitle, StatusBadge, TypeBadge } from '../components/ui'
 
 export function Dashboard() {
   const { state } = useStore()
   const { can, actingRole } = useAuth()
-  const today = state.orders.filter((o) => isSameDay(o.createdAt) && o.status !== 'cancelado')
+  const today = state.orders.filter((o) => isSameDay(o.createdAt) && !isVoidOrder(o.status))
   const sales = today.filter((o) => o.paid).reduce((s, o) => s + o.total, 0)
   const tickets = today.length
   const paidCount = today.filter((o) => o.paid).length
-  const pendingPay = state.orders.filter((o) => !o.paid && o.status !== 'cancelado').length
+  const pendingPay = state.orders.filter((o) => !o.paid && !isVoidOrder(o.status)).length
   const avg = paidCount ? sales / paidCount : 0
   const kitchen = state.orders.filter((o) => o.status === 'nuevo' || o.status === 'en_cocina').length
   const isCajero = actingRole === 'cajero'
@@ -22,7 +23,7 @@ export function Dashboard() {
     d.setDate(d.getDate() - (6 - i))
     const key = limaYmd(d)
     const total = state.orders
-      .filter((o) => limaYmd(o.createdAt) === key && o.paid && o.status !== 'cancelado')
+      .filter((o) => limaYmd(o.createdAt) === key && o.paid && !isVoidOrder(o.status))
       .reduce((s, o) => s + o.total, 0)
     return {
       key,

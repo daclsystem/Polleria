@@ -1,7 +1,12 @@
 export type Role = 'admin' | 'cajero' | 'cocina' | 'mozo'
 
 export type OrderType = 'salon' | 'llevar' | 'delivery' | 'web'
-export type OrderStatus = 'nuevo' | 'en_cocina' | 'listo' | 'entregado' | 'cancelado'
+export type OrderStatus = 'nuevo' | 'en_cocina' | 'listo' | 'entregado' | 'cancelado' | 'eliminado'
+
+/** Cancelado por operación o eliminado por admin (no se borra el registro). */
+export function isVoidOrder(status?: OrderStatus | string | null) {
+  return status === 'cancelado' || status === 'eliminado'
+}
 export type PaymentMethod = 'efectivo' | 'yape' | 'tarjeta' | 'pendiente'
 export type TableStatus = 'libre' | 'ocupada' | 'cuenta'
 
@@ -410,4 +415,5 @@ export const STATUS_LABEL: Record<OrderStatus, string> = {
   listo: 'Listo',
   entregado: 'Entregado',
   cancelado: 'Cancelado',
+  eliminado: 'Eliminado',
 }

@@ -1,4 +1,4 @@
-import type { Order } from '../types'
+import { isVoidOrder, type Order } from '../types'
 import { isDeliveryOrder, isPickupOrder, isSalonOrder } from './orderType'
 import { orderBelongsToStaff } from './realtime'
 
@@ -10,9 +10,9 @@ export function channelOf(o: Order): OrderChannel {
   return 'delivery'
 }
 
-/** Local pagado, o delivery liquidado en caja, o cancelado → sale del tablero del mozo. */
+/** Local pagado, o delivery liquidado en caja, o anulado → sale del tablero. */
 export function isClosedForMozo(o: Order) {
-  if (o.status === 'cancelado') return true
+  if (isVoidOrder(o.status)) return true
   if (isDeliveryOrder(o)) return Boolean(o.driverSettledAt)
   return o.paid === true
 }
@@ -45,5 +45,6 @@ export function mozoSeesActive(o: Order, user: { id?: string; name?: string } | 
 }
 
 export function mozoSeesHistory(o: Order, user: { id?: string; name?: string } | null | undefined) {
+  if (o.status === 'eliminado') return false
   return isClosedForMozo(o) && orderBelongsToStaff(o, user)
 }

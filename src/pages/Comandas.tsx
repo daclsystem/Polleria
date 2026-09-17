@@ -11,7 +11,7 @@ import { apiAssignDriver, apiListDrivers, apiSettleCashier } from '../lib/apiCli
 import { siteUrl } from '../lib/paths'
 import { isDeliveryOrder, needsDriver } from '../lib/orderType'
 import type { Driver, Order, OrderStatus } from '../types'
-import { canCharge } from '../types'
+import { canCharge, isVoidOrder } from '../types'
 import { Empty, Modal, PageTitle, StatusBadge, TypeBadge } from '../components/ui'
 import { CajaCobro } from '../components/CajaCobro'
 import { CajaCierre } from '../components/CajaCierre'
@@ -65,15 +65,15 @@ function todayYmd() {
 }
 
 function isPendingPayment(o: Order) {
-  return !o.paid && o.status !== 'cancelado'
+  return !o.paid && !isVoidOrder(o.status)
 }
 
 /** Mozo: sus mesas + delivery activos (asignar repartidor) + recojos activos. */
 function mozoCanSeeOrder(o: Order, user: { id?: string; name?: string }) {
   if (orderBelongsToStaff(o, user)) return true
-  if (isDeliveryOrder(o) && o.status !== 'cancelado' && o.status !== 'entregado') return true
-  if (o.type === 'llevar' && o.status !== 'cancelado' && o.status !== 'entregado') return true
-  if (o.type === 'salon' && o.source === 'web' && o.status !== 'cancelado' && o.status !== 'entregado') return true
+  if (isDeliveryOrder(o) && !isVoidOrder(o.status) && o.status !== 'entregado') return true
+  if (o.type === 'llevar' && !isVoidOrder(o.status) && o.status !== 'entregado') return true
+  if (o.type === 'salon' && o.source === 'web' && !isVoidOrder(o.status) && o.status !== 'entregado') return true
   return false
 }
 
@@ -152,7 +152,7 @@ export function Comandas() {
       state.orders.filter(
         (o) =>
           o.type === 'llevar' &&
-          o.status !== 'cancelado' &&
+          !isVoidOrder(o.status) &&
           o.status !== 'entregado' &&
           (!isMozo || !user || mozoCanSeeOrder(o, user)),
       ).length,
@@ -200,17 +200,17 @@ export function Comandas() {
         if (filter === 'por_cobrar') return isPendingPayment(o)
         if (filter === 'liquidar_caja') return needsCashierSettle(o)
         if (filter === 'historial') {
-          if (!o.paid || o.status === 'cancelado') return false
+          if (!o.paid || isVoidOrder(o.status)) return false
           const t = new Date(o.updatedAt || o.createdAt).getTime()
           return t >= limaDayStart(cobroFrom).getTime() && t < limaDayEnd(cobroTo).getTime()
         }
         if (filter === 'delivery') {
-          return isDeliveryOrder(o) && o.status !== 'cancelado' && o.status !== 'entregado'
+          return isDeliveryOrder(o) && !isVoidOrder(o.status) && o.status !== 'entregado'
         }
         if (filter === 'recojo') {
-          return o.type === 'llevar' && o.status !== 'cancelado' && o.status !== 'entregado'
+          return o.type === 'llevar' && !isVoidOrder(o.status) && o.status !== 'entregado'
         }
-        if (filter === 'todas') return true
+        if (filter === 'todas') return o.status !== 'eliminado'
         return o.status === filter
       })
       .filter((o) => {
@@ -403,7 +403,7 @@ export function Comandas() {
                       Mesa {o.tableNumber}
                     </span>
                   ) : null}
-                  {isDeliveryOrder(o) && !o.driverId && o.status !== 'entregado' && o.status !== 'cancelado' ? (
+                  {isDeliveryOrder(o) && !o.driverId && o.status !== 'entregado' && !isVoidOrder(o.status) ? (
                     <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-bold text-amber-900">
                       Sin repartidor
                     </span>
@@ -412,7 +412,7 @@ export function Comandas() {
                       Con repartidor
                     </span>
                   ) : null}
-                  {!o.paid && o.status !== 'cancelado' ? (
+                  {!o.paid && !isVoidOrder(o.status) ? (
                     <span className="rounded-full bg-ember/15 px-2 py-0.5 text-[11px] font-bold text-ember">
                       {o.source === 'web' || o.type === 'delivery' ? 'Pend. liquidación' : 'Por cobrar'}
                     </span>
@@ -460,7 +460,7 @@ export function Comandas() {
                     <td className="px-4 py-3">
                       <div className="flex flex-wrap items-center gap-1.5">
                         <StatusBadge status={o.status} />
-                        {isDeliveryOrder(o) && !o.driverId && o.status !== 'entregado' && o.status !== 'cancelado' ? (
+                        {isDeliveryOrder(o) && !o.driverId && o.status !== 'entregado' && !isVoidOrder(o.status) ? (
                           <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold text-amber-900">
                             Sin repartidor
                           </span>
@@ -529,7 +529,7 @@ export function Comandas() {
 
             {(current.type === 'delivery' || current.type === 'web') &&
             current.address &&
-            current.status !== 'cancelado' &&
+            !isVoidOrder(current.status) &&
             current.status !== 'entregado' ? (
               <div className="rounded-xl bg-teal-50 p-3">
                 <p className="mb-1 text-xs font-semibold tracking-wide text-teal-800 uppercase">
@@ -638,7 +638,7 @@ export function Comandas() {
 
             {current.paid ? <PrintOrderActions order={current} /> : null}
 
-            {current.status !== 'cancelado' && current.status !== 'entregado' ? (
+            {!isVoidOrder(current.status) && current.status !== 'entregado' ? (
               <div className="flex flex-wrap gap-2">
                 {current.status === 'nuevo' ? (
                   <button
@@ -689,12 +689,12 @@ export function Comandas() {
                 ) : null}
               </div>
             ) : null}
-            {!mayCharge && !current.paid && current.status !== 'cancelado' ? (
+            {!mayCharge && !current.paid && !isVoidOrder(current.status) ? (
               <p className="rounded-xl bg-amber-50 px-3 py-2 text-sm font-semibold text-amber-900">
                 Por cobrar · solo caja confirma el pago.
               </p>
             ) : null}
-            {mayCharge && !current.paid && current.status !== 'cancelado' ? (
+            {mayCharge && !current.paid && !isVoidOrder(current.status) ? (
               <CajaCobro
                 order={current}
                 busy={paying}

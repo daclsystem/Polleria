@@ -9,7 +9,7 @@ import {
 } from '../lib/kitchen'
 import { staffLabel } from '../lib/staffLabel'
 import { useStore } from '../store/StoreContext'
-import type { Order, OrderStatus } from '../types'
+import { isVoidOrder, type Order, type OrderStatus } from '../types'
 import { PageTitle } from '../components/ui'
 import { CocinaPerdida } from '../components/CocinaPerdida'
 
@@ -44,7 +44,7 @@ export function Cocina() {
   const tickets = useMemo(() => {
     const list: KitchenTicket[] = []
     for (const o of state.orders) {
-      if (o.status === 'entregado' || o.status === 'cancelado') continue
+      if (o.status === 'entregado' || isVoidOrder(o.status)) continue
       const kitchenAll = filterKitchenItems(o.items, products)
       if (kitchenAll.length === 0) continue
 

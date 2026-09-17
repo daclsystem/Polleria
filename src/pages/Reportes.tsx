@@ -5,7 +5,7 @@ import { formatDateTime, isSameDay, padOrder, soles } from '../lib/format'
 import { printReport, reportHtml } from '../lib/print'
 import { downloadReportsXlsx, staffLabel } from '../lib/exportReports'
 import type { Order, OrderType, PaymentMethod, User } from '../types'
-import { PAY_LABEL, STATUS_LABEL, TYPE_LABEL } from '../types'
+import { isVoidOrder, PAY_LABEL, STATUS_LABEL, TYPE_LABEL } from '../types'
 import { PageTitle } from '../components/ui'
 
 const WEEKDAYS = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb']
@@ -86,8 +86,8 @@ export function Reportes() {
       }),
     [state.orders, from, until],
   )
-  const orders = periodOrders.filter((o) => o.status !== 'cancelado')
-  const cancelled = periodOrders.filter((o) => o.status === 'cancelado')
+  const orders = periodOrders.filter((o) => !isVoidOrder(o.status))
+  const cancelled = periodOrders.filter((o) => isVoidOrder(o.status))
   const paid = orders.filter((o) => o.paid)
   const unpaid = orders.filter((o) => !o.paid)
 

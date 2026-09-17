@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Bike, CalendarRange, MapPin, Search, ShoppingBag, Table2, UtensilsCrossed } from 'lucide-react'
+import { Bike, CalendarRange, MapPin, Search, ShoppingBag, Table2, Trash2, UtensilsCrossed } from 'lucide-react'
 import { useAuth } from '../auth/AuthContext'
 import { useStore } from '../store/StoreContext'
 import { formatDateTime, padOrder, soles } from '../lib/format'
@@ -20,7 +20,8 @@ import { apiAssignDriver, apiListDrivers } from '../lib/apiClient'
 import { PageTitle, StatusBadge, inputClass } from '../components/ui'
 import { PrintOrderActions } from '../components/PrintOrderActions'
 import { NuevoPedidoButton } from '../components/NuevoPedido'
-import type { Driver, Order } from '../types'
+import { useConfirm } from '../components/ConfirmDialogContext'
+import { isVoidOrder, type Driver, type Order } from '../types'
 
 type Channel = 'todas' | OrderChannel
 
@@ -60,8 +61,10 @@ function matchesQuery(o: Order, needle: string, phoneNeedle: string) {
 export function PedidosWeb({ vista = 'curso' }: { vista?: 'curso' | 'historial' }) {
   const { state, updateOrderStatus, reloadFromApi, live } = useStore()
   const { user, actingRole } = useAuth()
+  const { confirmDelete } = useConfirm()
   const navigate = useNavigate()
   const isMozo = actingRole === 'mozo'
+  const isAdmin = actingRole === 'admin' || Boolean(user?.isSystem)
   const board = vista
   const [channel, setChannel] = useState<Channel>('todas')
   const [q, setQ] = useState('')
@@ -94,9 +97,12 @@ export function PedidosWeb({ vista = 'curso' }: { vista?: 'curso' | 'historial' 
   }, [mine, isMozo, user])
 
   const historyPool = useMemo(() => {
-    const closed = mine.filter((o) => (isMozo ? mozoSeesHistory(o, user) : isClosedForMozo(o)))
+    const closed = mine.filter((o) => {
+      if (o.status === 'eliminado') return isAdmin
+      return isMozo ? mozoSeesHistory(o, user) : isClosedForMozo(o)
+    })
     return closed.filter((o) => inDayRange(o.createdAt, from, to))
-  }, [mine, isMozo, user, from, to])
+  }, [mine, isMozo, isAdmin, user, from, to])
 
   const pool = board === 'curso' ? activePool : historyPool
 
@@ -141,6 +147,14 @@ export function PedidosWeb({ vista = 'curso' }: { vista?: 'curso' | 'historial' 
       return matchesQuery(o, needle, phoneNeedle)
     })
   }, [pool, channel, needle, phoneNeedle])
+
+  const removeOrder = (o: Order) => {
+    void confirmDelete(
+      `¿Eliminar pedido ${padOrder(o.number)}?`,
+      () => updateOrderStatus(o.id, 'eliminado'),
+      'No se borra de la base: queda marcado como eliminado y sale del tablero.',
+    )
+  }
 
   const acceptKitchen = (o: Order) => {
     const kitchen = filterKitchenItems(o.items, state.products)
@@ -366,7 +380,7 @@ export function PedidosWeb({ vista = 'curso' }: { vista?: 'curso' | 'historial' 
                       Pedir más
                     </button>
                   ) : null}
-                  {isDeliveryOrder(o) && o.status !== 'entregado' && o.status !== 'cancelado' ? (
+                  {isDeliveryOrder(o) && o.status !== 'entregado' && !isVoidOrder(o.status) ? (
                     <label className="inline-flex min-h-10 items-center gap-1.5 rounded-xl bg-teal-50 px-2 text-xs font-bold text-teal-900 ring-1 ring-teal-200">
                       <Bike size={14} />
                       <select
@@ -384,12 +398,32 @@ export function PedidosWeb({ vista = 'curso' }: { vista?: 'curso' | 'historial' 
                       </select>
                     </label>
                   ) : null}
+                  {isAdmin && !isVoidOrder(o.status) ? (
+                    <button
+                      type="button"
+                      className="inline-flex min-h-10 items-center gap-1 rounded-xl bg-rose-50 px-3 py-1.5 text-sm font-bold text-rose-700 ring-1 ring-rose-200"
+                      onClick={() => removeOrder(o)}
+                    >
+                      <Trash2 size={14} />
+                      Eliminar
+                    </button>
+                  ) : null}
                   <div className="ml-auto">
                     <PrintOrderActions order={o} />
                   </div>
                 </div>
               ) : (
-                <div className="mt-3 flex justify-end">
+                <div className="mt-3 flex flex-wrap items-center justify-end gap-2">
+                  {isAdmin && !isVoidOrder(o.status) ? (
+                    <button
+                      type="button"
+                      className="inline-flex min-h-10 items-center gap-1 rounded-xl bg-rose-50 px-3 py-1.5 text-sm font-bold text-rose-700 ring-1 ring-rose-200"
+                      onClick={() => removeOrder(o)}
+                    >
+                      <Trash2 size={14} />
+                      Eliminar
+                    </button>
+                  ) : null}
                   <PrintOrderActions order={o} />
                 </div>
               )}

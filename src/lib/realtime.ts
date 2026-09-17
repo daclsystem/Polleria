@@ -56,14 +56,15 @@ export function shouldNotifyRole(
     return (
       event === 'kitchen:new' ||
       event === 'inventory:updated' ||
-      (event === 'order:status' && status === 'cancelado')
+      (event === 'order:status' && status === 'cancelado') ||
+      (event === 'order:status' && status === 'eliminado')
     )
   }
   if (role === 'mozo') {
     // Solo estados de sus mesas (el filtro por createdByUserId va en StoreContext)
     return (
       (event === 'order:status' &&
-        ['en_cocina', 'listo', 'cancelado', 'entregado', 'nuevo'].includes(String(status))) ||
+        ['en_cocina', 'listo', 'cancelado', 'eliminado', 'entregado', 'nuevo'].includes(String(status))) ||
       event === 'order:paid'
     )
   }
@@ -75,7 +76,7 @@ export function shouldNotifyRole(
       event === 'order:paid' ||
       event === 'order:driver' ||
       event === 'inventory:updated' ||
-      (event === 'order:status' && ['listo', 'entregado', 'cancelado', 'nuevo'].includes(String(status)))
+      (event === 'order:status' && ['listo', 'entregado', 'cancelado', 'eliminado', 'nuevo'].includes(String(status)))
     )
   }
   if (role === 'driver') {

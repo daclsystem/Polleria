@@ -121,7 +121,7 @@ export function WebAccount() {
     if (trackingOrderId) {
       return myOrders.find((o) => o.id === trackingOrderId) || state.orders.find((o) => o.id === trackingOrderId)
     }
-    return myOrders.find((o) => o.status !== 'entregado' && o.status !== 'cancelado')
+    return myOrders.find((o) => o.status !== 'entregado' && o.status !== 'cancelado' && o.status !== 'eliminado')
   }, [trackingOrderId, myOrders, state.orders])
 
   const logout = () => {
@@ -305,6 +305,7 @@ function OrderCard({ order, onTrack }: { order: Order; onTrack: () => void }) {
     listo: 'bg-green-100 text-green-700',
     entregado: 'bg-gray-100 text-gray-600',
     cancelado: 'bg-red-100 text-red-600',
+    eliminado: 'bg-gray-100 text-gray-500',
   }
 
   const statusLabels: Record<string, string> = {
@@ -313,9 +314,10 @@ function OrderCard({ order, onTrack }: { order: Order; onTrack: () => void }) {
     listo: 'Listo',
     entregado: 'Entregado',
     cancelado: 'Cancelado',
+    eliminado: 'Anulado',
   }
 
-  const isActive = order.status !== 'entregado' && order.status !== 'cancelado'
+  const isActive = order.status !== 'entregado' && order.status !== 'cancelado' && order.status !== 'eliminado'
 
   return (
     <div className={`rounded-2xl bg-white p-5 shadow-sm ring-1 ${isActive ? 'ring-green-200' : 'ring-gray-100'}`}>
@@ -368,7 +370,7 @@ function TrackingView({ order }: { order?: Order }) {
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   useEffect(() => {
-    if (!order || order.type !== 'delivery' || order.status === 'entregado' || order.status === 'cancelado') {
+    if (!order || order.type !== 'delivery' || order.status === 'entregado' || order.status === 'cancelado' || order.status === 'eliminado') {
       setDriverPos(null)
       return
     }
@@ -455,7 +457,7 @@ function TrackingView({ order }: { order?: Order }) {
       </div>
 
       {/* Map */}
-      {isDelivery && order.status !== 'cancelado' && (
+      {isDelivery && order.status !== 'cancelado' && order.status !== 'eliminado' && (
         <div className="overflow-hidden rounded-2xl bg-white shadow-sm ring-1 ring-gray-100">
           <div className="flex items-center gap-2 border-b px-5 py-3">
             <MapPin size={16} className="text-green-700" />

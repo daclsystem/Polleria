@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { AlertCircle, CheckCircle2, FileText, Key, RefreshCw, Send, Settings2 } from 'lucide-react'
 import { useStore } from '../store/StoreContext'
 import { formatDateTime, padOrder, soles } from '../lib/format'
-import type { Order } from '../types'
+import { isVoidOrder, type Order } from '../types'
 import { Field, Modal, PageTitle, inputClass } from '../components/ui'
 import { apiGetInvoices, apiGetSunatConfig, apiSaveInvoices, apiSaveSunatConfig } from '../lib/apiClient'
 
@@ -67,7 +67,7 @@ export function Facturacion() {
       .catch(() => undefined)
   }, [])
 
-  const paidOrders = state.orders.filter((o) => o.paid && o.status !== 'cancelado')
+  const paidOrders = state.orders.filter((o) => o.paid && !isVoidOrder(o.status))
   const invoicedIds = new Set(invoices.map((i) => i.orderId))
   const pendingOrders = paidOrders.filter((o) => !invoicedIds.has(o.id))
 

@@ -437,6 +437,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             pushNotice(`${num} entregado`, 'ok')
           } else if (status === 'cancelado') {
             pushNotice(`${num} cancelado`, 'warn')
+          } else if (status === 'eliminado') {
+            pushNotice(`${num} eliminado`, 'warn')
           } else if (status === 'nuevo') {
             pushNotice(`${num} recibido / adicionales`, 'info')
           }
@@ -647,14 +649,14 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             }
             return it
           })
-          if (status === 'entregado' || status === 'cancelado') {
+          if (status === 'entregado' || status === 'cancelado' || status === 'eliminado') {
             clearKitchenWavesForOrder(o.items)
           }
           return { ...o, status, items, updatedAt: new Date().toISOString() }
         })
         const order = orders.find((o) => o.id === id)
         let tables = prev.tables
-        if (order?.tableId && (status === 'entregado' || status === 'cancelado')) {
+        if (order?.tableId && (status === 'entregado' || status === 'cancelado' || status === 'eliminado')) {
           tables = tables.map((t) =>
             t.id === order.tableId ? { ...t, status: 'libre', orderId: undefined } : t,
           )

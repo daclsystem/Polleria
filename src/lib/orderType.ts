@@ -1,4 +1,4 @@
-import type { Order, OrderType } from '../types'
+import { isVoidOrder, type Order, type OrderType } from '../types'
 
 /** Pedido de mesa / salón */
 export function isSalonOrder(o: { type?: OrderType | string }) {
@@ -28,7 +28,7 @@ export function needsDriver(o: Pick<Order, 'type' | 'status' | 'driverId'>) {
   return (
     isDeliveryOrder(o) &&
     !o.driverId &&
-    o.status !== 'cancelado' &&
+    !isVoidOrder(o.status) &&
     o.status !== 'entregado'
   )
 }

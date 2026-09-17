@@ -153,7 +153,7 @@ export function ConductorApp() {
       if (orders.earnings) setEarnings(orders.earnings)
       if (!bootNav.current) {
         bootNav.current = true
-        const first = assigned.find((o) => o.status !== 'entregado' && o.status !== 'cancelado')
+        const first = assigned.find((o) => o.status !== 'entregado' && o.status !== 'cancelado' && o.status !== 'eliminado')
         if (first) navigate(`/pedido/${first.id}`, { replace: true })
       }
       const ids = new Set(assigned.map((o) => o.id))

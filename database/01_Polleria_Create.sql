@@ -300,7 +300,7 @@ BEGIN
     UpdatedAt             DATETIME2(0)     NOT NULL CONSTRAINT DF_Orders_UpdatedAt DEFAULT (SYSUTCDATETIME()),
     CONSTRAINT UQ_Orders_Number UNIQUE (Number),
     CONSTRAINT CK_Orders_Type CHECK (Type IN (N'salon', N'llevar', N'delivery', N'web')),
-    CONSTRAINT CK_Orders_Status CHECK (Status IN (N'nuevo', N'en_cocina', N'listo', N'entregado', N'cancelado')),
+    CONSTRAINT CK_Orders_Status CHECK (Status IN (N'nuevo', N'en_cocina', N'listo', N'entregado', N'cancelado', N'eliminado')),
     CONSTRAINT CK_Orders_Source CHECK (Source IN (N'pos', N'web')),
     CONSTRAINT CK_Orders_CodMethod CHECK (CodPaymentMethod IS NULL OR CodPaymentMethod IN (N'yape', N'plin', N'efectivo')),
     CONSTRAINT FK_Orders_Table FOREIGN KEY (TableId) REFERENCES dbo.Tables(Id),

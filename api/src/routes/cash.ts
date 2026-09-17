@@ -132,7 +132,7 @@ async function loadShiftTotals(fromAt: Date) {
         COUNT(DISTINCT p.OrderId) AS Cnt
       FROM dbo.OrderPayments p
       INNER JOIN dbo.Orders o ON o.Id = p.OrderId
-      WHERE o.Paid = 1 AND o.Status <> 'cancelado' AND p.CreatedAt >= @from
+      WHERE o.Paid = 1 AND o.Status NOT IN (N'cancelado', N'eliminado') AND p.CreatedAt >= @from
       GROUP BY LOWER(p.Method)
     `)
 
@@ -153,10 +153,10 @@ async function loadShiftTotals(fromAt: Date) {
     .query(`
       SELECT COUNT(*) AS Cnt, ISNULL(SUM(Total), 0) AS Sales
       FROM dbo.Orders
-      WHERE Paid = 1 AND Status <> 'cancelado' AND UpdatedAt >= @from
+      WHERE Paid = 1 AND Status NOT IN (N'cancelado', N'eliminado') AND UpdatedAt >= @from
     `)
   const pendingR = await pool.request().query(`
-    SELECT COUNT(*) AS Cnt FROM dbo.Orders WHERE Paid = 0 AND Status <> 'cancelado'
+    SELECT COUNT(*) AS Cnt FROM dbo.Orders WHERE Paid = 0 AND Status NOT IN (N'cancelado', N'eliminado')
   `)
 
   const ordersCount = Number(ordR.recordset[0]?.Cnt || 0)

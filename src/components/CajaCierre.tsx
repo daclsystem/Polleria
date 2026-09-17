@@ -11,7 +11,7 @@ import {
 import { formatDateTime, round2, soles } from '../lib/format'
 import { cashCloseHtml, printReport } from '../lib/print'
 import { useStore } from '../store/StoreContext'
-import type { InventoryItem, Order, Product } from '../types'
+import { isVoidOrder, type InventoryItem, type Order, type Product } from '../types'
 import { Field, Modal, inputClass } from './ui'
 import { ConfirmProcess } from './ConfirmProcess'
 
@@ -29,7 +29,7 @@ function shiftFromOrders(orders: Order[], lastCloseAt: string | null): CashShift
     lastCloseAt && new Date(lastCloseAt).getTime() > new Date(dayStart).getTime() ? lastCloseAt : dayStart
   const fromMs = new Date(fromAt).getTime()
   const inShift = orders.filter((o) => {
-    if (!o.paid || o.status === 'cancelado') return false
+    if (!o.paid || isVoidOrder(o.status)) return false
     return new Date(o.updatedAt || o.createdAt).getTime() >= fromMs
   })
   let efectivo = 0
@@ -49,7 +49,7 @@ function shiftFromOrders(orders: Order[], lastCloseAt: string | null): CashShift
     efectivo: round2(efectivo),
     yape: round2(yape),
     tarjeta: round2(tarjeta),
-    pendingUnpaid: orders.filter((o) => !o.paid && o.status !== 'cancelado').length,
+    pendingUnpaid: orders.filter((o) => !o.paid && !isVoidOrder(o.status)).length,
   }
 }
 
@@ -85,7 +85,7 @@ function stockFromState(
   const fromMs = new Date(fromAt).getTime()
   const soldBy = new Map<string, number>()
   for (const o of orders) {
-    if (!o.paid || o.status === 'cancelado') continue
+    if (!o.paid || isVoidOrder(o.status)) continue
     if (new Date(o.updatedAt || o.createdAt).getTime() < fromMs) continue
     for (const it of o.items) {
       if (!it.productId || it.productId === 'delivery') continue
@@ -133,7 +133,7 @@ function cuantificableResumen(
   const fromMs = new Date(fromAt).getTime()
   const soldBy = new Map<string, number>()
   for (const o of orders) {
-    if (!o.paid || o.status === 'cancelado') continue
+    if (!o.paid || isVoidOrder(o.status)) continue
     if (new Date(o.updatedAt || o.createdAt).getTime() < fromMs) continue
     for (const it of o.items) {
       if (!it.productId || it.productId === 'delivery') continue

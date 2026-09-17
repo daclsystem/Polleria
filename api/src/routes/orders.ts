@@ -656,9 +656,16 @@ ordersRouter.patch('/:id/status', authRequired, async (req, res) => {
     status?: string
     kitchenFrom?: 'pendiente' | 'en_cocina'
   }
-  const allowed = ['nuevo', 'en_cocina', 'listo', 'entregado', 'cancelado']
+  const allowed = ['nuevo', 'en_cocina', 'listo', 'entregado', 'cancelado', 'eliminado']
   if (!status || !allowed.includes(status)) {
     return res.status(400).json({ error: 'status inválido' })
+  }
+
+  if (status === 'eliminado') {
+    const role = req.user?.role
+    if (role !== 'admin' && !req.user?.isSystem) {
+      return res.status(403).json({ error: 'Solo el administrador puede eliminar pedidos' })
+    }
   }
 
   const pool = await getPool()
@@ -701,8 +708,8 @@ ordersRouter.patch('/:id/status', authRequired, async (req, res) => {
           SET KitchenStatus = N'listo'
           WHERE OrderId=@orderId AND KitchenStatus=@from
         `)
-    } else if (status === 'entregado' || status === 'cancelado') {
-      if (status === 'cancelado') {
+    } else if (status === 'entregado' || status === 'cancelado' || status === 'eliminado') {
+      if (status === 'cancelado' || status === 'eliminado') {
         await restoreStockForCancelledOrder(orderId, tx, req.user?.id || null)
       }
       await new sql.Request(tx)
@@ -730,7 +737,7 @@ ordersRouter.patch('/:id/status', authRequired, async (req, res) => {
         await new sql.Request(tx)
           .input('tableId', sql.UniqueIdentifier, existing.TableId)
           .query(`UPDATE dbo.Tables SET Status = N'cuenta' WHERE Id = @tableId`)
-      } else if (finalStatus === 'entregado' || finalStatus === 'cancelado') {
+      } else if (finalStatus === 'entregado' || finalStatus === 'cancelado' || finalStatus === 'eliminado') {
         await new sql.Request(tx)
           .input('tableId', sql.UniqueIdentifier, existing.TableId)
           .query(`UPDATE dbo.Tables SET Status = N'libre', CurrentOrderId = NULL WHERE Id = @tableId`)
@@ -746,11 +753,11 @@ ordersRouter.patch('/:id/status', authRequired, async (req, res) => {
   const order = await loadOrder(orderId)
   const final = String((order as { Status?: string })?.Status || status)
   emitEvent('order:status', order, roomsForOrderStatus(final))
-  if (status === 'en_cocina' || status === 'cancelado') {
+  if (status === 'en_cocina' || status === 'cancelado' || status === 'eliminado') {
     void publishInventorySnapshot()
   }
 
-  if (order && (order as { CustomerPhone?: string }).CustomerPhone) {
+  if (order && status !== 'eliminado' && (order as { CustomerPhone?: string }).CustomerPhone) {
     void notifyOrderStatusServer(
       {
         Id: orderId,

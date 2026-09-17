@@ -886,7 +886,7 @@ crudRouter.delete('/tables/:id', authRequired, requireRoles('admin'), async (req
       .input('id', sql.UniqueIdentifier, id)
       .query(`
         SELECT TOP 1 Id FROM dbo.Orders
-        WHERE TableId=@id AND Status NOT IN (N'entregado', N'cancelado')
+        WHERE TableId=@id AND Status NOT IN (N'entregado', N'cancelado', N'eliminado')
       `)
     if (open.recordset[0]) {
       await tx.rollback()

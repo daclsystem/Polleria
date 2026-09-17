@@ -355,7 +355,7 @@ async function attachProductExtras<T extends ReturnType<typeof mapProduct>>(prod
       FROM dbo.OrderItems oi
       INNER JOIN dbo.Orders o ON o.Id = oi.OrderId
       WHERE oi.ProductId IS NOT NULL
-        AND o.Status <> 'cancelado'
+        AND o.Status NOT IN (N'cancelado', N'eliminado')
         AND o.CreatedAt >= DATEADD(day, -60, SYSUTCDATETIME())
       GROUP BY oi.ProductId
     `)

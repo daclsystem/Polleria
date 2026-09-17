@@ -239,6 +239,7 @@ const ORDER_STATUS_LABEL: Record<OrderStatus, string> = {
   listo: 'Listo',
   entregado: 'Entregado',
   cancelado: 'Cancelado',
+  eliminado: 'Anulado',
 }
 
 const ORDER_STATUS_TONE: Record<OrderStatus, string> = {
@@ -247,10 +248,11 @@ const ORDER_STATUS_TONE: Record<OrderStatus, string> = {
   listo: 'bg-green-100 text-green-700',
   entregado: 'bg-gray-100 text-gray-600',
   cancelado: 'bg-red-100 text-red-600',
+  eliminado: 'bg-gray-100 text-gray-500',
 }
 
 function isOrderInProgress(status: OrderStatus) {
-  return status !== 'entregado' && status !== 'cancelado'
+  return status !== 'entregado' && status !== 'cancelado' && status !== 'eliminado'
 }
 
 function MyOrderCard({ order, onOpen }: { order: Order; onOpen: (o: Order) => void }) {
@@ -1203,7 +1205,7 @@ function CustomerMenu() {
               {(() => {
                 const inProgress = myOrders.filter((o) => isOrderInProgress(o.status))
                 const delivered = myOrders.filter((o) => o.status === 'entregado')
-                const cancelled = myOrders.filter((o) => o.status === 'cancelado')
+                const cancelled = myOrders.filter((o) => o.status === 'cancelado' || o.status === 'eliminado')
                 return (
                   <>
                     <section>

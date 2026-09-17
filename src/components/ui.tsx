@@ -8,6 +8,7 @@ export function StatusBadge({ status }: { status: OrderStatus }) {
     listo: 'bg-emerald-50 text-emerald-800 ring-emerald-100',
     entregado: 'bg-ink/[0.06] text-ink/70 ring-ink/15',
     cancelado: 'bg-rose-50 text-rose-700 ring-rose-100',
+    eliminado: 'bg-ink/10 text-ink/55 ring-ink/15',
   }
   return (
     <span className={`inline-flex items-center rounded-full px-2.5 py-1 text-[11px] font-semibold ring-1 ${map[status]}`}>
