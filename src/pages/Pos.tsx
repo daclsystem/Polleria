@@ -208,7 +208,7 @@ export function Pos() {
 
   const nameOk = customerName.trim().length >= 2
   const phoneOk = phoneLast9(phone).length === 9
-  const customerOk = isAppendMode || (nameOk && phoneOk)
+  const customerOk = isAppendMode || nameOk
   const canSubmit = canSend && customerOk && (type !== 'salon' || Boolean(tableId) || isAppendMode)
 
   const add = (productId: string) => {
@@ -250,8 +250,8 @@ export function Pos() {
       }
 
       const name = customerName.trim()
-      if (!isAppendMode && (!nameOk || !phoneOk)) {
-        alert('Nombre y celular del cliente son obligatorios')
+      if (!isAppendMode && !nameOk) {
+        alert('El nombre del cliente es obligatorio')
         return
       }
       if (type === 'delivery' && !address.trim()) {
@@ -289,7 +289,7 @@ export function Pos() {
           : items
 
       let customerId: string | undefined
-      let customerPhone = phone
+      let customerPhone = phoneOk ? phone : undefined
       if (phoneOk && nameOk) {
         const { customer } = await apiUpsertCustomer({
           name,
@@ -500,7 +500,7 @@ export function Pos() {
           <div className="relative">
             <input
               className={inputClass}
-              placeholder="Celular *"
+              placeholder="Celular"
               value={phone}
               onChange={(e) => {
                 const next = e.target.value.replace(/\D/g, '').slice(0, 9)
@@ -514,7 +514,6 @@ export function Pos() {
               onFocus={() => setCustOpen(true)}
               onBlur={() => window.setTimeout(() => setCustOpen(false), 180)}
               inputMode="numeric"
-              required
               disabled={isAppendMode}
               autoComplete="off"
               maxLength={9}
@@ -526,7 +525,7 @@ export function Pos() {
             </p>
           ) : !isAppendMode ? (
             <p className="sm:col-span-2 text-[11px] font-semibold text-ink/40">
-              Nombre y celular son obligatorios. Escribe el nombre para ver el teléfono, o el celular para rellenar el nombre.
+              El nombre es obligatorio. El celular es opcional: si lo pones (9 dígitos), se avisa por WhatsApp; si no, no se envía.
             </p>
           ) : null}
           {!isAppendMode && custOpen && custHits.length > 0 ? (
@@ -630,9 +629,9 @@ export function Pos() {
               )}
             </div>
           ) : null}
-          {!isAppendMode && type === 'delivery' && (!nameOk || !phoneOk) ? (
+          {!isAppendMode && type === 'delivery' && !nameOk ? (
             <p className="sm:col-span-2 text-xs font-medium text-brick">
-              Nombre (mín. 2 letras) y teléfono (9 dígitos) son obligatorios.
+              Nombre (mín. 2 letras) es obligatorio.
             </p>
           ) : null}
         </div>

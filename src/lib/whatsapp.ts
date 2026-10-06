@@ -216,11 +216,10 @@ export async function notifyOrderCreated(order: Order) {
   if (!config.enabled) return
 
   const tasks: Promise<unknown>[] = []
+  const phone = order.customerPhone || ''
 
-  if (config.autoNotifyCustomer && order.customerPhone) {
-    tasks.push(
-      sendWhatsAppText(order.customerPhone, fill(config.templates.pedidoRecibido, order), config),
-    )
+  if (config.autoNotifyCustomer && phone.replace(/\D/g, '').length >= 9) {
+    tasks.push(sendWhatsAppText(phone, fill(config.templates.pedidoRecibido, order), config))
   }
 
   await Promise.allSettled(tasks)
@@ -229,9 +228,10 @@ export async function notifyOrderCreated(order: Order) {
 /** Avisos al cambiar estado */
 export async function notifyOrderStatus(order: Order, status: Order['status']) {
   const config = await fetchWspgoConfig()
-  if (!config.enabled || !config.autoNotifyCustomer || !order.customerPhone) return
+  const phone = order.customerPhone || ''
+  if (!config.enabled || !config.autoNotifyCustomer || phone.replace(/\D/g, '').length < 9) return
 
   if (status === 'listo') {
-    await sendWhatsAppText(order.customerPhone, fill(config.templates.pedidoListo, order), config)
+    await sendWhatsAppText(phone, fill(config.templates.pedidoListo, order), config)
   }
 }

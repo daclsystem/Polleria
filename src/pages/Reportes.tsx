@@ -1,14 +1,19 @@
 import { useMemo, useState } from 'react'
 import { Download, FileSpreadsheet, Printer } from 'lucide-react'
 import { useStore } from '../store/StoreContext'
-import { formatDateTime, isSameDay, padOrder, soles } from '../lib/format'
+import { formatDate, formatDateTime, formatDayShort, isSameDay, limaHour, limaWeekdayShort, limaYmd, padOrder, soles } from '../lib/format'
 import { printReport, reportHtml } from '../lib/print'
 import { downloadReportsXlsx, staffLabel } from '../lib/exportReports'
 import type { Order, OrderType, PaymentMethod, User } from '../types'
 import { isVoidOrder, PAY_LABEL, STATUS_LABEL, TYPE_LABEL } from '../types'
 import { PageTitle } from '../components/ui'
-
-const WEEKDAYS = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb']
+import {
+  ComposedDayChart,
+  DonutChart,
+  HorizontalMoneyChart,
+  HourMoneyChart,
+  VerticalMoneyChart,
+} from '../components/ReportCharts'
 
 type RankRow = { label: string; total: number; count: number }
 type TabId = 'resumen' | 'mesas' | 'equipo' | 'horas' | 'clientes' | 'carta' | 'canal' | 'detalle'
@@ -53,6 +58,11 @@ function limaEnd(ymd: string) {
 }
 function todayYmd() {
   return new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Lima' }).format(new Date())
+}
+
+function deltaPct(current: number, previous: number) {
+  if (previous <= 0) return null
+  return ((current - previous) / previous) * 100
 }
 
 export function Reportes() {
@@ -102,6 +112,37 @@ export function Reportes() {
     0,
   )
 
+  const prevPaid = useMemo(() => {
+    const ms = until.getTime() - from.getTime()
+    const prevFrom = from.getTime() - ms
+    const prevUntil = from.getTime()
+    return state.orders.filter((o) => {
+      const t = new Date(o.createdAt).getTime()
+      return t >= prevFrom && t < prevUntil && o.paid && !isVoidOrder(o.status)
+    })
+  }, [state.orders, from, until])
+  const prevSales = prevPaid.reduce((s, o) => s + o.total, 0)
+  const prevTickets = prevPaid.length
+  const prevAvg = prevTickets ? prevSales / prevTickets : 0
+  const salesDelta = deltaPct(sales, prevSales)
+  const ticketsDelta = deltaPct(paid.length, prevTickets)
+  const avgDelta = deltaPct(ticketAvg, prevAvg)
+
+  const daily = useMemo(() => {
+    const rows: RankRow[] = []
+    for (let t = from.getTime(); t < until.getTime(); t += 24 * 60 * 60 * 1000) {
+      const day = new Date(t)
+      const ymd = limaYmd(day)
+      const dayPaid = paid.filter((o) => limaYmd(o.createdAt) === ymd)
+      rows.push({
+        label: formatDayShort(day.toISOString()),
+        total: dayPaid.reduce((s, o) => s + o.total, 0),
+        count: dayPaid.length,
+      })
+    }
+    return rows
+  }, [from, until, paid])
+
   const productById = useMemo(() => new Map(state.products.map((p) => [p.id, p])), [state.products])
 
   const analytics = useMemo(() => {
@@ -144,11 +185,10 @@ export function Reportes() {
         addRank(byMozo, who, o.total)
       }
 
-      const hour = new Date(o.createdAt).getHours()
+      const hour = limaHour(o.createdAt)
       addRank(byHour, `${String(hour).padStart(2, '0')}:00`, o.total)
 
-      const wd = WEEKDAYS[new Date(o.createdAt).getDay()]
-      addRank(byWeekday, wd, o.total)
+      addRank(byWeekday, limaWeekdayShort(o.createdAt), o.total)
 
       const custKey = o.customerId || o.customerPhone || o.customerName?.trim() || 'anon'
       const custLabel = o.customerName?.trim() || o.customerPhone || 'Cliente anónimo'
@@ -178,8 +218,20 @@ export function Reportes() {
       }
     }
 
-    const hoursOrdered = [...byHour.values()].sort((a, b) => a.label.localeCompare(b.label))
+    const soldHours = [...byHour.keys()].map((k) => Number(k.slice(0, 2))).filter((n) => Number.isFinite(n))
+    const fromH = Math.min(11, ...(soldHours.length ? soldHours : [11]))
+    const toH = Math.max(23, ...(soldHours.length ? soldHours : [23]))
+    const hoursOrdered: RankRow[] = []
+    for (let h = fromH; h <= toH; h++) {
+      const label = `${String(h).padStart(2, '0')}:00`
+      hoursOrdered.push(byHour.get(label) || { label, total: 0, count: 0 })
+    }
     const hoursPeak = toRank(byHour, 12)
+    const hoursTop3 = hoursPeak.slice(0, 3).reduce((s, h) => s + h.total, 0)
+    const hoursValley = hoursOrdered
+      .filter((h) => h.count > 0)
+      .slice()
+      .sort((a, b) => a.total - b.total || a.count - b.count)[0]
 
     const dayOrder = ['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom']
     const weekdays = dayOrder.map((d) => byWeekday.get(d) || { label: d, total: 0, count: 0 })
@@ -200,6 +252,8 @@ export function Reportes() {
       mozos: toRank(byMozo),
       hoursOrdered,
       hoursPeak,
+      hoursTop3,
+      hoursValley,
       weekdays,
       customers: toRank(byCustomer),
       products: toRank(byProduct),
@@ -210,8 +264,9 @@ export function Reportes() {
     }
   }, [paid, state.users, productById])
 
+  const periodPretty = `${formatDate(from.toISOString())} — ${formatDate(new Date(until.getTime() - 1000).toISOString())}`
   const periodLabel =
-    preset === 'rango' ? `${fromYmd} — ${toYmd}` : preset === 1 ? 'Hoy' : `Últimos ${preset} días`
+    preset === 1 ? `Hoy · ${formatDate(from.toISOString())}` : `${preset === 'rango' ? 'Rango' : `${preset} días`} · ${periodPretty}`
   const todaySales = paid.filter((o) => isSameDay(o.createdAt)).reduce((s, o) => s + o.total, 0)
   const topMozo = analytics.mozos[0] || analytics.staff.find((s) => !/app|web|sin asignar/i.test(s.label))
   const topHour = analytics.hoursPeak[0]
@@ -301,7 +356,7 @@ export function Reportes() {
       <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
         <PageTitle
           title="Reportes"
-          hint="Solo administrador · elige Hoy, 7, 30 días o un rango. Cada pestaña usa las mismas fechas."
+          hint={`Solo administrador · ${periodLabel}. Cada pestaña usa las mismas fechas.`}
         />
         <div className="flex flex-wrap gap-2">
           {([1, 7, 30] as const).map((n) => (
@@ -372,13 +427,11 @@ export function Reportes() {
 
       {tab === 'resumen' && (
         <>
-          <div className="grid grid-cols-2 gap-3 lg:grid-cols-4 xl:grid-cols-6">
-            <Card label="Ventas cobradas" value={soles(sales)} />
-            <Card label="Tickets cobrados" value={String(paid.length)} />
-            <Card label="Ticket promedio" value={soles(ticketAvg)} />
-            <Card label="IGV" value={soles(igv)} />
-            <Card label="Pendiente cobro" value={soles(pending)} />
-            <Card label="Cancelados" value={`${cancelled.length} · ${soles(cancelledTotal)}`} />
+          <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+            <Card label="Ventas cobradas" value={soles(sales)} delta={salesDelta} />
+            <Card label="Tickets cobrados" value={String(paid.length)} delta={ticketsDelta} />
+            <Card label="Ticket promedio" value={soles(ticketAvg)} delta={avgDelta} />
+            <Card label="Pendiente cobro" value={soles(pending)} hint={cancelled.length ? `${cancelled.length} cancelados` : undefined} />
           </div>
 
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
@@ -389,19 +442,24 @@ export function Reportes() {
             <Insight title="Plato top" value={topProduct?.label || '—'} hint={topProduct ? `${soles(topProduct.total)} · ${topProduct.count} unid.` : 'Sin datos'} />
           </div>
 
-          <div className="grid gap-3 sm:grid-cols-3">
-            <Card label="Ítems vendidos" value={String(itemsSold)} />
-            <Card label="Costo delivery cobrado" value={soles(deliveryFees)} />
-            <Card label="Hoy en caja (cobrado)" value={soles(todaySales)} />
+          <div className="grid gap-4 lg:grid-cols-5">
+            <section className="card p-5 lg:col-span-3">
+              <h2 className="font-display text-xl">Ventas por día</h2>
+              <p className="text-xs text-ink/40">Tickets (barras) y monto (línea) · {periodPretty}</p>
+              <ComposedDayChart items={daily} />
+            </section>
+            <section className="card p-5 lg:col-span-2">
+              <h2 className="font-display text-xl">Tipo de servicio</h2>
+              <p className="text-xs text-ink/40">Cómo se cobró en el periodo</p>
+              <DonutChart items={analytics.byType} />
+            </section>
           </div>
 
-          {analytics.hoursOrdered.length > 0 ? (
-            <section className="card p-5">
-              <h2 className="font-display text-xl">Curva horaria</h2>
-              <p className="mb-3 text-xs text-ink/40">Ventas cobradas por hora · {periodLabel}</p>
-              <HourStrip items={analytics.hoursOrdered} />
-            </section>
-          ) : null}
+          <section className="card p-5">
+            <h2 className="font-display text-xl">Curva horaria</h2>
+            <p className="text-xs text-ink/40">Hora de Lima · la barra dorada es el pico · {periodPretty}</p>
+            <HourMoneyChart items={analytics.hoursOrdered} />
+          </section>
         </>
       )}
 
@@ -410,17 +468,11 @@ export function Reportes() {
           <section className="card p-5">
             <h2 className="font-display text-xl">Ventas por mesa</h2>
             <p className="text-xs text-ink/40">Pedidos de salón cobrados</p>
-            <RankList items={analytics.tables} countLabel="cuentas" />
+            <HorizontalMoneyChart items={analytics.tables} />
           </section>
           <section className="card p-5">
             <h2 className="font-display text-xl">Por día de la semana</h2>
-            <Bars
-              items={analytics.weekdays.map((d) => ({
-                label: d.label,
-                value: d.total,
-                meta: d.count ? `${d.count} tickets` : undefined,
-              }))}
-            />
+            <VerticalMoneyChart items={analytics.weekdays.map((d) => ({ label: d.label, value: d.total }))} />
           </section>
         </div>
       )}
@@ -430,33 +482,61 @@ export function Reportes() {
           <section className="card p-5">
             <h2 className="font-display text-xl">Mozos — ranking</h2>
             <p className="text-xs text-ink/40">Quién tomó más pedidos cobrados</p>
-            <RankList items={analytics.mozos.length ? analytics.mozos : analytics.staff} countLabel="pedidos" />
+            <HorizontalMoneyChart items={analytics.mozos.length ? analytics.mozos : analytics.staff} />
           </section>
           <section className="card p-5">
             <h2 className="font-display text-xl">Quién atendió (todos)</h2>
             <p className="text-xs text-ink/40">Mozos, cajeros, app y sin asignar</p>
-            <RankList items={analytics.staff} countLabel="pedidos" />
+            <HorizontalMoneyChart items={analytics.staff} />
           </section>
           {analytics.drivers.length > 0 ? (
             <section className="card p-5 lg:col-span-2">
               <h2 className="font-display text-xl">Conductores</h2>
               <p className="text-xs text-ink/40">Entregas cobradas con conductor asignado</p>
-              <RankList items={analytics.drivers} countLabel="entregas" />
+              <HorizontalMoneyChart items={analytics.drivers} height={220} />
             </section>
           ) : null}
         </div>
       )}
 
       {tab === 'horas' && (
-        <div className="grid gap-4 lg:grid-cols-2">
-          <section className="card p-5">
-            <h2 className="font-display text-xl">Horas que más venden</h2>
-            <RankList items={analytics.hoursPeak} countLabel="tickets" />
-          </section>
+        <div className="space-y-4">
+          <div className="grid gap-3 sm:grid-cols-3">
+            <Insight
+              title="Hora pico"
+              value={topHour?.label || '—'}
+              hint={topHour ? `${soles(topHour.total)} · ${topHour.count} tickets` : 'Sin datos'}
+            />
+            <Insight
+              title="Hora más baja"
+              value={analytics.hoursValley?.label || '—'}
+              hint={
+                analytics.hoursValley
+                  ? `${soles(analytics.hoursValley.total)} · ${analytics.hoursValley.count} tickets`
+                  : 'Sin datos'
+              }
+            />
+            <Insight
+              title="Las 3 horas top"
+              value={sales ? `${Math.round((analytics.hoursTop3 / sales) * 100)}%` : '—'}
+              hint={sales ? `${soles(analytics.hoursTop3)} de ${soles(sales)} cobrado` : 'Sin datos'}
+            />
+          </div>
           <section className="card p-5">
             <h2 className="font-display text-xl">Curva completa</h2>
-            <HourStrip items={analytics.hoursOrdered} />
+            <p className="text-xs text-ink/40">De apertura a cierre · hora de Lima · la barra dorada es el pico</p>
+            <HourMoneyChart items={analytics.hoursOrdered} height={320} />
           </section>
+          <div className="grid gap-4 lg:grid-cols-2">
+            <section className="card p-5">
+              <h2 className="font-display text-xl">Horas que más venden</h2>
+              <HorizontalMoneyChart items={analytics.hoursPeak} />
+            </section>
+            <section className="card p-5">
+              <h2 className="font-display text-xl">Por día de la semana</h2>
+              <VerticalMoneyChart items={analytics.weekdays.map((d) => ({ label: d.label, value: d.total }))} />
+            </section>
+          </div>
         </div>
       )}
 
@@ -464,7 +544,7 @@ export function Reportes() {
         <section className="card p-5">
           <h2 className="font-display text-xl">Clientes que más pidieron</h2>
           <p className="text-xs text-ink/40">Por monto cobrado en el periodo</p>
-          <RankList items={analytics.customers} countLabel="pedidos" />
+          <HorizontalMoneyChart items={analytics.customers} height={360} />
         </section>
       )}
 
@@ -472,11 +552,12 @@ export function Reportes() {
         <div className="grid gap-4 lg:grid-cols-2">
           <section className="card p-5">
             <h2 className="font-display text-xl">Platos más vendidos</h2>
-            <RankList items={analytics.products} countLabel="unid." />
+            <HorizontalMoneyChart items={analytics.products} height={360} />
           </section>
           <section className="card p-5">
             <h2 className="font-display text-xl">Por categoría</h2>
-            <RankList items={analytics.categories} countLabel="unid." />
+            <DonutChart items={analytics.categories.map((c) => ({ label: c.label, value: c.total }))} height={280} />
+            <HorizontalMoneyChart items={analytics.categories} height={240} />
           </section>
         </div>
       )}
@@ -485,19 +566,19 @@ export function Reportes() {
         <div className="grid gap-4 lg:grid-cols-2">
           <section className="card p-5">
             <h2 className="font-display text-xl">Origen</h2>
-            <Bars items={analytics.sources.map((s) => ({ label: s.label, value: s.total, meta: `${s.count} tickets` }))} />
+            <DonutChart items={analytics.sources.map((s) => ({ label: s.label, value: s.total }))} />
           </section>
           <section className="card p-5">
             <h2 className="font-display text-xl">Tipo de servicio</h2>
-            <Bars items={analytics.byType} />
+            <DonutChart items={analytics.byType} />
           </section>
           <section className="card p-5">
             <h2 className="font-display text-xl">Método de pago</h2>
-            <Bars items={analytics.byPay} />
+            <DonutChart items={analytics.byPay} />
           </section>
           <section className="card p-5">
             <h2 className="font-display text-xl">Ticket promedio por canal</h2>
-            <Bars items={analytics.ticketAvgByType} />
+            <VerticalMoneyChart items={analytics.ticketAvgByType} />
           </section>
         </div>
       )}
@@ -552,11 +633,28 @@ export function Reportes() {
   )
 }
 
-function Card({ label, value }: { label: string; value: string }) {
+function Card({
+  label,
+  value,
+  delta,
+  hint,
+}: {
+  label: string
+  value: string
+  delta?: number | null
+  hint?: string
+}) {
   return (
     <div className="card p-5">
       <p className="text-xs tracking-wide text-ink/40 uppercase">{label}</p>
       <p className="mt-2 font-display text-2xl lg:text-3xl">{value}</p>
+      {delta != null ? (
+        <p className={`mt-1 text-xs font-semibold ${delta >= 0 ? 'text-emerald-600 dark:text-emerald-300' : 'text-brick'}`}>
+          {delta >= 0 ? '▲' : '▼'} {Math.abs(delta).toFixed(0)}% vs periodo anterior
+        </p>
+      ) : hint ? (
+        <p className="mt-1 text-xs text-ink/40">{hint}</p>
+      ) : null}
     </div>
   )
 }
@@ -567,73 +665,6 @@ function Insight({ title, value, hint }: { title: string; value: string; hint: s
       <p className="text-[10px] font-bold tracking-wider text-ink/35 uppercase">{title}</p>
       <p className="mt-1 truncate font-display text-xl text-ink">{value}</p>
       <p className="mt-0.5 text-xs text-ink/45">{hint}</p>
-    </div>
-  )
-}
-
-function RankList({ items, countLabel }: { items: RankRow[]; countLabel: string }) {
-  const max = Math.max(...items.map((i) => i.total), 1)
-  if (items.length === 0) return <p className="mt-4 text-sm text-ink/40">Sin datos en este periodo.</p>
-  return (
-    <ul className="mt-4 space-y-3">
-      {items.map((i, idx) => (
-        <li key={i.label}>
-          <div className="mb-1 flex items-baseline justify-between gap-2 text-sm">
-            <span className="min-w-0 truncate">
-              <span className="mr-1.5 font-mono text-[10px] text-ink/35">{idx + 1}.</span>
-              {i.label}
-            </span>
-            <span className="shrink-0 font-semibold">{soles(i.total)}</span>
-          </div>
-          <div className="h-2 rounded-full bg-cream-dark">
-            <div className="h-2 rounded-full bg-ember" style={{ width: `${(i.total / max) * 100}%` }} />
-          </div>
-          <p className="mt-0.5 text-[11px] text-ink/40">
-            {i.count} {countLabel}
-          </p>
-        </li>
-      ))}
-    </ul>
-  )
-}
-
-function Bars({ items }: { items: { label: string; value: number; meta?: string }[] }) {
-  const max = Math.max(...items.map((i) => i.value), 1)
-  if (items.length === 0) return <p className="mt-4 text-sm text-ink/40">Sin datos.</p>
-  return (
-    <ul className="mt-4 space-y-3">
-      {items.map((i) => (
-        <li key={i.label}>
-          <div className="mb-1 flex justify-between text-sm">
-            <span>{i.label}</span>
-            <span>
-              {soles(i.value)}
-              {i.meta ? <span className="ml-1 text-[11px] text-ink/40">· {i.meta}</span> : null}
-            </span>
-          </div>
-          <div className="h-2 rounded-full bg-cream-dark">
-            <div className="h-2 rounded-full bg-ember" style={{ width: `${(i.value / max) * 100}%` }} />
-          </div>
-        </li>
-      ))}
-    </ul>
-  )
-}
-
-function HourStrip({ items }: { items: RankRow[] }) {
-  const max = Math.max(...items.map((i) => i.total), 1)
-  if (items.length === 0) return <p className="mt-4 text-sm text-ink/40">Sin datos.</p>
-  return (
-    <div className="flex h-36 items-end gap-1 overflow-x-auto pb-1">
-      {items.map((i) => (
-        <div key={i.label} className="flex w-8 shrink-0 flex-col items-center gap-1" title={`${i.label}: ${soles(i.total)}`}>
-          <div
-            className="w-full rounded-t-md bg-ember/90"
-            style={{ height: `${Math.max(4, (i.total / max) * 100)}%` }}
-          />
-          <span className="text-[9px] text-ink/40">{i.label.slice(0, 2)}</span>
-        </div>
-      ))}
     </div>
   )
 }

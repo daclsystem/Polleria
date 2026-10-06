@@ -62,6 +62,11 @@ export function shouldNotifyCustomerWhatsApp(order: Pick<OrderLike, 'Type' | 'So
   return false
 }
 
+function usableCustomerPhone(phone?: string | null) {
+  const d = String(phone || '').replace(/\D/g, '')
+  return d.length >= 9
+}
+
 function detalle(order: OrderLike) {
   const items = order.items || []
   if (!items.length) return '(ver detalle en el enlace)'
@@ -94,7 +99,7 @@ export async function notifyOrderCreatedServer(order: OrderLike) {
   const pago = order.CodPaymentMethod || 'contra entrega'
   const jobs: Promise<unknown>[] = []
 
-  if (!phone) {
+  if (!usableCustomerPhone(phone)) {
     return { sent: false, reason: 'sin teléfono en el pedido' }
   }
 
@@ -149,7 +154,7 @@ export async function notifyOrderStatusServer(order: OrderLike, status: string) 
   }
 
   const phone = String(order.CustomerPhone || '')
-  if (!phone) return { sent: false, reason: 'sin teléfono' }
+  if (!usableCustomerPhone(phone)) return { sent: false, reason: 'sin teléfono' }
 
   const headline = STATUS_MSG[status] || `Estado: *${status}*`
   const extra =
@@ -184,7 +189,7 @@ export async function notifyOrderPaidServer(order: OrderLike) {
   if (cfg.autoNotifyCustomer === false) return { sent: false, reason: 'avisos al cliente apagados' }
 
   const phone = String(order.CustomerPhone || '')
-  if (!phone) return { sent: false, reason: 'sin teléfono' }
+  if (!usableCustomerPhone(phone)) return { sent: false, reason: 'sin teléfono' }
 
   const rate = ratingUrl(String(order.Id), phone)
   const carta = `${FRONT_URL}/`

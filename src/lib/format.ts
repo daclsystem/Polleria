@@ -40,6 +40,14 @@ export function formatDate(iso: string) {
   })
 }
 
+export function formatDayShort(iso: string) {
+  return new Date(iso).toLocaleDateString('es-PE', {
+    day: 'numeric',
+    month: 'short',
+    timeZone: LIMA,
+  })
+}
+
 export function formatDateTime(iso: string) {
   return `${formatDate(iso)} ${formatTime(iso)}`
 }
@@ -51,6 +59,31 @@ export function elapsedMinutes(iso: string) {
 export function limaYmd(isoOrDate: string | Date = new Date()) {
   const d = typeof isoOrDate === 'string' ? new Date(isoOrDate) : isoOrDate
   return new Intl.DateTimeFormat('en-CA', { timeZone: LIMA }).format(d)
+}
+
+/** Hora 0–23 en Lima, independiente de la zona del navegador. */
+export function limaHour(iso: string) {
+  const raw = new Intl.DateTimeFormat('en-US', {
+    timeZone: LIMA,
+    hour: 'numeric',
+    hourCycle: 'h23',
+  }).format(new Date(iso))
+  const n = Number.parseInt(raw, 10)
+  return Number.isFinite(n) ? n % 24 : 0
+}
+
+export function limaWeekdayShort(iso: string) {
+  const wd = new Intl.DateTimeFormat('en-US', { timeZone: LIMA, weekday: 'short' }).format(new Date(iso))
+  const map: Record<string, string> = {
+    Sun: 'Dom',
+    Mon: 'Lun',
+    Tue: 'Mar',
+    Wed: 'Mié',
+    Thu: 'Jue',
+    Fri: 'Vie',
+    Sat: 'Sáb',
+  }
+  return map[wd] || wd
 }
 
 export function isSameDay(iso: string, date = new Date()) {
