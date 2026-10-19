@@ -247,12 +247,6 @@ export function PhoneOtpLogin({
         {step === 'phone' && hint ? (
           <p className="mt-1 text-sm leading-relaxed text-ink/50">{hint}</p>
         ) : null}
-        {step === 'code' ? (
-          <p className="mt-1 text-sm leading-relaxed text-ink/50">
-            WhatsApp al <span className="font-bold text-ink/80">{phone}</span>. Si no llega el código, ingresa{' '}
-            <span className="font-black tracking-wide text-ink">{DEFAULT_OTP_FALLBACK}</span>.
-          </p>
-        ) : null}
       </div>
 
       {err ? (
