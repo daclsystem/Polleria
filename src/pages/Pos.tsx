@@ -289,7 +289,10 @@ export function Pos() {
           : items
 
       let customerId: string | undefined
-      let customerPhone = phoneOk ? phone : undefined
+      const typedPhone = phoneDigitsOf(phone)
+      let customerPhone: string | undefined
+      if (type === 'salon' || type === 'llevar') customerPhone = typedPhone || '0'
+      else if (phoneOk) customerPhone = phone
       if (phoneOk && nameOk) {
         const { customer } = await apiUpsertCustomer({
           name,
@@ -303,7 +306,7 @@ export function Pos() {
         type,
         items: orderItems,
         customerName: name,
-        customerPhone: customerPhone || undefined,
+        customerPhone,
         customerId,
         address: type === 'delivery' ? address : undefined,
         addressLat: type === 'delivery' && lat != null ? lat : undefined,
@@ -500,7 +503,7 @@ export function Pos() {
           <div className="relative">
             <input
               className={inputClass}
-              placeholder="Celular"
+              placeholder={type === 'delivery' ? 'Celular' : 'Celular (opcional)'}
               value={phone}
               onChange={(e) => {
                 const next = e.target.value.replace(/\D/g, '').slice(0, 9)
@@ -525,7 +528,9 @@ export function Pos() {
             </p>
           ) : !isAppendMode ? (
             <p className="sm:col-span-2 text-[11px] font-semibold text-ink/40">
-              El nombre es obligatorio. El celular es opcional: si lo pones (9 dígitos), se avisa por WhatsApp; si no, no se envía.
+              {type === 'delivery'
+                ? 'El nombre es obligatorio. El celular es opcional: si lo pones (9 dígitos), se avisa por WhatsApp; si no, no se envía.'
+                : 'El nombre es obligatorio. El celular es opcional: si escribes un número, se guarda tal cual; si lo dejas vacío, se envía 0.'}
             </p>
           ) : null}
           {!isAppendMode && custOpen && custHits.length > 0 ? (

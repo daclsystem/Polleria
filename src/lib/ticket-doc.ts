@@ -105,7 +105,7 @@ function orderMeta(
     bold: !order.tableNumber,
   })
   lines.push({ t: 'text', text: `Cliente: ${order.customerName || '—'}`, bold: true })
-  if (opts.phone && order.customerPhone) {
+  if (opts.phone && order.customerPhone && order.customerPhone !== '0') {
     lines.push({ t: 'text', text: `Cel: ${order.customerPhone}` })
   }
   if (opts.address && order.address) {

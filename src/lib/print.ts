@@ -139,7 +139,7 @@ export function ticketHtml(order: Order, settings: Settings, kind: TicketKind) {
     ${mesa}
     <p class="center"><strong>${esc(TYPE_LABEL[order.type])}</strong></p>
     <p><strong>Cliente: ${esc(order.customerName || '—')}</strong></p>
-    ${order.customerPhone ? `<p>Cel: ${esc(order.customerPhone)}</p>` : ''}
+    ${order.customerPhone && order.customerPhone !== '0' ? `<p>Cel: ${esc(order.customerPhone)}</p>` : ''}
     ${order.address ? `<p>${esc(order.address)}</p>` : ''}
     <p><strong>Mozo: ${esc(order.createdBy || '—')}</strong></p>
     ${billing}
