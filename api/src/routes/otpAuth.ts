@@ -4,7 +4,7 @@ import { v4 as uuid } from 'uuid'
 import { getPool, sql } from '../db.js'
 import { signToken, type AuthUser } from '../auth.js'
 import { rotateSession } from '../session.js'
-import { normalizePhone, sendWhatsAppSoon } from '../lib/wspgo.js'
+import { isWhatsAppReady, normalizePhone, sendWhatsAppSoon } from '../lib/wspgo.js'
 
 export const otpAuthRouter = Router()
 
@@ -24,6 +24,9 @@ function isFallbackCode(code: string) {
 }
 
 async function sendWhatsAppCode(phone: string, code: string, name: string, purpose: Purpose) {
+  if (!(await isWhatsAppReady())) {
+    throw new Error('Sesión de WhatsApp no disponible')
+  }
   const action = purpose === 'register' ? 'crear tu cuenta' : 'ingresar / recuperar sesión'
   const text =
     `🔐 *Chifa-Pollería Lopez*\n\n` +

@@ -554,8 +554,8 @@ function CustomerMenu() {
       return
     }
     if (items.length === 0) return
-    if (name.trim().length < 2 || phone.replace(/\D/g, '').length < 9) {
-      alert('Nombre y celular son obligatorios')
+    if (name.trim().length < 2) {
+      alert('El nombre es obligatorio')
       return
     }
     if (mode === 'delivery' && !address.trim()) {
@@ -599,7 +599,7 @@ function CustomerMenu() {
         type: mode,
         items: orderItems,
         customerName: name.trim() || sess.name,
-        customerPhone: phone || sess.phone,
+        customerPhone: phone.replace(/\D/g, '') || sess.phone || '0',
         customerId: sess.id,
         address: mode === 'delivery' ? address : undefined,
         addressLat: mode === 'delivery' && lat != null ? lat : undefined,
@@ -724,9 +724,9 @@ function CustomerMenu() {
         <Field label="Tu nombre">
           <input className={inputClass} value={name} onChange={(e) => setName(e.target.value)} required />
         </Field>
-        <Field label="Celular">
-          <input className={inputClass} value={phone} onChange={(e) => setPhone(e.target.value)} required />
-        </Field>
+        <p className="text-sm text-ink/55">
+          Celular de tu cuenta · <span className="font-bold text-ink">{phone || customer?.phone || 'sin celular'}</span>
+        </p>
 
         {mode === 'delivery' ? (
           <Field label={`Dirección · ${platformLabel()}`}>

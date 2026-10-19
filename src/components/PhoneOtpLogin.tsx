@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react'
 import { MessageCircle, Smartphone } from 'lucide-react'
-import { apiFetch } from '../lib/apiClient'
+import { DEFAULT_OTP_FALLBACK } from '../lib/authDefaults'
+import { ApiError, apiFetch } from '../lib/apiClient'
 
 export type OtpAccountType = 'staff' | 'customer' | 'driver'
 
@@ -157,7 +158,7 @@ export function PhoneOtpLogin({
     setErr(null)
     setMsg(null)
     if (accountType === 'driver' && digits.length < 9) {
-      goCode('Número de prueba. Escribe el código que te indiquen.')
+      goCode(`Número de prueba. Si WhatsApp no responde, usa el código ${DEFAULT_OTP_FALLBACK}.`)
       return
     }
     setBusy(true)
@@ -182,15 +183,16 @@ export function PhoneOtpLogin({
       goCode(
         sent
           ? data.message || 'Te enviamos un código por WhatsApp.'
-          : 'No se pudo enviar el WhatsApp. Si no llega, vuelve a intentarlo en un momento.',
+          : `WhatsApp no está disponible. Ingresa el código ${data.fallbackCode || DEFAULT_OTP_FALLBACK}.`,
       )
     } catch (e) {
       const fail = (e as Error).message || 'No se pudo enviar el código. Revisa el número e inténtalo de nuevo.'
-      if (accountType === 'driver') {
-        goCode('WhatsApp no se envió. Escribe el código para entrar.')
+      const status = e instanceof ApiError ? e.status : 0
+      if (status === 400 || status === 404) {
+        setErr(fail)
         return
       }
-      setErr(fail)
+      goCode(`WhatsApp no está disponible. Ingresa el código ${DEFAULT_OTP_FALLBACK}.`)
     } finally {
       setBusy(false)
     }
@@ -246,8 +248,9 @@ export function PhoneOtpLogin({
           <p className="mt-1 text-sm leading-relaxed text-ink/50">{hint}</p>
         ) : null}
         {step === 'code' ? (
-          <p className="mt-1 text-sm text-ink/50">
-            WhatsApp al <span className="font-bold text-ink/80">{phone}</span>
+          <p className="mt-1 text-sm leading-relaxed text-ink/50">
+            WhatsApp al <span className="font-bold text-ink/80">{phone}</span>. Si no llega el código, ingresa{' '}
+            <span className="font-black tracking-wide text-ink">{DEFAULT_OTP_FALLBACK}</span>.
           </p>
         ) : null}
       </div>

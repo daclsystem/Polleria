@@ -5,6 +5,34 @@ const WSP_SESSION = process.env.WSPGO_SESSION || 'PolleriaLopez'
 /** El gateway a veces tarda 15–40 s en confirmar. No abortamos: el mensaje sigue en camino. */
 const HARD_MS = 45_000
 const QUICK_MS = 2_200
+const SESSION_MS = 4_000
+const SESSION_CACHE_MS = 15_000
+
+let sessionCache: { at: number; up: boolean } | null = null
+
+/** true solo si la sesión WAHA está WORKING. Si el gateway no responde, false. */
+export async function isWhatsAppReady(): Promise<boolean> {
+  if (sessionCache && Date.now() - sessionCache.at < SESSION_CACHE_MS) return sessionCache.up
+  const ctrl = new AbortController()
+  const timer = setTimeout(() => ctrl.abort(), SESSION_MS)
+  let up = false
+  try {
+    const res = await fetch(`${WSP_BASE}/api/sessions/${encodeURIComponent(WSP_SESSION)}`, {
+      headers: { Accept: 'application/json', 'X-Api-Key': WSP_KEY },
+      signal: ctrl.signal,
+    })
+    if (res.ok) {
+      const data = (await res.json()) as { status?: string }
+      up = String(data.status || '').toUpperCase() === 'WORKING'
+    }
+  } catch (e) {
+    console.warn('[whatsapp] sesión', (e as Error).message)
+  } finally {
+    clearTimeout(timer)
+  }
+  sessionCache = { at: Date.now(), up }
+  return up
+}
 
 export function normalizePhone(phone: string) {
   let digits = phone.replace(/\D/g, '')
