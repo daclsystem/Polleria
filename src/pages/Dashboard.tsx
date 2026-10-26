@@ -1,9 +1,13 @@
 import { ChefHat, Clock3, Flame, ShoppingBag, Table2, UtensilsCrossed, Wallet } from 'lucide-react'
 import { Link } from 'react-router-dom'
+import { useEffect, useState } from 'react'
 import { useAuth } from '../auth/AuthContext'
 import { useStore } from '../store/StoreContext'
-import { elapsedMinutes, formatTime, isSameDay, limaYmd, padOrder, soles } from '../lib/format'
+import { elapsedMinutes, formatTime, isSameDay, padOrder, soles } from '../lib/format'
+import { apiReportOrders } from '../lib/apiClient'
+import { limaRecentRange, paidSalesByDay, type DaySales } from '../lib/salesDays'
 import { isVoidOrder } from '../types'
+import { ComposedDayChart } from '../components/ReportCharts'
 import { PageTitle, StatusBadge, TypeBadge } from '../components/ui'
 
 export function Dashboard() {
@@ -18,20 +22,21 @@ export function Dashboard() {
   const kitchen = state.orders.filter((o) => o.status === 'nuevo' || o.status === 'en_cocina').length
   const isCajero = actingRole === 'cajero'
 
-  const days = Array.from({ length: 7 }, (_, i) => {
-    const d = new Date()
-    d.setDate(d.getDate() - (6 - i))
-    const key = limaYmd(d)
-    const total = state.orders
-      .filter((o) => limaYmd(o.createdAt) === key && o.paid && !isVoidOrder(o.status))
-      .reduce((s, o) => s + o.total, 0)
-    return {
-      key,
-      label: d.toLocaleDateString('es-PE', { weekday: 'short', timeZone: 'America/Lima' }),
-      total,
+  const [weekDays, setWeekDays] = useState<DaySales[] | null>(null)
+  useEffect(() => {
+    const range = limaRecentRange(7)
+    let cancel = false
+    apiReportOrders(range.from.toISOString(), range.until.toISOString())
+      .then((rows) => {
+        if (!cancel) setWeekDays(paidSalesByDay(rows, range.from, range.until))
+      })
+      .catch(() => {
+        if (!cancel) setWeekDays(paidSalesByDay(state.orders, range.from, range.until))
+      })
+    return () => {
+      cancel = true
     }
-  })
-  const max = Math.max(...days.map((d) => d.total), 1)
+  }, [state.orders])
 
   const productSales = new Map<string, { name: string; qty: number; total: number }>()
   for (const o of today) {
@@ -100,29 +105,19 @@ export function Dashboard() {
       <div className="grid gap-4 lg:grid-cols-3">
         <section className="card p-4 sm:p-5 lg:col-span-2">
           <div className="mb-4 flex items-end justify-between gap-3">
-            <h2 className="text-lg font-black tracking-tight sm:text-xl">Ventas 7 días</h2>
+            <div>
+              <h2 className="text-lg font-black tracking-tight sm:text-xl">Ventas 7 días</h2>
+              <p className="text-xs text-ink/40">Tickets (barras) y monto (línea), igual que Reportes</p>
+            </div>
             <Link to="/reportes" className="text-sm font-bold text-[#1a3d1a] dark:text-gold">
               Reportes
             </Link>
           </div>
-          <div className="flex h-44 items-end gap-1.5 sm:h-52 sm:gap-3">
-            {days.map((d) => {
-              const pct = d.total <= 0 ? 0 : Math.max(14, (d.total / max) * 100)
-              return (
-                <div key={d.key} className="flex h-full min-w-0 flex-1 flex-col items-center justify-end gap-1">
-                  <span className="max-w-full truncate text-[10px] font-bold text-ink/70">
-                    {d.total ? soles(d.total) : '—'}
-                  </span>
-                  <div
-                    className="w-full max-w-14 rounded-t-lg bg-gold"
-                    style={{ height: d.total ? `${pct}%` : '6px', opacity: d.total ? 1 : 0.3 }}
-                    title={soles(d.total)}
-                  />
-                  <span className="text-[10px] uppercase text-ink/40 sm:text-[11px]">{d.label}</span>
-                </div>
-              )
-            })}
-          </div>
+          {weekDays == null ? (
+            <div className="h-60 animate-pulse rounded-2xl bg-ink/10 dark:bg-white/10" aria-busy="true" />
+          ) : (
+            <ComposedDayChart items={weekDays} height={240} />
+          )}
         </section>
         <section className="card p-4 sm:p-5">
           <h2 className="text-lg font-black tracking-tight sm:text-xl">Más pedidos</h2>

@@ -34,6 +34,7 @@ import { useStore } from '../store/StoreContext'
 import { ROLE_HOME, ROLE_LABEL, viewOptionsForUser, type ModuleId, type Role } from '../types'
 import { withBase } from '../lib/paths'
 import { APP_VERSION } from '../lib/version'
+import { SkeletonBoot } from './Skeleton'
 import { LiveToasts } from './LiveToasts'
 import { unlockSounds } from '../lib/sounds'
 import { ConfirmLogout } from './ConfirmLogout'
@@ -116,7 +117,7 @@ const SIDEBAR_KEY = 'polleria-sidebar-collapsed'
 
 export function Layout() {
   const { user, actingRole, setViewRole, patchSessionUser, can, logout } = useAuth()
-  const { apiMode, apiLoading, apiError, live, pushNotice } = useStore()
+  const { apiMode, apiLoading, apiReady, apiError, live, pushNotice } = useStore()
   const navigate = useNavigate()
   const [open, setOpen] = useState(false)
   const [logoutOpen, setLogoutOpen] = useState(false)
@@ -450,7 +451,7 @@ export function Layout() {
           </div>
         ) : null}
         <main className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto p-3 sm:p-5 md:p-6 lg:p-8">
-          <Outlet />
+          {apiReady ? <Outlet /> : <SkeletonBoot />}
         </main>
       </div>
 

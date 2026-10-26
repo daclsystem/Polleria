@@ -218,6 +218,8 @@ interface StoreApi {
   state: AppState
   apiMode: boolean
   apiLoading: boolean
+  /** Primera carga del sistema ya terminó (con datos o con error). */
+  apiReady: boolean
   apiError: string | null
   reloadFromApi: () => Promise<void>
   createOrder: (input: NewOrderInput) => Promise<Order>
@@ -287,6 +289,7 @@ const StoreContext = createContext<StoreApi | null>(null)
 export function StoreProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<AppState>(emptyApiState)
   const [apiLoading, setApiLoading] = useState(false)
+  const [apiReady, setApiReady] = useState(APP_NAME === 'web' || APP_NAME === 'cliente')
   const [apiError, setApiError] = useState<string | null>(null)
   const [live, setLive] = useState(false)
   const [notices, setNotices] = useState<LiveNotice[]>([])
@@ -351,6 +354,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       setApiError((e as Error).message)
     } finally {
       setApiLoading(false)
+      setApiReady(true)
     }
   }, [])
 
@@ -506,6 +510,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
     const onAuth = () => {
       stop()
+      if (getApiToken('staff')) setApiReady(false)
       stop = getApiToken('staff') ? startLive() : () => {}
     }
     window.addEventListener('polleria-auth', onAuth)
@@ -1097,6 +1102,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       state,
       apiMode: true,
       apiLoading,
+      apiReady,
       apiError,
       reloadFromApi,
       createOrder,
@@ -1131,6 +1137,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     [
       state,
       apiLoading,
+      apiReady,
       apiError,
       reloadFromApi,
       createOrder,

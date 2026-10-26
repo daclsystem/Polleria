@@ -20,6 +20,7 @@ import { couponsRouter } from './routes/coupons.js'
 import { customerAddressesRouter } from './routes/customerAddresses.js'
 import { reviewsRouter } from './routes/reviews.js'
 import { cashRouter } from './routes/cash.js'
+import { reportsRouter } from './routes/reports.js'
 
 dotenv.config()
 
@@ -71,6 +72,7 @@ app.use('/api/coupons', couponsRouter)
 app.use('/api/customer/addresses', customerAddressesRouter)
 app.use('/api/reviews', reviewsRouter)
 app.use('/api/cash', cashRouter)
+app.use('/api/reports', reportsRouter)
 app.use('/api', crudRouter)
 
 app.use((_req, res) => {

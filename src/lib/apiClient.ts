@@ -7,6 +7,7 @@ import type {
   Driver,
   InventoryItem,
   Product,
+  Order,
   Reservation,
   Settings,
   User,
@@ -120,6 +121,13 @@ export async function apiLogout(scope: TokenScope = 'staff') {
   } catch {
     /* se limpia igual en el cliente */
   }
+}
+
+/** Pedidos del rango directo de la base, con su estado real. */
+export async function apiReportOrders(fromIso: string, toIso: string) {
+  const q = new URLSearchParams({ from: fromIso, to: toIso })
+  const data = await apiFetch<{ orders: Order[] }>(`/api/reports/orders?${q}`)
+  return data.orders
 }
 
 export async function apiBootstrap() {

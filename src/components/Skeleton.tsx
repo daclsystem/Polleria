@@ -139,6 +139,53 @@ export function SkeletonTrackPage() {
   )
 }
 
+function BootBone({ className = '' }: { className?: string }) {
+  return <div className={`animate-pulse rounded-lg bg-ink/10 dark:bg-white/10 ${className}`} />
+}
+
+/** Primera carga del sistema: el contenido aparece cuando la base ya respondió. */
+export function SkeletonBoot() {
+  return (
+    <div className="space-y-6" aria-busy="true" aria-live="polite">
+      <div className="space-y-2">
+        <BootBone className="h-3 w-28" />
+        <BootBone className="h-8 w-64" />
+        <BootBone className="h-3 w-40" />
+      </div>
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        {Array.from({ length: 4 }, (_, i) => (
+          <div key={i} className="card p-4">
+            <BootBone className="h-8 w-8 rounded-xl" />
+            <BootBone className="mt-3 h-4 w-24" />
+            <BootBone className="mt-2 h-3 w-32" />
+          </div>
+        ))}
+      </div>
+      <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
+        {Array.from({ length: 4 }, (_, i) => (
+          <div key={i} className="card p-4">
+            <BootBone className="h-3 w-16" />
+            <BootBone className="mt-3 h-8 w-24" />
+            <BootBone className="mt-2 h-3 w-20" />
+          </div>
+        ))}
+      </div>
+      <div className="grid gap-4 lg:grid-cols-3">
+        <div className="card p-5 lg:col-span-2">
+          <BootBone className="h-5 w-36" />
+          <BootBone className="mt-4 h-52 w-full rounded-2xl" />
+        </div>
+        <div className="card space-y-3 p-5">
+          <BootBone className="h-5 w-28" />
+          {Array.from({ length: 5 }, (_, i) => (
+            <BootBone key={i} className="h-8 w-full" />
+          ))}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export function SkeletonSystemPage() {
   return (
     <div className="space-y-4">

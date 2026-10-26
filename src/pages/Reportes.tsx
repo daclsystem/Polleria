@@ -1,7 +1,9 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Download, FileSpreadsheet, Printer } from 'lucide-react'
 import { useStore } from '../store/StoreContext'
-import { formatDate, formatDateTime, formatDayShort, isSameDay, limaHour, limaWeekdayShort, limaYmd, padOrder, soles } from '../lib/format'
+import { apiReportOrders } from '../lib/apiClient'
+import { formatDate, formatDateTime, isSameDay, limaHour, limaWeekdayShort, padOrder, soles } from '../lib/format'
+import { limaDayEnd, limaDayStart, limaTodayYmd, paidSalesByDay } from '../lib/salesDays'
 import { printReport, reportHtml } from '../lib/print'
 import { downloadReportsXlsx, staffLabel } from '../lib/exportReports'
 import type { Order, OrderType, PaymentMethod, User } from '../types'
@@ -49,15 +51,13 @@ function staffUser(order: Order, users: User[]): User | undefined {
 }
 
 function limaStart(ymd: string) {
-  return new Date(`${ymd}T05:00:00.000Z`)
+  return limaDayStart(ymd)
 }
 function limaEnd(ymd: string) {
-  const d = limaStart(ymd)
-  d.setUTCDate(d.getUTCDate() + 1)
-  return d
+  return limaDayEnd(ymd)
 }
 function todayYmd() {
-  return new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Lima' }).format(new Date())
+  return limaTodayYmd()
 }
 
 function deltaPct(current: number, previous: number) {
@@ -75,6 +75,9 @@ export function Reportes() {
   })
   const [toYmd, setToYmd] = useState(todayYmd)
   const [tab, setTab] = useState<TabId>('resumen')
+  const [dbOrders, setDbOrders] = useState<Order[] | null>(null)
+  const [reportLoading, setReportLoading] = useState(true)
+  const [reportError, setReportError] = useState<string | null>(null)
 
   const { from, until } = useMemo(() => {
     if (preset === 'rango') {
@@ -88,13 +91,37 @@ export function Reportes() {
     return { from: start, until: end }
   }, [preset, fromYmd, toYmd])
 
+  useEffect(() => {
+    let cancel = false
+    const span = until.getTime() - from.getTime()
+    const prevFrom = new Date(from.getTime() - span)
+    setReportLoading(true)
+    setReportError(null)
+    apiReportOrders(prevFrom.toISOString(), until.toISOString())
+      .then((rows) => {
+        if (!cancel) setDbOrders(rows)
+      })
+      .catch((e) => {
+        if (!cancel) {
+          setDbOrders([])
+          setReportError((e as Error).message || 'No se pudieron leer los pedidos de la base')
+        }
+      })
+      .finally(() => {
+        if (!cancel) setReportLoading(false)
+      })
+    return () => {
+      cancel = true
+    }
+  }, [from, until])
+
   const periodOrders = useMemo(
     () =>
-      state.orders.filter((o) => {
+      (dbOrders ?? []).filter((o) => {
         const t = new Date(o.createdAt).getTime()
         return t >= from.getTime() && t < until.getTime()
       }),
-    [state.orders, from, until],
+    [dbOrders, from, until],
   )
   const orders = periodOrders.filter((o) => !isVoidOrder(o.status))
   const cancelled = periodOrders.filter((o) => isVoidOrder(o.status))
@@ -116,11 +143,11 @@ export function Reportes() {
     const ms = until.getTime() - from.getTime()
     const prevFrom = from.getTime() - ms
     const prevUntil = from.getTime()
-    return state.orders.filter((o) => {
+    return (dbOrders ?? []).filter((o) => {
       const t = new Date(o.createdAt).getTime()
       return t >= prevFrom && t < prevUntil && o.paid && !isVoidOrder(o.status)
     })
-  }, [state.orders, from, until])
+  }, [dbOrders, from, until])
   const prevSales = prevPaid.reduce((s, o) => s + o.total, 0)
   const prevTickets = prevPaid.length
   const prevAvg = prevTickets ? prevSales / prevTickets : 0
@@ -128,20 +155,7 @@ export function Reportes() {
   const ticketsDelta = deltaPct(paid.length, prevTickets)
   const avgDelta = deltaPct(ticketAvg, prevAvg)
 
-  const daily = useMemo(() => {
-    const rows: RankRow[] = []
-    for (let t = from.getTime(); t < until.getTime(); t += 24 * 60 * 60 * 1000) {
-      const day = new Date(t)
-      const ymd = limaYmd(day)
-      const dayPaid = paid.filter((o) => limaYmd(o.createdAt) === ymd)
-      rows.push({
-        label: formatDayShort(day.toISOString()),
-        total: dayPaid.reduce((s, o) => s + o.total, 0),
-        count: dayPaid.length,
-      })
-    }
-    return rows
-  }, [from, until, paid])
+  const daily = useMemo(() => paidSalesByDay(periodOrders, from, until), [periodOrders, from, until])
 
   const productById = useMemo(() => new Map(state.products.map((p) => [p.id, p])), [state.products])
 
@@ -356,7 +370,11 @@ export function Reportes() {
       <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
         <PageTitle
           title="Reportes"
-          hint={`Solo administrador · ${periodLabel}. Cada pestaña usa las mismas fechas.`}
+          hint={
+            reportLoading
+              ? 'Leyendo los pedidos registrados en la base…'
+              : `Pedidos de la base, según su estado · ${periodLabel}`
+          }
         />
         <div className="flex flex-wrap gap-2">
           {([1, 7, 30] as const).map((n) => (
@@ -392,19 +410,22 @@ export function Reportes() {
           ) : null}
           <button
             onClick={printCierre}
-            className="inline-flex min-h-9 items-center gap-1.5 rounded-full bg-ink px-4 py-1.5 text-sm font-semibold text-cream"
+            disabled={reportLoading}
+            className="inline-flex min-h-9 items-center gap-1.5 rounded-full bg-ink px-4 py-1.5 text-sm font-semibold text-cream disabled:opacity-40"
           >
             <Printer size={14} /> Imprimir
           </button>
           <button
             onClick={exportCsv}
-            className="inline-flex min-h-9 items-center gap-1.5 rounded-full bg-white px-4 py-1.5 text-sm font-semibold ring-1 ring-ink/10"
+            disabled={reportLoading}
+            className="inline-flex min-h-9 items-center gap-1.5 rounded-full bg-white px-4 py-1.5 text-sm font-semibold ring-1 ring-ink/10 disabled:opacity-40"
           >
             <Download size={14} /> CSV
           </button>
           <button
             onClick={exportXlsx}
-            className="inline-flex min-h-9 items-center gap-1.5 rounded-full bg-ember px-4 py-1.5 text-sm font-semibold text-white"
+            disabled={reportLoading}
+            className="inline-flex min-h-9 items-center gap-1.5 rounded-full bg-ember px-4 py-1.5 text-sm font-semibold text-white disabled:opacity-40"
           >
             <FileSpreadsheet size={14} /> Exportar XLSX
           </button>
@@ -425,7 +446,13 @@ export function Reportes() {
         ))}
       </div>
 
-      {tab === 'resumen' && (
+      {reportError ? (
+        <p className="rounded-2xl bg-red-500/10 px-4 py-3 text-sm font-medium text-red-700">{reportError}</p>
+      ) : null}
+
+      {reportLoading ? <ReportSkeleton /> : null}
+
+      {!reportLoading && tab === 'resumen' && (
         <>
           <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
             <Card label="Ventas cobradas" value={soles(sales)} delta={salesDelta} />
@@ -463,7 +490,7 @@ export function Reportes() {
         </>
       )}
 
-      {tab === 'mesas' && (
+      {!reportLoading && tab === 'mesas' && (
         <div className="grid gap-4 lg:grid-cols-2">
           <section className="card p-5">
             <h2 className="font-display text-xl">Ventas por mesa</h2>
@@ -477,7 +504,7 @@ export function Reportes() {
         </div>
       )}
 
-      {tab === 'equipo' && (
+      {!reportLoading && tab === 'equipo' && (
         <div className="grid gap-4 lg:grid-cols-2">
           <section className="card p-5">
             <h2 className="font-display text-xl">Mozos — ranking</h2>
@@ -499,7 +526,7 @@ export function Reportes() {
         </div>
       )}
 
-      {tab === 'horas' && (
+      {!reportLoading && tab === 'horas' && (
         <div className="space-y-4">
           <div className="grid gap-3 sm:grid-cols-3">
             <Insight
@@ -540,7 +567,7 @@ export function Reportes() {
         </div>
       )}
 
-      {tab === 'clientes' && (
+      {!reportLoading && tab === 'clientes' && (
         <section className="card p-5">
           <h2 className="font-display text-xl">Clientes que más pidieron</h2>
           <p className="text-xs text-ink/40">Por monto cobrado en el periodo</p>
@@ -548,7 +575,7 @@ export function Reportes() {
         </section>
       )}
 
-      {tab === 'carta' && (
+      {!reportLoading && tab === 'carta' && (
         <div className="grid gap-4 lg:grid-cols-2">
           <section className="card p-5">
             <h2 className="font-display text-xl">Platos más vendidos</h2>
@@ -562,7 +589,7 @@ export function Reportes() {
         </div>
       )}
 
-      {tab === 'canal' && (
+      {!reportLoading && tab === 'canal' && (
         <div className="grid gap-4 lg:grid-cols-2">
           <section className="card p-5">
             <h2 className="font-display text-xl">Origen</h2>
@@ -583,7 +610,7 @@ export function Reportes() {
         </div>
       )}
 
-      {tab === 'detalle' && (
+      {!reportLoading && tab === 'detalle' && (
         <section className="card overflow-hidden">
           <div className="border-b border-ink/5 px-5 py-4">
             <h2 className="font-display text-xl">Detalle de pedidos</h2>
@@ -629,6 +656,49 @@ export function Reportes() {
           </div>
         </section>
       )}
+    </div>
+  )
+}
+
+function Bone({ className = '' }: { className?: string }) {
+  return <div className={`animate-pulse rounded-lg bg-ink/10 dark:bg-white/10 ${className}`} />
+}
+
+function ReportSkeleton() {
+  return (
+    <div className="space-y-5" aria-busy="true" aria-live="polite">
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        {Array.from({ length: 4 }, (_, i) => (
+          <div key={i} className="card p-5">
+            <Bone className="h-3 w-24" />
+            <Bone className="mt-3 h-8 w-32" />
+            <Bone className="mt-2 h-3 w-28" />
+          </div>
+        ))}
+      </div>
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
+        {Array.from({ length: 5 }, (_, i) => (
+          <div key={i} className="card p-4">
+            <Bone className="h-3 w-16" />
+            <Bone className="mt-3 h-6 w-28" />
+            <Bone className="mt-2 h-3 w-24" />
+          </div>
+        ))}
+      </div>
+      <div className="grid gap-4 lg:grid-cols-5">
+        <div className="card p-5 lg:col-span-3">
+          <Bone className="h-5 w-36" />
+          <Bone className="mt-4 h-64 w-full rounded-2xl" />
+        </div>
+        <div className="card p-5 lg:col-span-2">
+          <Bone className="h-5 w-32" />
+          <Bone className="mx-auto mt-8 h-44 w-44 rounded-full" />
+        </div>
+      </div>
+      <div className="card p-5">
+        <Bone className="h-5 w-32" />
+        <Bone className="mt-4 h-40 w-full rounded-2xl" />
+      </div>
     </div>
   )
 }
