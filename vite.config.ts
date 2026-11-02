@@ -99,8 +99,15 @@ function emitVersionJson(): Plugin {
   }
 }
 
-export default defineConfig(async () => {
-  const port = await resolveDevPort(cfg.port)
+export default defineConfig(async ({ command }) => {
+  // Vite reevalúa la configuración antes de cerrar su servidor al reiniciar.
+  // Recordar el puerto elegido evita detectar nuestro propio servidor como otro proceso.
+  const portKey = `POLLERIA_VITE_PORT_${APP.toUpperCase()}`
+  const previousPort = Number(process.env[portKey])
+  const port = command === 'serve'
+    ? previousPort > 0 && previousPort <= 65535 ? previousPort : await resolveDevPort(cfg.port)
+    : cfg.port
+  if (command === 'serve') process.env[portKey] = String(port)
   if (port !== cfg.port) {
     console.log(`[vite] Puerto ${cfg.port} ocupado. ${APP} usa ${port}.`)
   }
@@ -143,9 +150,9 @@ export default defineConfig(async () => {
       emptyOutDir: true,
       rollupOptions: {
         output: {
-          entryFileNames: `assets/app-${readAppVersion().build.replace(/[^a-zA-Z0-9]/g, '')}.js`,
-          chunkFileNames: 'assets/[name].js',
-          assetFileNames: 'assets/[name][extname]',
+          entryFileNames: `assets/app-${readAppVersion().build.replace(/[^a-zA-Z0-9]/g, '')}-[hash].js`,
+          chunkFileNames: 'assets/[name]-[hash].js',
+          assetFileNames: 'assets/[name]-[hash][extname]',
         },
       },
     },

@@ -26,7 +26,7 @@ export function CustomerCouponsPanel({ onApply }: { onApply?: (code: string) => 
     })()
   }, [])
 
-  const useCode = async (code: string) => {
+  const applyCode = async (code: string) => {
     try {
       await navigator.clipboard.writeText(code)
     } catch {
@@ -72,7 +72,7 @@ export function CustomerCouponsPanel({ onApply }: { onApply?: (code: string) => 
                 </div>
                 <button
                   type="button"
-                  onClick={() => void useCode(c.code)}
+                  onClick={() => void applyCode(c.code)}
                   className="inline-flex shrink-0 items-center gap-1 rounded-xl bg-[#ffd700] px-3 py-2 text-xs font-black text-[#1a3d1a]"
                 >
                   <Copy size={14} /> {onApply ? 'Usar' : 'Copiar'}

@@ -140,7 +140,7 @@ export function SkeletonTrackPage() {
 }
 
 function BootBone({ className = '' }: { className?: string }) {
-  return <div className={`animate-pulse rounded-lg bg-ink/10 dark:bg-white/10 ${className}`} />
+  return <div className={`max-w-full animate-pulse rounded-lg bg-ink/10 dark:bg-white/10 ${className}`} />
 }
 
 /** Primera carga del sistema: el contenido aparece cuando la base ya respondió. */

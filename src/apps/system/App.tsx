@@ -1,35 +1,38 @@
+import { lazy } from 'react'
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
 import { StoreProvider } from '../../store/StoreContext'
 import { AuthProvider } from '../../auth/AuthContext'
 import { Layout } from '../../components/Layout'
 import { ProtectedRoute } from '../../components/ProtectedRoute'
 import { Login } from '../../pages/Login'
-import { Dashboard } from '../../pages/Dashboard'
-import { Pos } from '../../pages/Pos'
-import { Comandas } from '../../pages/Comandas'
-import { Cocina } from '../../pages/Cocina'
-import { Mesas } from '../../pages/Mesas'
-import { Reservas } from '../../pages/Reservas'
-import { MenuPage } from '../../pages/Menu'
-import { Inventario } from '../../pages/Inventario'
-import { Usuarios } from '../../pages/Usuarios'
-import { Clientes } from '../../pages/Clientes'
-import { Conductores } from '../../pages/Conductores'
-import { Reportes } from '../../pages/Reportes'
-import { PedidosWeb } from '../../pages/PedidosWeb'
-import { Sucursales } from '../../pages/Sucursales'
-import { Facturacion } from '../../pages/Facturacion'
-import { WhatsApp } from '../../pages/WhatsApp'
-import { Configuracion } from '../../pages/Configuracion'
-import { WebConfig } from '../../pages/WebConfig'
-import { Cupones } from '../../pages/Cupones'
-import { ImprimirQR } from '../../pages/ImprimirQR'
-import { SalonMesas } from '../../pages/SalonMesas'
 import { BASENAME } from '../../lib/paths'
 import { VersionUpdateWatcher } from '../../components/VersionUpdateWatcher'
 import { OfflineBanner } from '../../components/OfflineBanner'
 import { ThemeProvider } from '../../components/ThemeProvider'
 import { ConfirmDialogProvider } from '../../components/ConfirmDialogContext'
+
+// Cada módulo se descarga cuando se abre; el acceso no carga mapas, reportes ni editores.
+const Dashboard = lazy(() => import('../../pages/Dashboard').then((m) => ({ default: m.Dashboard })))
+const Pos = lazy(() => import('../../pages/Pos').then((m) => ({ default: m.Pos })))
+const Comandas = lazy(() => import('../../pages/Comandas').then((m) => ({ default: m.Comandas })))
+const Cocina = lazy(() => import('../../pages/Cocina').then((m) => ({ default: m.Cocina })))
+const Mesas = lazy(() => import('../../pages/Mesas').then((m) => ({ default: m.Mesas })))
+const Reservas = lazy(() => import('../../pages/Reservas').then((m) => ({ default: m.Reservas })))
+const MenuPage = lazy(() => import('../../pages/Menu').then((m) => ({ default: m.MenuPage })))
+const Inventario = lazy(() => import('../../pages/Inventario').then((m) => ({ default: m.Inventario })))
+const Usuarios = lazy(() => import('../../pages/Usuarios').then((m) => ({ default: m.Usuarios })))
+const Clientes = lazy(() => import('../../pages/Clientes').then((m) => ({ default: m.Clientes })))
+const Conductores = lazy(() => import('../../pages/Conductores').then((m) => ({ default: m.Conductores })))
+const Reportes = lazy(() => import('../../pages/Reportes').then((m) => ({ default: m.Reportes })))
+const PedidosWeb = lazy(() => import('../../pages/PedidosWeb').then((m) => ({ default: m.PedidosWeb })))
+const Sucursales = lazy(() => import('../../pages/Sucursales').then((m) => ({ default: m.Sucursales })))
+const Facturacion = lazy(() => import('../../pages/Facturacion').then((m) => ({ default: m.Facturacion })))
+const WhatsApp = lazy(() => import('../../pages/WhatsApp').then((m) => ({ default: m.WhatsApp })))
+const Configuracion = lazy(() => import('../../pages/Configuracion').then((m) => ({ default: m.Configuracion })))
+const WebConfig = lazy(() => import('../../pages/WebConfig').then((m) => ({ default: m.WebConfig })))
+const Cupones = lazy(() => import('../../pages/Cupones').then((m) => ({ default: m.Cupones })))
+const ImprimirQR = lazy(() => import('../../pages/ImprimirQR').then((m) => ({ default: m.ImprimirQR })))
+const SalonMesas = lazy(() => import('../../pages/SalonMesas').then((m) => ({ default: m.SalonMesas })))
 
 export default function App() {
   return (

@@ -7,6 +7,7 @@ import {
 } from '../lib/apiClient'
 import type { Driver } from '../types'
 import { Field, Modal, PageTitle, inputClass } from '../components/ui'
+import { PersonAvatar } from '../components/PersonAvatar'
 import { ConfirmProcess } from '../components/ConfirmProcess'
 import { useConfirm } from '../components/ConfirmDialogContext'
 import { uid } from '../lib/format'
@@ -123,14 +124,7 @@ export function Conductores() {
             className="flex flex-wrap items-center justify-between gap-3 rounded-2xl bg-white p-4 shadow-sm"
           >
             <div className="flex min-w-0 items-center gap-3">
-              <img
-                src={
-                  d.photoUrl ||
-                  `https://ui-avatars.com/api/?name=${encodeURIComponent(d.name)}&background=0f766e&color=ffffff&size=128&bold=true`
-                }
-                alt=""
-                className="h-12 w-12 rounded-full object-cover"
-              />
+              <PersonAvatar name={d.name} photoUrl={d.photoUrl} tone="driver" className="h-12 w-12 shrink-0 text-sm" />
               <div className="min-w-0">
                 <p className="font-semibold">{d.name}</p>
                 <p className="text-sm text-ink/45">{d.phone}</p>

@@ -64,7 +64,7 @@ function ChartShell({
 
 export function HourMoneyChart({ items, height = 280 }: { items: MoneyRow[]; height?: number }) {
   const dark = useDark()
-  const c = palette(dark)
+  const c = useMemo(() => palette(dark), [dark])
   const option = useMemo(() => {
     if (!items.length) return null
     const max = Math.max(...items.map((i) => i.total), 0)
@@ -109,13 +109,13 @@ export function HourMoneyChart({ items, height = 280 }: { items: MoneyRow[]; hei
         },
       ],
     }
-  }, [items, c, dark])
+  }, [items, c])
   return <ChartShell option={option} height={height} empty={!items.some((i) => i.total > 0)} />
 }
 
 export function ComposedDayChart({ items, height = 280 }: { items: MoneyRow[]; height?: number }) {
   const dark = useDark()
-  const c = palette(dark)
+  const c = useMemo(() => palette(dark), [dark])
   const option = useMemo(() => {
     if (!items.length) return null
     const text = { color: c.text, fontSize: 11 }
@@ -186,14 +186,14 @@ export function ComposedDayChart({ items, height = 280 }: { items: MoneyRow[]; h
         },
       ],
     }
-  }, [items, c, dark])
+  }, [items, c])
   return <ChartShell option={option} height={height} empty={!items.some((i) => i.total > 0 || (i.count ?? 0) > 0)} />
 }
 
 export function HorizontalMoneyChart({ items, height = 280 }: { items: MoneyRow[]; height?: number }) {
   const dark = useDark()
-  const c = palette(dark)
-  const rows = items.slice(0, 12).slice().reverse()
+  const c = useMemo(() => palette(dark), [dark])
+  const rows = useMemo(() => items.slice(0, 12).reverse(), [items])
   const option = useMemo(() => {
     if (!rows.length) return null
     const text = { color: c.text, fontSize: 11 }
@@ -238,7 +238,7 @@ export function HorizontalMoneyChart({ items, height = 280 }: { items: MoneyRow[
         },
       ],
     }
-  }, [rows, c, dark])
+  }, [rows, c])
   return (
     <ChartShell
       option={option}
@@ -250,8 +250,8 @@ export function HorizontalMoneyChart({ items, height = 280 }: { items: MoneyRow[
 
 export function DonutChart({ items, height = 260 }: { items: MixRow[]; height?: number }) {
   const dark = useDark()
-  const c = palette(dark)
-  const data = items.filter((i) => i.value > 0)
+  const c = useMemo(() => palette(dark), [dark])
+  const data = useMemo(() => items.filter((i) => i.value > 0), [items])
   const option = useMemo(() => {
     if (!data.length) return null
     const text = { color: c.text, fontSize: 11 }
@@ -283,13 +283,13 @@ export function DonutChart({ items, height = 260 }: { items: MixRow[]; height?: 
         },
       ],
     }
-  }, [data, c, dark])
+  }, [data, c])
   return <ChartShell option={option} height={height} empty={!data.length} />
 }
 
 export function VerticalMoneyChart({ items, height = 260 }: { items: MixRow[]; height?: number }) {
   const dark = useDark()
-  const c = palette(dark)
+  const c = useMemo(() => palette(dark), [dark])
   const option = useMemo(() => {
     if (!items.length) return null
     const text = { color: c.text, fontSize: 11 }
@@ -330,6 +330,6 @@ export function VerticalMoneyChart({ items, height = 260 }: { items: MixRow[]; h
         },
       ],
     }
-  }, [items, c, dark])
+  }, [items, c])
   return <ChartShell option={option} height={height} empty={!items.some((i) => i.value > 0)} />
 }

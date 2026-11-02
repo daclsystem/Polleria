@@ -192,7 +192,7 @@ export function ImprimirQR() {
           <h2 className="font-display text-lg">Configuración de impresión</h2>
         </div>
 
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <Field label="Códigos por hoja">
             <select
               className={inputClass}
@@ -261,7 +261,7 @@ export function ImprimirQR() {
 
         <div className="rounded-2xl bg-ink/[0.03] p-4 text-sm">
           <p className="font-semibold">URL del código QR:</p>
-          <p className="mt-1 font-mono text-xs text-ember">{menuUrl}</p>
+          <p className="mt-1 break-all font-mono text-xs text-ember">{menuUrl}</p>
           <p className="mt-2 text-xs text-ink/55">
             Los clientes escanearán este código para ver la carta digital y realizar pedidos.
           </p>
@@ -315,10 +315,10 @@ export function ImprimirQR() {
               selectedOption?.cols === 1
                 ? 'grid-cols-1'
                 : selectedOption?.cols === 2
-                  ? 'grid-cols-2'
+                  ? 'grid-cols-1 sm:grid-cols-2'
                   : selectedOption?.cols === 3
-                    ? 'grid-cols-3'
-                    : 'grid-cols-4'
+                    ? 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-3'
+                    : 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-4'
             }`}
           >
             {qrCodes.map((qr, idx) => {
@@ -360,14 +360,14 @@ export function ImprimirQR() {
                       <span>🥘</span>
                     </div>
                   )}
-                  <div className="mb-3 flex items-center justify-center">
+                  <div className="mb-3 flex max-w-full items-center justify-center">
                     <canvas
                       ref={(el) => {
                         if (el) {
                           canvasRefs.current[idx] = el
                         }
                       }}
-                      style={{ display: 'block' }}
+                      style={{ display: 'block', maxWidth: '100%', height: 'auto' }}
                     />
                   </div>
                   <h3 className={getTitleStyle()}>

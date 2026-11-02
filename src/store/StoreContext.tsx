@@ -296,6 +296,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const stateRef = useRef(state)
   stateRef.current = state
   const reloadTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const reloadInFlight = useRef<Promise<void> | null>(null)
+  const reloadTrailing = useRef<Promise<void> | null>(null)
   const lastNoticeRef = useRef<{ text: string; at: number } | null>(null)
 
   const pushNotice = useCallback((text: string, tone: LiveNotice['tone'] = 'info') => {
@@ -325,37 +327,57 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const reloadFromApiRef = useRef<(() => Promise<void>) | null>(null)
-  const reloadFromApi = useCallback(async () => {
+  const reloadFromApi = useCallback((): Promise<void> => {
     requireApi()
-    if (!getApiToken()) return
-    setApiLoading(true)
-    setApiError(null)
-    try {
-      const data = await apiBootstrap()
-      setState((prev) => ({
-        users: data.users as User[],
-        products: data.products as Product[],
-        tables: data.tables as Table[],
-        inventory: data.inventory as InventoryItem[],
-        settings: data.settings as Settings,
-        orders: mergeOrdersKitchenWaves(
-          (data.orders as Order[]).map((o) =>
-            reconcileOrderMoney(o, (data.settings as Settings)?.igvRate),
-          ),
-          prev.orders,
-        ),
-        customers: data.customers as Customer[],
-        reservations: data.reservations as Reservation[],
-        branches: data.branches as AppState['branches'],
-        deliveryRanges: (data.deliveryRanges as AppState['deliveryRanges']) || [],
-        nextOrderNumber: data.nextOrderNumber,
-      }))
-    } catch (e) {
-      setApiError((e as Error).message)
-    } finally {
-      setApiLoading(false)
-      setApiReady(true)
+    const token = getApiToken()
+    if (!token) return Promise.resolve()
+    // Enfocar la ventana, el socket y el sondeo pueden coincidir.
+    // Compartir la petición y ejecutar una actualización posterior conserva los cambios.
+    if (reloadInFlight.current) {
+      if (!reloadTrailing.current) {
+        reloadTrailing.current = reloadInFlight.current.then(async () => {
+          reloadTrailing.current = null
+          await reloadFromApiRef.current?.()
+        })
+      }
+      return reloadTrailing.current
     }
+    setApiLoading(true)
+    const request = (async () => {
+      try {
+        const data = await apiBootstrap()
+        if (getApiToken() !== token) return
+        setApiError(null)
+        setState((prev) => ({
+          users: data.users as User[],
+          products: data.products as Product[],
+          tables: data.tables as Table[],
+          inventory: data.inventory as InventoryItem[],
+          settings: data.settings as Settings,
+          orders: mergeOrdersKitchenWaves(
+            (data.orders as Order[]).map((o) =>
+              reconcileOrderMoney(o, (data.settings as Settings)?.igvRate),
+            ),
+            prev.orders,
+          ),
+          customers: data.customers as Customer[],
+          reservations: data.reservations as Reservation[],
+          branches: data.branches as AppState['branches'],
+          deliveryRanges: (data.deliveryRanges as AppState['deliveryRanges']) || [],
+          nextOrderNumber: data.nextOrderNumber,
+        }))
+      } catch (e) {
+        if (getApiToken() === token) setApiError((e as Error).message)
+      } finally {
+        reloadInFlight.current = null
+        if (getApiToken() === token) {
+          setApiLoading(false)
+          setApiReady(true)
+        }
+      }
+    })()
+    reloadInFlight.current = request
+    return request
   }, [])
 
   reloadFromApiRef.current = reloadFromApi
@@ -457,9 +479,12 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           pushNotice(`${num} asignado a conductor`, 'info')
         }
       })
-      const t = setInterval(() => void reloadFromApi(), 25000)
+      const t = setInterval(() => {
+        if (document.visibilityState === 'visible' && navigator.onLine) void reloadFromApi()
+      }, 25000)
       return () => {
         clearInterval(t)
+        if (reloadTimer.current) clearTimeout(reloadTimer.current)
         offStatus()
         offEvent()
         offReconnect()

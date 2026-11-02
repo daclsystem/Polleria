@@ -1,4 +1,5 @@
-import type { ReactNode } from 'react'
+import { useId, type ReactNode } from 'react'
+import { useDialogFocus } from '../hooks/useDialogFocus'
 import { ROLE_LABEL, STATUS_LABEL, TYPE_LABEL, type OrderStatus, type OrderType, type Role } from '../types'
 
 export function StatusBadge({ status }: { status: OrderStatus }) {
@@ -46,21 +47,32 @@ export function Modal({
   children: ReactNode
   wide?: boolean
 }) {
+  const titleId = useId()
+  const { panelRef, onKeyDown } = useDialogFocus(open, onClose)
   if (!open) return null
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center p-0 sm:items-center sm:p-4">
-      <button className="absolute inset-0 bg-ink/50 backdrop-blur-[3px]" onClick={onClose} aria-label="Cerrar" />
+      <button type="button" tabIndex={-1} className="absolute inset-0 bg-ink/50 backdrop-blur-[3px]" onClick={onClose} aria-label="Cerrar diálogo" />
       <div
-        className={`relative max-h-[92dvh] w-full overflow-y-auto rounded-t-[1.75rem] bg-surface p-5 text-ink shadow-2xl sm:rounded-[1.75rem] ${
+        ref={panelRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        tabIndex={-1}
+        onKeyDown={onKeyDown}
+        style={{ paddingBottom: 'max(1.25rem, env(safe-area-inset-bottom))' }}
+        className={`relative min-w-0 max-h-[92dvh] w-full overflow-y-auto overscroll-contain rounded-t-[1.75rem] bg-surface p-5 text-ink shadow-2xl outline-none sm:rounded-[1.75rem] ${
           wide ? 'sm:max-w-2xl' : 'sm:max-w-md'
         }`}
       >
         <div className="mx-auto mb-3 h-1 w-10 rounded-full bg-ink/10 sm:hidden" />
         <div className="mb-4 flex items-start justify-between gap-4">
-          <h3 className="text-xl font-black tracking-tight sm:text-2xl">{title}</h3>
+          <h2 id={titleId} className="min-w-0 text-xl font-black tracking-tight [overflow-wrap:anywhere] sm:text-2xl">{title}</h2>
           <button
+            type="button"
             onClick={onClose}
-            className="tap flex h-10 w-10 items-center justify-center rounded-full bg-ink/[0.04] text-xl text-ink/45 hover:bg-ink/[0.08] hover:text-ink"
+            aria-label="Cerrar diálogo"
+            className="tap flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-ink/[0.04] text-xl text-ink/45 hover:bg-ink/[0.08] hover:text-ink"
           >
             ×
           </button>
@@ -79,7 +91,7 @@ export function Field({
   children: ReactNode
 }) {
   return (
-    <label className="block space-y-1.5">
+    <label className="block min-w-0 space-y-1.5">
       <span className="text-[11px] font-bold tracking-[0.14em] text-ink/40 uppercase">{label}</span>
       {children}
     </label>
@@ -87,7 +99,7 @@ export function Field({
 }
 
 export const inputClass =
-  'min-h-12 w-full rounded-2xl border border-ink/[0.08] bg-surface px-4 py-3.5 text-base text-ink shadow-sm outline-none transition placeholder:text-ink/30 focus:border-gold focus:ring-4 focus:ring-gold/20 md:py-3'
+  'min-h-12 w-full min-w-0 max-w-full rounded-2xl border border-ink/[0.08] bg-surface px-4 py-3.5 text-base text-ink shadow-sm outline-none transition placeholder:text-ink/30 focus:border-gold focus:ring-4 focus:ring-gold/20 md:py-3'
 
 export function Empty({ title, hint }: { title: string; hint?: string }) {
   return (

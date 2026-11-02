@@ -28,6 +28,8 @@ export function PersonAvatar({
     return (
       <img
         src={photoUrl}
+        loading="lazy"
+        decoding="async"
         alt={name}
         className={`rounded-full object-cover ${className}`}
         {...rest}

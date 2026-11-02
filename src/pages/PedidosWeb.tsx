@@ -22,6 +22,10 @@ import { PrintOrderActions } from '../components/PrintOrderActions'
 import { NuevoPedidoButton } from '../components/NuevoPedido'
 import { useConfirm } from '../components/ConfirmDialogContext'
 import { isVoidOrder, type Driver, type Order } from '../types'
+import { OrderPeople } from '../components/OrderPeople'
+import { OrderItemsDialog } from '../components/OrderItemsDialog'
+import { Pagination } from '../components/Pagination'
+import { usePaginatedList } from '../hooks/usePaginatedList'
 
 type Channel = 'todas' | OrderChannel
 
@@ -74,6 +78,7 @@ export function PedidosWeb({ vista = 'curso' }: { vista?: 'curso' | 'historial' 
   const [now, setNow] = useState(() => Date.now())
   const [drivers, setDrivers] = useState<Driver[]>([])
   const [assigning, setAssigning] = useState<string | null>(null)
+  const [detailOrderId, setDetailOrderId] = useState<string | null>(null)
 
   useEffect(() => {
     const t = window.setInterval(() => setNow(Date.now()), 15000)
@@ -147,6 +152,7 @@ export function PedidosWeb({ vista = 'curso' }: { vista?: 'curso' | 'historial' 
       return matchesQuery(o, needle, phoneNeedle)
     })
   }, [pool, channel, needle, phoneNeedle])
+  const pagination = usePaginatedList(list, JSON.stringify([board, channel, needle, phoneNeedle, from, to, actingRole, user?.id]))
 
   const removeOrder = (o: Order) => {
     void confirmDelete(
@@ -274,14 +280,13 @@ export function PedidosWeb({ vista = 'curso' }: { vista?: 'curso' | 'historial' 
               : 'Nada en curso. Los pagados (local) o liquidados (delivery) van al historial.'}
           </p>
         ) : null}
-        {list.map((o, idx) => {
+        {pagination.pageItems.map((o, idx) => {
           const mesa = channelOf(o) === 'mesa'
           const mins = Math.max(
             0,
             Math.floor((now - new Date(o.updatedAt || o.createdAt).getTime()) / 60000),
           )
           const late = board === 'curso' && mins >= 15 && o.status !== 'listo' && o.status !== 'entregado'
-          const origin = o.source === 'web' ? 'App del cliente' : `Mozo: ${staffLabel(o, state.users)}`
           return (
             <article
               key={o.id}
@@ -304,13 +309,6 @@ export function PedidosWeb({ vista = 'curso' }: { vista?: 'curso' | 'historial' 
                   {mesa ? (
                     <p className="mt-1 font-display text-3xl tracking-tight text-ember">Mesa {o.tableNumber}</p>
                   ) : null}
-                  <p className="mt-1 text-sm font-semibold text-ink">{o.customerName}</p>
-                  <p className="mt-0.5 text-xs font-semibold text-ink/45">{origin}</p>
-                  <p className="break-all text-sm text-ink/50">
-                    {o.customerPhone}
-                    {o.address ? ` · ${o.address}` : ''}
-                  </p>
-                  <p className="text-xs text-ink/40">{formatDateTime(o.createdAt)}</p>
                 </div>
                 <div className="text-right">
                   <StatusBadge status={o.status} />
@@ -334,7 +332,18 @@ export function PedidosWeb({ vista = 'curso' }: { vista?: 'curso' | 'historial' 
                   ) : null}
                 </div>
               </div>
-              <ul className="mt-3 text-sm text-ink/70">
+              <OrderPeople className="mt-3" customer={o.customerName} attendant={staffLabel(o, state.users)} attendantLabel={o.source === 'web' ? 'Origen' : 'Mozo'} />
+              {o.address || (o.customerPhone && /[1-9]/.test(o.customerPhone)) ? (
+                <p className="mt-2 text-xs text-ink/55 [overflow-wrap:anywhere]">
+                  {o.customerPhone && /[1-9]/.test(o.customerPhone) ? o.customerPhone : ''}
+                  {o.address ? ` ${o.address}` : ''}
+                </p>
+              ) : null}
+              <p className="mt-2 text-[11px] text-ink/45">{formatDateTime(o.createdAt)}</p>
+              <button type="button" onClick={() => setDetailOrderId(o.id)} aria-haspopup="dialog" className="mt-2 inline-flex min-h-11 items-center gap-2 rounded-lg px-1 text-xs font-bold text-ember underline decoration-ember/30 underline-offset-4 hover:bg-ember/5">
+                <ShoppingBag size={14} /> Ver {o.items.reduce((sum, item) => sum + item.qty, 0)} productos del pedido
+              </button>
+              <ul className="mt-1 text-sm text-ink/70">
                 {o.items.map((i, iidx) => {
                   const kitchen = filterKitchenItems([i], state.products).length > 0
                   return (
@@ -433,6 +442,8 @@ export function PedidosWeb({ vista = 'curso' }: { vista?: 'curso' | 'historial' 
           )
         })}
       </div>
+      <Pagination page={pagination.page} total={list.length} onChange={pagination.setPage} noun="pedidos" />
+      <OrderItemsDialog orderId={detailOrderId} onClose={() => setDetailOrderId(null)} />
     </div>
   )
 }

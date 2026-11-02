@@ -40,30 +40,30 @@ export function Usuarios() {
         {state.users
           .filter((u) => !u.isSystem)
           .map((u) => (
-          <article key={u.id} className="flex flex-wrap items-center justify-between gap-3 rounded-2xl bg-white p-4 shadow-sm">
-            <div className="flex items-center gap-3">
+          <article key={u.id} className="flex min-w-0 flex-wrap items-center justify-between gap-3 rounded-2xl bg-white p-4 shadow-sm">
+            <div className="flex min-w-0 basis-full items-center gap-3 sm:basis-auto">
               <PersonAvatar
                 name={u.name}
                 photoUrl={u.photoUrl}
                 tone="staff"
                 className="h-12 w-12 text-sm ring-1 ring-ink/10"
               />
-              <div>
-                <p className="font-semibold">{u.name}</p>
-                <p className="text-sm text-ink/45">{u.email}</p>
+              <div className="min-w-0">
+                <p className="break-words font-semibold">{u.name}</p>
+                <p className="break-all text-sm text-ink/55">{u.email}</p>
                 {u.dni ? <p className="text-xs text-ink/40">DNI {u.dni}{u.phone ? ` · ${u.phone}` : ''}</p> : null}
                 <p className="font-mono text-[10px] tracking-wider text-ink/35">ID · {shortAccountId(u.id)}</p>
               </div>
             </div>
-            <div className="flex items-center gap-3">
+            <div className="flex flex-wrap items-center gap-3">
               <RoleBadge role={u.role} />
               <button
                 onClick={() => saveUser({ ...u, active: !u.active })}
-                className={`text-xs font-semibold ${u.active ? 'text-sage' : 'text-brick'}`}
+                className={`min-h-11 rounded-lg px-1 text-xs font-semibold ${u.active ? 'text-sage' : 'text-brick'}`}
               >
                 {u.active ? 'Activo' : 'Inactivo'}
               </button>
-              <button className="text-sm text-ember" onClick={() => setEditing(u)}>
+              <button className="min-h-11 rounded-lg px-1 text-sm text-ember" onClick={() => setEditing(u)}>
                 Editar
               </button>
             </div>

@@ -119,25 +119,26 @@ export function Cocina() {
   }
 
   return (
-    <div className="flex h-[calc(100dvh-9.5rem)] flex-col gap-3 overflow-hidden sm:h-[calc(100dvh-8rem)] lg:h-[calc(100dvh-6.5rem)]">
+    <div className="kitchen-view flex h-full min-h-96 flex-col gap-3 overflow-hidden">
       <div className="flex shrink-0 flex-wrap items-end justify-between gap-3">
         <PageTitle title="Pantalla de cocina" hint={`${tickets.length} tickets activos`} />
-        <div className="flex items-center gap-2">
+        <div className="flex max-w-full flex-wrap items-center gap-2">
           <CocinaPerdida />
           {!soundOn ? (
             <button
               type="button"
               onClick={enableSound}
-              className="flex min-h-10 items-center gap-2 rounded-full bg-ember px-4 py-2 text-sm font-semibold text-white"
+              aria-label="Activar sonido"
+              className="flex min-h-11 shrink-0 items-center gap-2 whitespace-nowrap rounded-full bg-ember px-3 py-2 text-xs font-semibold text-white sm:px-4 sm:text-sm"
             >
-              <Volume2 size={16} /> Activar sonido
+              <Volume2 size={16} /><span className="sm:hidden">Sonido</span><span className="hidden sm:inline">Activar sonido</span>
             </button>
           ) : (
             <span className="rounded-full bg-ink/10 px-3 py-1.5 text-xs font-semibold text-ink/60">Sonido ON</span>
           )}
-          <div className="inline-flex items-center gap-1.5 rounded-full bg-ink px-3.5 py-2 font-display text-lg text-gold tabular-nums sm:text-xl">
+          <div className="inline-flex min-h-11 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full bg-ink px-3 py-2 font-display text-base text-gold tabular-nums sm:px-3.5 sm:text-xl">
             <Clock size={14} className="opacity-70" />
-            {now.toLocaleTimeString('es-PE', { hour: '2-digit', minute: '2-digit' })}
+            {now.toLocaleTimeString('es-PE', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'America/Lima' })}
           </div>
         </div>
       </div>

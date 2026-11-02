@@ -1,269 +1,223 @@
-import { ChefHat, Clock3, Flame, ShoppingBag, Table2, UtensilsCrossed, Wallet } from 'lucide-react'
+import { ArrowDownLeft, ArrowRight, CalendarDays, ChefHat, Check, ChevronRight, ClipboardList, Clock3, Package, Plus, ShoppingBag, Table2, TrendingUp, UtensilsCrossed, Wallet } from 'lucide-react'
 import { Link } from 'react-router-dom'
-import { useEffect, useState } from 'react'
+import { lazy, Suspense, useEffect, useMemo, useState } from 'react'
 import { useAuth } from '../auth/AuthContext'
 import { useStore } from '../store/StoreContext'
 import { elapsedMinutes, formatTime, isSameDay, padOrder, soles } from '../lib/format'
 import { apiReportOrders } from '../lib/apiClient'
-import { limaRecentRange, paidSalesByDay, type DaySales } from '../lib/salesDays'
-import { isVoidOrder } from '../types'
-import { ComposedDayChart } from '../components/ReportCharts'
-import { PageTitle, StatusBadge, TypeBadge } from '../components/ui'
+import { limaRecentRange, paidSalesByDay } from '../lib/salesDays'
+import { isVoidOrder, type Order } from '../types'
+import { StatusBadge, TypeBadge } from '../components/ui'
+
+const SalesChart = lazy(() => import('../components/ReportCharts').then((m) => ({ default: m.ComposedDayChart })))
 
 export function Dashboard() {
   const { state } = useStore()
-  const { can, actingRole } = useAuth()
-  const today = state.orders.filter((o) => isSameDay(o.createdAt) && !isVoidOrder(o.status))
-  const sales = today.filter((o) => o.paid).reduce((s, o) => s + o.total, 0)
-  const tickets = today.length
-  const paidCount = today.filter((o) => o.paid).length
-  const pendingPay = state.orders.filter((o) => !o.paid && !isVoidOrder(o.status)).length
-  const avg = paidCount ? sales / paidCount : 0
-  const kitchen = state.orders.filter((o) => o.status === 'nuevo' || o.status === 'en_cocina').length
-  const isCajero = actingRole === 'cajero'
+  const { can, actingRole, user } = useAuth()
+  const [reportOrders, setReportOrders] = useState<Order[] | null>(null)
+  const [reportFailed, setReportFailed] = useState(false)
 
-  const [weekDays, setWeekDays] = useState<DaySales[] | null>(null)
+  // El histórico se consulta una vez por minuto. Los cambios en vivo se combinan abajo.
   useEffect(() => {
-    const range = limaRecentRange(7)
-    let cancel = false
-    apiReportOrders(range.from.toISOString(), range.until.toISOString())
-      .then((rows) => {
-        if (!cancel) setWeekDays(paidSalesByDay(rows, range.from, range.until))
-      })
-      .catch(() => {
-        if (!cancel) setWeekDays(paidSalesByDay(state.orders, range.from, range.until))
-      })
+    let cancelled = false
+    let pending = false
+    let lastLoad = 0
+    const load = async () => {
+      if (pending || document.visibilityState === 'hidden' || Date.now() - lastLoad < 60000) return
+      pending = true
+      lastLoad = Date.now()
+      const range = limaRecentRange(7)
+      try {
+        const rows = await apiReportOrders(range.from.toISOString(), range.until.toISOString())
+        if (!cancelled) {
+          setReportOrders(rows)
+          setReportFailed(false)
+        }
+      } catch {
+        if (!cancelled) setReportFailed(true)
+      } finally {
+        pending = false
+      }
+    }
+    void load()
+    const timer = window.setInterval(() => void load(), 60000)
+    const onVisible = () => void load()
+    document.addEventListener('visibilitychange', onVisible)
     return () => {
-      cancel = true
+      cancelled = true
+      window.clearInterval(timer)
+      document.removeEventListener('visibilitychange', onVisible)
     }
-  }, [state.orders])
+  }, [])
 
-  const productSales = new Map<string, { name: string; qty: number; total: number }>()
-  for (const o of today) {
-    for (const item of o.items) {
-      const prev = productSales.get(item.productId) ?? { name: item.name, qty: 0, total: 0 }
-      prev.qty += item.qty
-      prev.total += item.qty * item.price
-      productSales.set(item.productId, prev)
+  const summary = useMemo(() => {
+    const merged = new Map((reportOrders || []).map((order) => [order.id, order]))
+    for (const order of state.orders) merged.set(order.id, order)
+    const all = [...merged.values()]
+    const today = all.filter((o) => isSameDay(o.createdAt) && !isVoidOrder(o.status))
+    const paid = today.filter((o) => o.paid)
+    const sales = paid.reduce((sum, order) => sum + order.total, 0)
+    const kitchen = state.orders.filter((o) => o.status === 'nuevo' || o.status === 'en_cocina')
+    const productSales = new Map<string, { name: string; qty: number }>()
+    for (const order of paid) {
+      for (const item of order.items) {
+        const previous = productSales.get(item.productId) || { name: item.name, qty: 0 }
+        productSales.set(item.productId, { name: item.name, qty: previous.qty + item.qty })
+      }
     }
-  }
-  const top = [...productSales.values()].sort((a, b) => b.qty - a.qty).slice(0, 5)
-  const lowStock = state.inventory.filter((i) => i.stock <= i.minStock)
-  const recent = [...state.orders].sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 6)
-  const late = state.orders.filter(
-    (o) => (o.status === 'nuevo' || o.status === 'en_cocina') && elapsedMinutes(o.createdAt) >= 15,
-  ).length
+    const range = limaRecentRange(7)
+    return {
+      sales,
+      tickets: today.length,
+      paidCount: paid.length,
+      avg: paid.length ? sales / paid.length : 0,
+      pendingPay: state.orders.filter((o) => !o.paid && !isVoidOrder(o.status)).length,
+      kitchen: kitchen.length,
+      late: kitchen.filter((o) => elapsedMinutes(o.createdAt) >= 15).length,
+      top: [...productSales.values()].sort((a, b) => b.qty - a.qty).slice(0, 5),
+      recent: [...state.orders].sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 6),
+      weekDays: paidSalesByDay(all, range.from, range.until),
+    }
+  }, [state.orders, reportOrders])
+  const lowStock = useMemo(() => state.inventory.filter((i) => i.stock <= i.minStock), [state.inventory])
+  const freeTables = state.tables.filter((table) => table.status === 'libre').length
+  const hour = Number(new Intl.DateTimeFormat('es-PE', { hour: 'numeric', hourCycle: 'h23', timeZone: 'America/Lima' }).format(new Date()))
+  const greeting = hour < 12 ? 'Buenos días' : hour < 19 ? 'Buenas tardes' : 'Buenas noches'
+  const isCajero = actingRole === 'cajero'
+  const weekTotal = summary.weekDays.reduce((sum, day) => sum + day.total, 0)
 
   return (
-    <div className="space-y-6 sm:space-y-8">
-      <PageTitle kicker="Hoy en el local" title="¿Qué quieres hacer?" hint={state.settings.slogan} />
-
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+    <div className="dashboard space-y-6">
+      <div className="flex flex-wrap items-end justify-between gap-4">
+        <div>
+          <p className="mb-2 text-[10px] font-bold tracking-[0.18em] text-ember uppercase">Tu negocio al día</p>
+          <h1 className="text-2xl font-extrabold tracking-tight sm:text-[1.9rem]">{greeting}, {user?.name?.split(' ')[0] || 'equipo'} <span className="text-gold">✦</span></h1>
+          <p className="mt-1.5 text-sm text-ink/50">Así va el servicio de hoy. Todo lo que necesitas, a la mano.</p>
+        </div>
         {can('pos') ? (
-          <Action to="/pos" title="Para llevar" hint="Vienen, piden y se lo llevan" icon={UtensilsCrossed} accent />
-        ) : null}
-        {can('comandas') && actingRole === 'cajero' ? (
-          <Action
-            to="/comandas"
-            title="Por cobrar"
-            hint={
-              pendingPay === 1
-                ? '1 pedido pendiente de pago'
-                : `${pendingPay} pedidos pendientes de pago`
-            }
-            icon={ShoppingBag}
-            accent
-          />
-        ) : null}
-        {can('pedidos-web') ? (
-          <Action to="/pedidos-web" title="Pedidos" hint="Mesa, recojo y delivery" icon={ShoppingBag} />
-        ) : null}
-        {can('cocina') ? (
-          <Action to="/cocina" title="Ir a cocina" hint={`${kitchen} en preparación`} icon={ChefHat} />
-        ) : null}
-        {can('mesas') ? (
-          <Action to="/mesas" title="Ver mesas" hint="Salón y terraza" icon={Table2} />
+          <Link to="/pos" className="btn-primary gap-2 px-5 text-sm"><Plus size={18} /> Nuevo pedido</Link>
         ) : null}
       </div>
 
-      <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
-        {isCajero ? (
-          <Stat
-            icon={ShoppingBag}
-            label="Por cobrar"
-            value={String(pendingPay)}
-            hint={pendingPay === 1 ? 'pedido pendiente de pago' : 'pedidos pendientes de pago'}
-          />
-        ) : (
-          <Stat icon={ShoppingBag} label="Comandas" value={String(tickets)} hint="Salón, llevar y web" />
-        )}
-        <Stat icon={Wallet} label="Ventas" value={soles(sales)} hint={`${paidCount} cobrados`} />
-        <Stat icon={Flame} label="Promedio" value={soles(avg || 0)} hint="Ticket cobrado" />
-        <Stat icon={Clock3} label="En cocina" value={String(kitchen)} hint={late ? `${late} con demora` : 'Al día'} />
+      <div className="flex items-center justify-between gap-3 pt-2">
+        <h2 className="text-sm font-bold">Resumen de hoy</h2>
+        <span className="inline-flex items-center gap-2 rounded-lg border border-ink/8 bg-surface px-3 py-2 text-xs font-medium text-ink/55"><CalendarDays size={14} /> Hoy, {new Date().toLocaleDateString('es-PE', { day: 'numeric', month: 'short', timeZone: 'America/Lima' })}</span>
+      </div>
+      <div className="!mt-3 grid grid-cols-2 gap-3 xl:grid-cols-4">
+        <Stat icon={Wallet} label="Ventas del día" value={soles(summary.sales)} hint={`${summary.paidCount} pedidos cobrados`} tone="green" />
+        <Stat icon={ShoppingBag} label={isCajero ? 'Por cobrar' : 'Pedidos de hoy'} value={String(isCajero ? summary.pendingPay : summary.tickets)} hint={isCajero ? 'Pendientes de pago' : 'Salón, llevar y delivery'} tone="blue" />
+        <Stat icon={TrendingUp} label="Ticket promedio" value={soles(summary.avg)} hint="Por pedido cobrado" tone="purple" />
+        <Stat icon={ChefHat} label="En cocina" value={String(summary.kitchen)} hint={summary.late ? `${summary.late} llevan más de 15 min` : 'Preparación al día'} tone="amber" attention={summary.late > 0} />
       </div>
 
-      <div className="grid gap-4 lg:grid-cols-3">
-        <section className="card p-4 sm:p-5 lg:col-span-2">
-          <div className="mb-4 flex items-end justify-between gap-3">
+      <section aria-labelledby="quick-actions-title">
+        <h2 id="quick-actions-title" className="mb-3 text-sm font-bold">A trabajar</h2>
+        <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
+          {can('mesas') ? <Action to="/mesas" title="Mesas" hint={`${freeTables} de ${state.tables.length} disponibles`} icon={Table2} /> : null}
+          {can('pedidos-web') ? <Action to="/pedidos-web" title="Pedidos en curso" hint="Consulta y sigue cada pedido" icon={ClipboardList} /> : null}
+          {can('comandas') ? <Action to="/comandas" title="Ir a caja" hint={`${summary.pendingPay} pendientes de pago`} icon={Wallet} /> : null}
+          {can('cocina') ? <Action to="/cocina" title="Cocina" hint={`${summary.kitchen} pedidos en preparación`} icon={UtensilsCrossed} /> : null}
+        </div>
+      </section>
+
+      <div className="grid gap-5 xl:grid-cols-[minmax(0,1.8fr)_minmax(0,1fr)]">
+        <section className="card min-w-0 p-5 sm:p-6">
+          <div className="flex items-start justify-between gap-3">
             <div>
-              <h2 className="text-lg font-black tracking-tight sm:text-xl">Ventas 7 días</h2>
-              <p className="text-xs text-ink/40">Tickets (barras) y monto (línea), igual que Reportes</p>
+              <h2 className="text-base font-bold">Ventas de la semana</h2>
+              <p className="mt-1 text-xs text-ink/45">Pedidos cobrados · últimos 7 días</p>
             </div>
-            <Link to="/reportes" className="text-sm font-bold text-[#1a3d1a] dark:text-gold">
-              Reportes
-            </Link>
+            {can('reportes') ? <Link to="/reportes" className="dashboard-text-link">Ver reporte <ArrowRight size={14} /></Link> : null}
           </div>
-          {weekDays == null ? (
-            <div className="h-60 animate-pulse rounded-2xl bg-ink/10 dark:bg-white/10" aria-busy="true" />
+          <p className="mt-5 text-3xl font-extrabold tracking-tight tabular-nums">{soles(weekTotal)}</p>
+          <div className="mt-4 min-h-60" aria-label="Gráfico de ventas de los últimos siete días">
+            <Suspense fallback={<div className="h-60 animate-pulse rounded-xl bg-ink/5" aria-label="Cargando gráfico" />}>
+              <SalesChart items={summary.weekDays} height={240} />
+            </Suspense>
+          </div>
+          {reportFailed ? <p className="mt-2 text-xs text-amber-800 dark:text-amber-300">{reportOrders ? 'No se pudo actualizar el histórico; se conserva la última consulta.' : 'Mostrando los pedidos cargados. El histórico no está disponible por ahora.'}</p> : null}
+        </section>
+        <section className="card p-5 sm:p-6">
+          <div className="flex items-center justify-between gap-2">
+            <h2 className="text-base font-bold">Los favoritos de hoy</h2>
+            <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-gold/15 text-amber-700 dark:text-gold"><TrendingUp size={16} /></span>
+          </div>
+          <p className="mt-1 text-xs text-ink/45">Los platos más vendidos del día</p>
+          {summary.top.length === 0 ? (
+            <div className="flex min-h-60 flex-col items-center justify-center gap-3 text-center"><UtensilsCrossed size={28} className="text-ink/20" /><p className="text-sm text-ink/45">Los favoritos aparecerán<br />con las primeras ventas.</p></div>
           ) : (
-            <ComposedDayChart items={weekDays} height={240} />
+            <ol className="mt-6 space-y-5">
+              {summary.top.map((product, index) => (
+                <li key={product.name} className="flex items-center gap-3">
+                  <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-xl text-xs font-bold ${index === 0 ? 'bg-gold/20 text-amber-800 dark:text-gold' : 'bg-ink/4 text-ink/40'}`}>{String(index + 1).padStart(2, '0')}</span>
+                  <div className="min-w-0 flex-1">
+                    <div className="mb-2 flex items-center justify-between gap-2"><span className="truncate text-xs font-semibold sm:text-sm">{product.name}</span><span className="shrink-0 text-xs font-bold tabular-nums">{product.qty} <span className="font-normal text-ink/40">ud.</span></span></div>
+                    <div className="h-1.5 overflow-hidden rounded-full bg-ink/5"><div className={`h-full rounded-full ${index === 0 ? 'bg-gold' : 'bg-ember/35'}`} style={{ width: `${product.qty / summary.top[0].qty * 100}%` }} /></div>
+                  </div>
+                </li>
+              ))}
+            </ol>
           )}
         </section>
-        <section className="card p-4 sm:p-5">
-          <h2 className="text-lg font-black tracking-tight sm:text-xl">Más pedidos</h2>
-          <ul className="mt-4 space-y-3">
-            {top.length === 0 ? <p className="text-sm text-ink/40">Aún no hay ventas.</p> : null}
-            {top.map((p, i) => (
-              <li key={p.name} className="flex items-center justify-between gap-3">
-                <span className="flex min-w-0 items-center gap-3">
-                  <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-cream-dark text-xs font-bold">
-                    {i + 1}
-                  </span>
-                  <span className="truncate text-sm">{p.name}</span>
-                </span>
-                <span className="shrink-0 text-sm font-semibold">{p.qty}</span>
-              </li>
-            ))}
-          </ul>
-        </section>
       </div>
 
-      <div className="grid gap-4 lg:grid-cols-3">
-        <section className="card p-4 sm:p-5 lg:col-span-2">
-          <h2 className="text-lg font-black tracking-tight sm:text-xl">Últimas comandas</h2>
-          <div className="mt-3 space-y-2 md:hidden">
-            {recent.map((o) => (
-              <div key={o.id} className="rounded-2xl bg-cream px-3 py-3">
-                <div className="flex items-center justify-between gap-2">
-                  <p className="font-semibold">{padOrder(o.number)}</p>
-                  <span className="text-sm font-medium">{soles(o.total)}</span>
-                </div>
-                <p className="truncate text-sm text-ink/55">{o.customerName}</p>
-                <div className="mt-2 flex flex-wrap items-center gap-2">
-                  <TypeBadge type={o.type} />
-                  <StatusBadge status={o.status} />
-                  <span className="text-xs text-ink/40">{formatTime(o.createdAt)}</span>
-                </div>
-              </div>
-            ))}
+      <div className={`grid gap-5 ${can('inventario') ? 'xl:grid-cols-[minmax(0,1.8fr)_minmax(0,1fr)]' : ''}`}>
+        <section className="card min-w-0 overflow-hidden">
+          <div className="flex items-center justify-between gap-3 p-5 sm:p-6">
+            <div><h2 className="text-base font-bold">Últimos pedidos</h2><p className="mt-1 text-xs text-ink/45">Lo más reciente del servicio</p></div>
+            {can('pedidos-web') ? <Link to="/pedidos-web" className="dashboard-text-link">Ver pedidos <ArrowRight size={14} /></Link> : null}
           </div>
-          <div className="mt-4 hidden overflow-x-auto md:block">
-            <table className="w-full text-left text-sm">
-              <thead className="text-xs tracking-wide text-ink/40 uppercase">
-                <tr>
-                  <th className="pb-2">Nº</th>
-                  <th className="pb-2">Cliente</th>
-                  <th className="pb-2">Tipo</th>
-                  <th className="pb-2">Estado</th>
-                  <th className="pb-2">Hora</th>
-                  <th className="pb-2 text-right">Total</th>
-                </tr>
-              </thead>
-              <tbody>
-                {recent.map((o) => (
-                  <tr key={o.id} className="border-t border-ink/5">
-                    <td className="py-2.5 font-semibold">{padOrder(o.number)}</td>
-                    <td>{o.customerName}</td>
-                    <td>
-                      <TypeBadge type={o.type} />
-                    </td>
-                    <td>
-                      <StatusBadge status={o.status} />
-                    </td>
-                    <td className="text-ink/50">{formatTime(o.createdAt)}</td>
-                    <td className="text-right font-medium">{soles(o.total)}</td>
-                  </tr>
+          {summary.recent.length === 0 ? <div className="px-5 pb-10 pt-4 text-center text-sm text-ink/45">Aún no hay pedidos. Todo listo para el primero.</div> : (
+            <>
+              <div className="divide-y divide-ink/5 px-5 md:hidden">
+                {summary.recent.map((order) => (
+                  <div key={order.id} className="py-4">
+                    <div className="flex items-center justify-between gap-3"><span className="text-sm font-bold">{padOrder(order.number)} <span className="ml-2 font-normal text-ink/55">{order.customerName}</span></span><span className="text-sm font-bold tabular-nums">{soles(order.total)}</span></div>
+                    <div className="mt-2 flex flex-wrap items-center gap-2"><TypeBadge type={order.type} /><StatusBadge status={order.status} /><span className="ml-auto text-[11px] text-ink/40">{formatTime(order.createdAt)}</span></div>
+                  </div>
                 ))}
-              </tbody>
-            </table>
-          </div>
+              </div>
+              <div className="hidden overflow-x-auto md:block">
+                <table className="dashboard-table w-full text-left text-xs">
+                  <thead><tr><th scope="col">Pedido</th><th scope="col">Cliente</th><th scope="col">Tipo</th><th scope="col">Estado</th><th scope="col">Total</th></tr></thead>
+                  <tbody>{summary.recent.map((order) => <tr key={order.id}><td><span className="font-bold">{padOrder(order.number)}</span><span className="mt-1 block text-[10px] text-ink/40">{formatTime(order.createdAt)}</span></td><td className="max-w-36 truncate">{order.customerName}</td><td><TypeBadge type={order.type} /></td><td><StatusBadge status={order.status} /></td><td className="whitespace-nowrap font-bold tabular-nums">{soles(order.total)}</td></tr>)}</tbody>
+                </table>
+              </div>
+            </>
+          )}
         </section>
-        <section className="rounded-3xl bg-ink p-5 text-cream shadow-sm">
-          <h2 className="text-lg font-black tracking-tight text-gold sm:text-xl">Stock bajo</h2>
-          <ul className="mt-4 space-y-3">
-            {lowStock.length === 0 ? (
-              <p className="text-sm text-cream/50">Todo abastecido.</p>
-            ) : (
-              lowStock.map((i) => (
-                <li key={i.id} className="flex justify-between text-sm">
-                  <span>{i.name}</span>
-                  <span className="text-ember">
-                    {i.stock} {i.unit}
-                  </span>
-                </li>
-              ))
+        {can('inventario') ? (
+          <section className="card flex flex-col p-5 sm:p-6">
+            <div className="flex items-center justify-between gap-3"><h2 className="text-base font-bold">Atención al inventario</h2><span className={`flex h-8 w-8 items-center justify-center rounded-xl ${lowStock.length ? 'bg-amber-500/10 text-amber-700 dark:text-amber-300' : 'bg-sage/10 text-sage'}`}><Package size={16} /></span></div>
+            <p className="mt-1 text-xs text-ink/45">{lowStock.length ? `${lowStock.length} insumos necesitan reposición` : 'Todo abastecido para el servicio'}</p>
+            {lowStock.length === 0 ? <div className="flex flex-1 flex-col items-center justify-center gap-3 py-10 text-sage"><Check size={28} /><p className="text-sm">El stock está al día</p></div> : (
+              <ul className="my-4 divide-y divide-ink/5">{lowStock.slice(0, 5).map((item) => <li key={item.id} className="flex items-center justify-between gap-3 py-3 text-xs"><span className="truncate font-medium">{item.name}</span><span className="shrink-0 rounded-md bg-amber-500/10 px-2 py-1 font-semibold text-amber-800 dark:text-amber-300">{item.stock} {item.unit}</span></li>)}</ul>
             )}
-          </ul>
-          <Link
-            to="/inventario"
-            className="mt-6 inline-flex min-h-10 items-center rounded-full bg-gold px-4 py-2 text-sm font-semibold text-ink"
-          >
-            Ir a inventario
-          </Link>
-        </section>
+            <Link to="/inventario" className="mt-auto flex min-h-11 items-center justify-center gap-2 rounded-xl border border-ink/10 text-xs font-bold text-ember transition-colors hover:bg-ember/5">Revisar inventario <ArrowRight size={14} /></Link>
+          </section>
+        ) : null}
       </div>
+      <p className="flex items-center justify-center gap-1.5 pb-2 text-[10px] text-ink/35"><span className="h-1.5 w-1.5 rounded-full bg-ember/40" /> Chifa & Pollería Lopez · Hecho para un buen servicio</p>
     </div>
   )
 }
 
-function Stat({
-  icon: Icon,
-  label,
-  value,
-  hint,
-}: {
-  icon: typeof Wallet
-  label: string
-  value: string
-  hint: string
-}) {
+function Stat({ icon: Icon, label, value, hint, tone, attention }: { icon: typeof Wallet; label: string; value: string; hint: string; tone: string; attention?: boolean }) {
   return (
-    <div className="card p-3 sm:p-5">
-      <div className="flex items-center justify-between gap-2">
-        <p className="text-[10px] font-semibold tracking-wide text-ink/40 uppercase sm:text-xs">{label}</p>
-        <Icon size={16} className="text-[#1a3d1a] dark:text-gold" />
-      </div>
-      <p className="mt-2 text-xl font-black leading-none sm:mt-3 sm:text-3xl">{value}</p>
-      <p className="mt-1 text-[11px] text-ink/45 sm:text-xs">{hint}</p>
+    <div className="card min-w-0 p-4 sm:p-5">
+      <div className="flex items-center justify-between gap-2"><p className="text-[11px] font-medium text-ink/55 sm:text-xs">{label}</p><span className={`stat-icon stat-icon-${tone}`}><Icon size={17} /></span></div>
+      <p className="mt-4 whitespace-nowrap text-[clamp(1rem,4.6vw,1.4rem)] font-extrabold leading-none tracking-tight tabular-nums sm:text-[1.75rem]">{value}</p>
+      <p className={`mt-3 flex items-center gap-1 text-[10px] sm:text-[11px] ${attention ? 'text-amber-700 dark:text-amber-300' : 'text-ink/45'}`}>{attention ? <Clock3 size={12} /> : <ArrowDownLeft size={12} className="text-ink/30" />}{hint}</p>
     </div>
   )
 }
 
-function Action({
-  to,
-  title,
-  hint,
-  icon: Icon,
-  accent,
-}: {
-  to: string
-  title: string
-  hint: string
-  icon: typeof Wallet
-  accent?: boolean
-}) {
+function Action({ to, title, hint, icon: Icon }: { to: string; title: string; hint: string; icon: typeof Wallet }) {
   return (
-    <Link
-      to={to}
-      className={`card-press flex min-h-[5.75rem] flex-col justify-between rounded-[1.35rem] p-4 ${
-        accent ? 'bg-gold text-[#1a3d1a] shadow-lg shadow-yellow-500/20' : 'card'
-      }`}
-    >
-      <Icon size={20} className={accent ? 'text-[#1a3d1a]' : 'text-[#1a3d1a] dark:text-gold'} />
-      <div>
-        <p className="text-base font-black leading-tight sm:text-lg">{title}</p>
-        <p className={`mt-0.5 text-[11px] ${accent ? 'text-[#1a3d1a]/70' : 'text-ink/45'}`}>{hint}</p>
-      </div>
+    <Link to={to} className="dashboard-action card group flex items-center gap-3 p-3.5 sm:p-4">
+      <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-ember/6 text-ember"><Icon size={19} /></span>
+      <span className="min-w-0 flex-1"><span className="block text-xs font-bold sm:text-[13px]">{title}</span><span className="mt-1 block text-[10px] leading-relaxed text-ink/45 sm:text-[11px]">{hint}</span></span>
+      <ChevronRight size={15} className="hidden shrink-0 text-ink/25 transition-transform group-hover:translate-x-0.5 sm:block" />
     </Link>
   )
 }

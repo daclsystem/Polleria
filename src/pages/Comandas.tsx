@@ -17,6 +17,9 @@ import { CajaCobro } from '../components/CajaCobro'
 import { CajaCierre } from '../components/CajaCierre'
 import { PrintOrderActions } from '../components/PrintOrderActions'
 import { ConfirmProcess } from '../components/ConfirmProcess'
+import { OrderPeople } from '../components/OrderPeople'
+import { Pagination } from '../components/Pagination'
+import { usePaginatedList } from '../hooks/usePaginatedList'
 
 type ComandaFilter = 'por_cobrar' | 'liquidar_caja' | 'historial' | 'todas' | 'delivery' | 'recojo' | OrderStatus
 
@@ -236,6 +239,7 @@ export function Comandas() {
         return b.createdAt.localeCompare(a.createdAt)
       })
   }, [state.orders, filter, isMozo, user, custNeedle, custPhone, cobroFrom, cobroTo])
+  const pagination = usePaginatedList(list, JSON.stringify([filter, custNeedle, custPhone, cobroFrom, cobroTo, actingRole, user?.id]))
 
   const current = selected ? (state.orders.find((o) => o.id === selected.id) ?? null) : null
 
@@ -377,24 +381,24 @@ export function Comandas() {
         </div>
       ) : (
         <>
-          <div className="mt-4 space-y-3 md:hidden">
-            {list.map((o) => (
+          <div className="mt-4 space-y-3 xl:hidden">
+            {pagination.pageItems.map((o) => (
               <button
                 key={o.id}
                 onClick={() => setSelected(o)}
                 className="card card-press w-full p-4 text-left"
               >
                 <div className="flex items-start justify-between gap-3">
-                  <div>
+                  <div className="min-w-0">
                     <p className="font-display text-xl tracking-tight">{padOrder(o.number)}</p>
                     <p className="mt-0.5 font-display text-3xl text-ember">{orderPlaceLabel(o)}</p>
-                    <p className="text-sm font-medium text-ink/55">{o.customerName}</p>
-                    <p className="text-xs text-ink/40">Mozo: {staffLabel(o, state.users)}</p>
                   </div>
-                  <p className="font-extrabold text-ember">
+                  <p className="shrink-0 font-extrabold text-ember">
                     {soles(reconcileOrderMoney(o, state.settings.igvRate).total)}
                   </p>
                 </div>
+                <OrderPeople className="mt-3" customer={o.customerName} attendant={staffLabel(o, state.users)} attendantLabel={o.source === 'web' ? 'Origen' : 'Mozo'} />
+                <p className="mt-3 text-xs font-bold text-ember underline decoration-ember/30 underline-offset-4">Ver {o.items.reduce((sum, item) => sum + item.qty, 0)} productos del pedido</p>
                 <div className="mt-3 flex flex-wrap items-center gap-2">
                   <StatusBadge status={o.status} />
                   <TypeBadge type={o.type} />
@@ -420,8 +424,8 @@ export function Comandas() {
               </button>
             ))}
           </div>
-          <div className="mt-6 hidden overflow-hidden rounded-[1.35rem] bg-white shadow-sm ring-1 ring-ink/[0.04] md:block">
-            <table className="w-full text-left text-sm">
+          <div className="mt-6 hidden overflow-x-auto rounded-[1.35rem] bg-white shadow-sm ring-1 ring-ink/[0.04] xl:block">
+            <table className="w-full min-w-[860px] text-left text-sm">
               <thead className="text-xs tracking-wide text-ink/40 uppercase">
                 <tr>
                   <th className="px-4 py-3">Nº</th>
@@ -435,13 +439,13 @@ export function Comandas() {
                 </tr>
               </thead>
               <tbody>
-                {list.map((o) => (
+                {pagination.pageItems.map((o) => (
                   <tr
                     key={o.id}
                     onClick={() => setSelected(o)}
                     className="cursor-pointer border-t border-ink/5 hover:bg-cream/80"
                   >
-                    <td className="px-4 py-3 font-semibold">{padOrder(o.number)}</td>
+                    <td className="px-4 py-3 font-semibold"><button type="button" className="min-h-11 rounded-lg px-1 font-bold text-ember underline underline-offset-4" onClick={(event) => { event.stopPropagation(); setSelected(o) }} aria-label={`Ver comanda ${padOrder(o.number)}`}>{padOrder(o.number)}</button></td>
                     <td className="px-4 py-3">
                       <span className="rounded-full bg-gold px-2.5 py-1 text-xs font-black text-[#1a3d1a]">
                         {orderPlaceLabel(o)}
@@ -489,6 +493,8 @@ export function Comandas() {
         </>
       )}
 
+      <Pagination page={pagination.page} total={list.length} onChange={pagination.setPage} noun="comandas" />
+
       <Modal
         open={!!current}
         title={
@@ -513,20 +519,16 @@ export function Comandas() {
               <StatusBadge status={current.status} />
               <TypeBadge type={current.type} />
             </div>
-            <p className="text-sm font-semibold text-ink">Mozo: {staffLabel(current, state.users)}</p>
-            <p className="text-sm text-ink/60">
-              {current.customerName}
-              {current.customerPhone ? ` · ${current.customerPhone}` : ''}
-              {current.address ? ` · ${current.address}` : ''}
-            </p>
+            <OrderPeople customer={current.customerName} attendant={staffLabel(current, state.users)} attendantLabel={current.source === 'web' ? 'Origen' : 'Mozo'} />
+            {current.address || (current.customerPhone && /[1-9]/.test(current.customerPhone)) ? <p className="text-sm text-ink/60 [overflow-wrap:anywhere]">{current.customerPhone && /[1-9]/.test(current.customerPhone) ? current.customerPhone : ''} {current.address || ''}</p> : null}
             <ul className="divide-y divide-ink/5 rounded-xl bg-white">
               {current.items.map((i, idx) => (
-                <li key={idx} className="flex justify-between px-3 py-2 text-sm">
-                  <span>
+                <li key={idx} className="flex justify-between gap-3 px-3 py-3 text-sm">
+                  <span className="min-w-0 [overflow-wrap:anywhere]">
                     {i.qty} {i.name}
                     {i.notes ? <span className="block text-xs text-ember">{i.notes}</span> : null}
                   </span>
-                  <span>{soles(i.qty * i.price)}</span>
+                  <span className="shrink-0 font-semibold tabular-nums">{soles(i.qty * i.price)}</span>
                 </li>
               ))}
             </ul>

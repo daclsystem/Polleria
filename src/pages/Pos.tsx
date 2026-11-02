@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useDeferredValue, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
-import { Check, ChevronDown, Loader2, MapPin, Minus, Plus, Trash2, X } from 'lucide-react'
+import { Check, ChevronDown, Loader2, MapPin, Minus, Plus, Search, ShoppingBag, Trash2, X } from 'lucide-react'
 import { useAuth } from '../auth/AuthContext'
 import { useStore } from '../store/StoreContext'
 import { padOrder, soles } from '../lib/format'
@@ -12,7 +12,11 @@ import { filterKitchenItems } from '../lib/kitchen'
 import { orderBelongsToStaff } from '../lib/realtime'
 import type { Customer, OrderItem, OrderType, PaymentMethod } from '../types'
 import { canCharge } from '../types'
-import { Field, Modal, PageTitle, inputClass } from '../components/ui'
+import { Empty, Field, Modal, PageTitle, inputClass } from '../components/ui'
+
+function searchable(value: string) {
+  return value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase('es')
+}
 
 function phoneDigitsOf(value?: string) {
   return String(value || '').replace(/\D/g, '')
@@ -45,11 +49,12 @@ export function Pos() {
   const mayCharge = canCharge(actingRole)
 
   const categories = useMemo(
-    () => ['Todos', ...new Set(state.products.map((p) => p.category))],
+    () => ['Todos', ...new Set(state.products.map((p) => p.category.trim()))],
     [state.products],
   )
   const [cat, setCat] = useState('Todos')
   const [q, setQ] = useState('')
+  const deferredQuery = useDeferredValue(q)
   const [type, setType] = useState<OrderType>(
     isAppendMode
       ? (appendOrder?.type ?? 'salon')
@@ -87,28 +92,17 @@ export function Pos() {
   const [method, setMethod] = useState<PaymentMethod>('efectivo')
   const [cash, setCash] = useState('')
 
-  if (appendForbidden) {
-    return (
-      <div className="mx-auto max-w-lg py-16 text-center">
-        <PageTitle title="Mesa de otro mozo" hint="Solo puedes agregar a tus propias comandas." />
-        <button
-          className="mt-6 rounded-full bg-ink px-5 py-2.5 text-sm font-semibold text-cream"
-          onClick={() => navigate('/mesas')}
-        >
-          Volver a mesas
-        </button>
-      </div>
-    )
-  }
-
   const selectedTable = state.tables.find((t) => t.id === tableId)
 
-  const products = state.products.filter((p) => {
-    if (!p.available) return false
-    if (cat !== 'Todos' && p.category !== cat) return false
-    if (q && !p.name.toLowerCase().includes(q.toLowerCase())) return false
-    return true
-  })
+  const products = useMemo(() => {
+    const needle = searchable(deferredQuery.trim())
+    return state.products.filter((p) => p.available && (cat === 'Todos' || p.category.trim() === cat) && (!needle || searchable(p.name).includes(needle)))
+  }, [state.products, cat, deferredQuery])
+  const productQuantities = useMemo(() => {
+    const quantities = new Map<string, number>()
+    for (const item of items) quantities.set(item.productId, (quantities.get(item.productId) || 0) + item.qty)
+    return quantities
+  }, [items])
 
   const qty = items.reduce((s, i) => s + i.qty, 0)
   const gross = items.reduce((s, i) => s + i.qty * i.price, 0)
@@ -123,7 +117,8 @@ export function Pos() {
   }, [type])
 
   useEffect(() => {
-    if (isAppendMode) return
+    if (isAppendMode || appendForbidden) return
+    let active = true
     const nameQ = customerName.trim().toLowerCase()
     const phoneQ = phoneDigitsOf(phone)
     const last9 = phoneQ.slice(-9)
@@ -186,6 +181,7 @@ export function Pos() {
     const t = window.setTimeout(() => {
       void apiSearchCustomers(query)
         .then((r) => {
+          if (!active) return
           const incoming = r.customers || []
           setCustHits((prev) => {
             const map = new Map(prev.map((x) => [phoneLast9(x.phone) || x.name, x]))
@@ -200,8 +196,11 @@ export function Pos() {
         })
         .catch(() => undefined)
     }, 280)
-    return () => window.clearTimeout(t)
-  }, [customerName, phone, isAppendMode, state.customers, state.orders])
+    return () => {
+      active = false
+      window.clearTimeout(t)
+    }
+  }, [customerName, phone, isAppendMode, appendForbidden, state.customers, state.orders])
   const cashNum = Number(cash) || 0
   const change = Math.max(0, cashNum - total)
   const canSend = items.length > 0 && (isAppendMode || type !== 'salon' || Boolean(tableId))
@@ -354,13 +353,14 @@ export function Pos() {
                 <p className="text-sm font-bold">{item.name}</p>
                 <p className="text-xs font-semibold text-ember">{soles(item.price)}</p>
               </div>
-              <button className="tap" onClick={() => setItems((p) => p.filter((_, i) => i !== idx))}>
+              <button className="tap" aria-label={`Quitar ${item.name} del ticket`} onClick={() => setItems((p) => p.filter((_, i) => i !== idx))}>
                 <Trash2 size={16} className="text-ink/25" />
               </button>
             </div>
             <div className="mt-2 flex flex-wrap items-center gap-2">
               <button
                 className="tap rounded-xl bg-white p-1.5 shadow-sm"
+                aria-label={`Disminuir cantidad de ${item.name}`}
                 onClick={() =>
                   setItems((p) =>
                     p
@@ -374,6 +374,7 @@ export function Pos() {
               <span className="w-6 text-center text-sm font-black">{item.qty}</span>
               <button
                 className="tap rounded-xl bg-white p-1.5 shadow-sm"
+                aria-label={`Aumentar cantidad de ${item.name}`}
                 onClick={() =>
                   setItems((p) => p.map((it, i) => (i === idx ? { ...it, qty: it.qty + 1 } : it)))
                 }
@@ -381,7 +382,8 @@ export function Pos() {
                 <Plus size={14} />
               </button>
               <input
-                className="min-w-0 flex-1 rounded-xl border border-ink/[0.08] bg-white px-2.5 py-2 text-sm"
+                className="min-h-11 min-w-0 flex-1 rounded-xl border border-ink/[0.08] bg-white px-2.5 py-2 text-sm"
+                aria-label={`Nota para ${item.name}`}
                 placeholder="Nota (sin mayo)"
                 value={item.notes ?? ''}
                 onChange={(e) =>
@@ -442,9 +444,18 @@ export function Pos() {
     </>
   )
 
+  if (appendForbidden) {
+    return (
+      <div className="mx-auto max-w-lg py-16 text-center">
+        <PageTitle title="Mesa de otro mozo" hint="Solo puedes agregar a tus propias comandas." />
+        <button className="mt-6 rounded-full bg-ink px-5 py-2.5 text-sm font-semibold text-cream" onClick={() => navigate('/mesas')}>Volver a mesas</button>
+      </div>
+    )
+  }
+
   return (
-    <div className="grid gap-6 xl:grid-cols-[1fr_380px]">
-      <div>
+    <div className="grid min-w-0 grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1fr)_360px]">
+      <div className="min-w-0">
         <PageTitle
           title={
             isAppendMode
@@ -522,11 +533,11 @@ export function Pos() {
           </div>
           {!isAppendMode && matchedCustomer && phoneOk ? (
             <p className="sm:col-span-2 rounded-2xl bg-emerald-500/12 px-3 py-2 text-xs font-semibold text-emerald-800 dark:text-emerald-300">
-              Celular de {matchedCustomer.name} · {prettyPhone(matchedCustomer.phone)}. El nombre se rellena solo; al enviar se actualiza si lo cambias. No se duplica.
+              Cliente encontrado: {matchedCustomer.name} · {prettyPhone(matchedCustomer.phone)}. Puedes actualizar su nombre antes de enviar.
             </p>
           ) : !isAppendMode ? (
             <p className="sm:col-span-2 text-[11px] font-semibold text-ink/40">
-              El nombre es obligatorio. El celular no: si lo escribes se guarda; si lo dejas vacío, se envía 0. Con 9 dígitos se avisa por WhatsApp.
+              Escribe el nombre del cliente. Agrega su celular si desea recibir avisos por WhatsApp.
             </p>
           ) : null}
           {!isAppendMode && custOpen && custHits.length > 0 ? (
@@ -638,17 +649,23 @@ export function Pos() {
         </div>
 
         <div className="mt-5">
-          <input
-            className={`${inputClass} max-w-full sm:max-w-sm`}
+          <label className="relative block max-w-full sm:max-w-md">
+            <Search size={18} className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-ink/35" />
+            <input
+            className={`${inputClass} !pl-11 !pr-11`}
             placeholder="Buscar plato…"
+            aria-label="Buscar plato"
             value={q}
             onChange={(e) => setQ(e.target.value)}
           />
+            {q ? <button type="button" onClick={() => setQ('')} aria-label="Limpiar búsqueda" className="absolute right-1 top-1/2 flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-xl text-ink/45 hover:bg-ink/5"><X size={16} /></button> : null}
+          </label>
           <div className="mt-3 flex gap-2 overflow-x-auto pb-1">
             {categories.map((c) => (
               <button
                 key={c}
                 onClick={() => setCat(c)}
+                aria-pressed={cat === c}
                 className={`chip shrink-0 ${cat === c ? 'chip-on' : 'chip-off'}`}
               >
                 {c}
@@ -657,24 +674,28 @@ export function Pos() {
           </div>
         </div>
 
-        <div className={`mt-5 grid grid-cols-2 gap-2.5 sm:grid-cols-3 sm:gap-3 xl:grid-cols-4 ${qty > 0 ? 'pb-24 xl:pb-0' : ''}`}>
+        <p className="mt-4 text-xs text-ink/45">{products.length} {products.length === 1 ? 'plato disponible' : 'platos disponibles'} <span className="mx-1 text-ink/20">·</span> Toca para agregar al ticket</p>
+        {products.length === 0 ? <div className="mt-4"><Empty title="No encontramos ese plato" hint="Prueba con otro nombre o selecciona otra categoría." /><button type="button" onClick={() => { setQ(''); setCat('Todos') }} className="mt-3 min-h-11 text-sm font-bold text-ember">Ver todos los platos</button></div> : null}
+        <div className={`mt-4 grid grid-cols-2 gap-2.5 sm:grid-cols-3 sm:gap-3 xl:grid-cols-4 ${qty > 0 ? 'pb-24 xl:pb-0' : ''}`}>
           {products.map((p) => (
             <button
               key={p.id}
               onClick={() => add(p.id)}
-              className="card card-press p-3.5 text-left sm:p-4"
+              aria-label={`Agregar ${p.name}, ${soles(p.price)}${productQuantities.get(p.id) ? `, ${productQuantities.get(p.id)} en el ticket` : ''}`}
+              className={`card card-press relative min-w-0 p-3.5 text-left transition-colors hover:!border-ember/30 sm:p-4 ${productQuantities.has(p.id) ? '!border-ember/35 !bg-ember/4' : ''}`}
             >
+              {productQuantities.has(p.id) ? <span className="absolute right-3 top-3 flex h-6 min-w-6 items-center justify-center rounded-lg bg-ember px-1 text-[11px] font-bold text-white dark:bg-gold dark:text-[#143314]">{productQuantities.get(p.id)}</span> : <Plus size={16} className="absolute right-3 top-3 text-ink/20" />}
               <div
                 className="mb-3 flex h-12 w-12 items-center justify-center overflow-hidden rounded-2xl text-2xl"
                 style={{ background: `${p.tone}18` }}
               >
                 {p.imageUrl ? (
-                  <img src={p.imageUrl} alt="" className="h-full w-full object-cover" />
+                  <img src={p.imageUrl} alt="" loading="lazy" decoding="async" className="h-full w-full object-cover" />
                 ) : (
                   p.emoji
                 )}
               </div>
-              <p className="text-sm font-bold leading-snug tracking-tight sm:text-[15px]">{p.name}</p>
+              <p className="break-words text-sm font-bold leading-snug tracking-tight sm:text-[15px]">{p.name}</p>
               <p className="mt-1 line-clamp-2 text-[11px] leading-snug text-ink/40 sm:text-xs">{p.description}</p>
               <p className="mt-2.5 text-base font-extrabold text-ember sm:text-lg">{soles(p.price)}</p>
             </button>
@@ -683,7 +704,7 @@ export function Pos() {
       </div>
 
       <aside className="card hidden h-fit p-5 xl:sticky xl:top-24 xl:block">
-        <p className="mb-3 font-display text-xl tracking-tight">Ticket</p>
+        <div className="mb-4 flex items-center justify-between"><p className="flex items-center gap-2 font-display text-xl tracking-tight"><ShoppingBag size={20} className="text-ember" /> Ticket</p><span className="rounded-lg bg-ink/5 px-2 py-1 text-xs font-semibold">{qty} {qty === 1 ? 'plato' : 'platos'}</span></div>
         {cartBody}
       </aside>
 
@@ -710,7 +731,7 @@ export function Pos() {
             <div className="mx-auto mb-2 h-1 w-10 rounded-full bg-ink/10" />
             <div className="mb-3 flex items-center justify-between">
               <h2 className="font-display text-2xl tracking-tight">Ticket</h2>
-              <button className="tap flex h-10 w-10 items-center justify-center rounded-full bg-ink/[0.04]" onClick={() => setCartOpen(false)}>
+              <button aria-label="Cerrar ticket" className="tap flex h-10 w-10 items-center justify-center rounded-full bg-ink/[0.04]" onClick={() => setCartOpen(false)}>
                 <X size={18} />
               </button>
             </div>

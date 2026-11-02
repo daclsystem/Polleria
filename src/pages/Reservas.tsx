@@ -266,7 +266,7 @@ export function Reservas() {
       </div>
 
       {/* ─── Calendar + List ────────────────────────────────────── */}
-      <div className="mt-5 grid gap-4 lg:grid-cols-[300px_1fr]">
+      <div className="mt-5 grid min-w-0 grid-cols-1 gap-4 lg:grid-cols-[300px_minmax(0,1fr)]">
         {/* Mini Calendar */}
         <div className="card p-4">
           <div className="flex items-center justify-between">
@@ -324,15 +324,15 @@ export function Reservas() {
         </div>
 
         {/* Reservation List */}
-        <div>
+        <div className="min-w-0">
           {/* Tabs + Search */}
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <div className="flex gap-2 overflow-x-auto">
+            <div className="flex min-w-0 gap-2 overflow-x-auto pb-1 sm:flex-1">
               {tabs.map((t) => (
                 <button
                   key={t.id}
                   onClick={() => setTab(t.id)}
-                  className={`flex min-h-9 shrink-0 items-center gap-1.5 rounded-full px-3.5 py-1.5 text-xs font-semibold transition ${
+                  className={`flex min-h-11 shrink-0 items-center gap-1.5 rounded-full px-3.5 py-1.5 text-xs font-semibold transition ${
                     tab === t.id
                       ? 'bg-ink text-cream'
                       : 'bg-white text-ink/60 hover:bg-ink/5'
@@ -347,10 +347,11 @@ export function Reservas() {
                 </button>
               ))}
             </div>
-            <div className="relative">
+            <div className="relative min-w-0 sm:w-48 sm:shrink-0">
               <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-ink/30" />
               <input
-                className="w-full rounded-xl border border-ink/10 bg-white py-2 pl-8 pr-3 text-sm sm:w-48"
+                className="min-h-11 w-full min-w-0 rounded-xl border border-ink/10 bg-white py-2 pl-8 pr-3 text-base sm:text-sm"
+                aria-label="Buscar cliente en reservas"
                 placeholder="Buscar cliente..."
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}

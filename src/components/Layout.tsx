@@ -1,4 +1,4 @@
-import { NavLink, Outlet, useNavigate } from 'react-router-dom'
+import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import type { LucideIcon } from 'lucide-react'
 import {
   BarChart3,
@@ -20,6 +20,8 @@ import {
   Package,
   Palette,
   Settings,
+  Search,
+  RefreshCw,
   ShoppingBag,
   Table2,
   TicketPercent,
@@ -28,7 +30,7 @@ import {
   Wallet,
   X,
 } from 'lucide-react'
-import { useEffect, useRef, useState } from 'react'
+import { Suspense, useEffect, useRef, useState } from 'react'
 import { useAuth } from '../auth/AuthContext'
 import { useStore } from '../store/StoreContext'
 import { ROLE_HOME, ROLE_LABEL, viewOptionsForUser, type ModuleId, type Role } from '../types'
@@ -38,11 +40,12 @@ import { SkeletonBoot } from './Skeleton'
 import { LiveToasts } from './LiveToasts'
 import { unlockSounds } from '../lib/sounds'
 import { ConfirmLogout } from './ConfirmLogout'
-import { displayAvatarUrl, shortAccountId } from '../lib/avatar'
+import { displayAvatarUrl } from '../lib/avatar'
 import { uploadAvatar } from '../lib/minio'
 import { apiUpdateStaffProfile } from '../lib/apiClient'
 import { PersonAvatar } from './PersonAvatar'
 import { ThemeToggle } from './ThemeToggle'
+import { ModuleErrorBoundary } from './ModuleErrorBoundary'
 
 const NAV: { to: string; label: string; hint: string; icon: LucideIcon; module: ModuleId }[] = [
   { to: '/', label: 'Inicio', hint: 'Resumen del día', icon: LayoutDashboard, module: 'dashboard' },
@@ -54,7 +57,7 @@ const NAV: { to: string; label: string; hint: string; icon: LucideIcon; module: 
   { to: '/comandas', label: 'Caja', hint: 'Cobrar y liquidar', icon: Wallet, module: 'comandas' },
   { to: '/cocina', label: 'Cocina', hint: 'Preparar platos', icon: ChefHat, module: 'cocina' },
   { to: '/menu', label: 'Carta', hint: 'Precios y platos', icon: ShoppingBag, module: 'menu' },
-  { to: '/admin-mesas', label: 'Mesas', hint: 'Crear y editar mesas', icon: Table2, module: 'admin-mesas' },
+  { to: '/admin-mesas', label: 'Distribución de mesas', hint: 'Crear y editar mesas', icon: Table2, module: 'admin-mesas' },
   { to: '/inventario', label: 'Inventario', hint: 'Insumos y stock', icon: Package, module: 'inventario' },
   { to: '/usuarios', label: 'Equipo', hint: 'Usuarios y roles', icon: Users, module: 'usuarios' },
   { to: '/clientes', label: 'Clientes', hint: 'Agenda de clientes', icon: Contact, module: 'clientes' },
@@ -82,9 +85,9 @@ const NAV: { to: string; label: string; hint: string; icon: LucideIcon; module: 
 ]
 
 const GROUPS: { title: string; modules: ModuleId[] }[] = [
-  { title: 'Trabajar ahora', modules: ['dashboard', 'mesas', 'pedidos-web', 'reservas', 'historial', 'pos', 'comandas', 'cocina'] },
+  { title: 'Operación', modules: ['dashboard', 'mesas', 'pedidos-web', 'reservas', 'historial', 'pos', 'comandas', 'cocina'] },
   {
-    title: 'Administrar',
+    title: 'Gestión del negocio',
     modules: [
       'menu',
       'admin-mesas',
@@ -117,11 +120,17 @@ const SIDEBAR_KEY = 'polleria-sidebar-collapsed'
 
 export function Layout() {
   const { user, actingRole, setViewRole, patchSessionUser, can, logout } = useAuth()
-  const { apiMode, apiLoading, apiReady, apiError, live, pushNotice } = useStore()
+  const { apiMode, apiLoading, apiReady, apiError, live, pushNotice, reloadFromApi } = useStore()
   const navigate = useNavigate()
+  const { pathname } = useLocation()
   const [open, setOpen] = useState(false)
+  const [navQuery, setNavQuery] = useState('')
+  const [isMobile, setIsMobile] = useState(() => window.matchMedia('(max-width: 1023px)').matches)
+  const mainRef = useRef<HTMLElement>(null)
+  const sidebarRef = useRef<HTMLElement>(null)
+  const returnFocusRef = useRef<HTMLElement | null>(null)
   const [logoutOpen, setLogoutOpen] = useState(false)
-  /** Desktop: contraído por defecto para dar espacio (cocina, etc.) */
+  /** Mantener la preferencia; mostrar los nombres en la primera visita. */
   const [collapsed, setCollapsed] = useState(() => {
     try {
       const saved = localStorage.getItem(SIDEBAR_KEY)
@@ -130,7 +139,7 @@ export function Layout() {
     } catch {
       /* ignore */
     }
-    return true
+    return false
   })
 
   useEffect(() => {
@@ -141,12 +150,59 @@ export function Layout() {
     }
   }, [collapsed])
 
+  useEffect(() => {
+    if (collapsed) setNavQuery('')
+  }, [collapsed])
+
+  useEffect(() => {
+    const media = window.matchMedia('(max-width: 1023px)')
+    const onChange = () => {
+      setIsMobile(media.matches)
+      if (!media.matches) setOpen(false)
+    }
+    media.addEventListener('change', onChange)
+    return () => media.removeEventListener('change', onChange)
+  }, [])
+
+  useEffect(() => {
+    mainRef.current?.scrollTo({ top: 0 })
+  }, [pathname])
+
+  useEffect(() => {
+    if (!open) return
+    returnFocusRef.current = document.activeElement as HTMLElement | null
+    const frame = requestAnimationFrame(() => sidebarRef.current?.querySelector<HTMLButtonElement>('button[aria-label="Cerrar"]')?.focus())
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setOpen(false)
+      if (event.key !== 'Tab' || !window.matchMedia('(max-width: 1023px)').matches) return
+      const controls = [...(sidebarRef.current?.querySelectorAll<HTMLElement>('a, button, input') || [])]
+        .filter((el) => el.offsetParent !== null && !el.hasAttribute('disabled'))
+      const first = controls[0]
+      const last = controls[controls.length - 1]
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault()
+        last?.focus()
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault()
+        first?.focus()
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => {
+      cancelAnimationFrame(frame)
+      window.removeEventListener('keydown', onKeyDown)
+      returnFocusRef.current?.focus()
+    }
+  }, [open])
+
   const viewOptions = viewOptionsForUser(user)
   const items = NAV.filter((i) => {
     if (!can(i.module)) return false
     if (actingRole === 'mozo' && i.module === 'pos') return false
+    if (navQuery && !`${i.label} ${i.hint}`.toLocaleLowerCase('es').includes(navQuery.toLocaleLowerCase('es'))) return false
     return true
   })
+  const currentPage = NAV.find((item) => item.to === pathname) || NAV[0]
   const bottomIds = user ? BOTTOM[actingRole] : []
   const bottom = NAV.filter((i) => bottomIds.includes(i.module) && can(i.module))
   const compactBottom = actingRole === 'mozo' || actingRole === 'cajero'
@@ -180,7 +236,8 @@ export function Layout() {
   }
 
   return (
-    <div className="flex h-dvh overflow-hidden bg-cream text-ink" onPointerDownCapture={() => unlockSounds()}>
+    <div className="system-shell flex h-dvh overflow-hidden bg-cream text-ink" onPointerDownCapture={() => unlockSounds()}>
+      <a href="#system-content" className="system-skip-link">Ir al contenido</a>
       <LiveToasts />
       <ConfirmLogout
         open={logoutOpen}
@@ -197,12 +254,17 @@ export function Layout() {
         }}
       />
       <aside
-        className={`fixed inset-y-0 left-0 z-40 w-[min(18.5rem,88vw)] flame-bg text-white transition-[width,transform] duration-200 lg:static lg:translate-x-0 ${
+        ref={sidebarRef}
+        aria-label="Menú principal"
+        role={open && isMobile ? 'dialog' : undefined}
+        aria-modal={open && isMobile ? true : undefined}
+        inert={!open && isMobile ? true : undefined}
+        className={`system-sidebar fixed inset-y-0 left-0 z-40 w-[min(18.5rem,88vw)] shrink-0 text-white transition-[width,transform] duration-200 lg:static lg:translate-x-0 ${
           open ? 'translate-x-0' : '-translate-x-full'
-        } ${collapsed ? 'lg:w-[4.5rem]' : 'lg:w-[17.5rem]'}`}
+        } ${collapsed ? 'lg:w-[4.75rem]' : 'lg:w-[15.5rem]'}`}
       >
         <div className="flex h-full flex-col pt-[env(safe-area-inset-top)]">
-          <div className={`px-3 pt-4 pb-2 ${collapsed ? 'lg:px-1.5' : ''}`}>
+          <div className={`px-4 pt-6 pb-4 ${collapsed ? 'lg:px-2' : ''}`}>
             <button
               type="button"
               onClick={() => collapsed && setCollapsed(false)}
@@ -220,12 +282,14 @@ export function Layout() {
                 className="h-full w-full object-contain"
               />
             </button>
-            <div className={`overflow-hidden rounded-2xl bg-white p-1.5 shadow-sm ${collapsed ? 'lg:hidden' : ''}`}>
-              <img
-                src={withBase('logo-lopez.png')}
-                alt="Chifa Pollería Lopez"
-                className="mx-auto h-14 w-full object-contain sm:h-16"
-              />
+            <div className={`flex items-center gap-3 ${collapsed ? 'lg:hidden' : ''}`}>
+              <span className="flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-2xl bg-white p-1">
+                <img src={withBase('logo-lopez.png')} alt="" className="h-full w-full object-contain" />
+              </span>
+              <div>
+                <p className="text-lg font-extrabold tracking-tight">Lopez<span className="text-gold">.</span></p>
+                <p className="text-[10px] font-medium tracking-[0.12em] text-white/50 uppercase">Chifa & pollería</p>
+              </div>
             </div>
             <div className="mt-2 flex items-center justify-end gap-1">
               <button className="tap rounded-xl p-2 lg:hidden" onClick={() => setOpen(false)} aria-label="Cerrar">
@@ -242,7 +306,14 @@ export function Layout() {
               </button>
             </div>
           </div>
-          <nav className={`flex-1 space-y-5 overflow-y-auto px-3 pb-4 ${collapsed ? 'lg:px-1.5' : ''}`}>
+          <div className={`px-4 pb-5 ${collapsed ? 'lg:hidden' : ''}`}>
+            <label className="flex items-center gap-2 rounded-xl border border-white/10 bg-white/5 px-3 text-white/45 focus-within:border-gold/50">
+              <Search size={15} className="shrink-0" />
+              <input type="search" value={navQuery} onChange={(e) => setNavQuery(e.target.value)} placeholder="Buscar módulo…" aria-label="Buscar módulo" className="h-11 min-w-0 w-full bg-transparent text-xs text-white outline-none placeholder:text-white/40" />
+            </label>
+          </div>
+          <nav aria-label="Módulos" className={`system-sidebar-nav flex-1 space-y-6 overflow-y-auto px-3 pb-4 ${collapsed ? 'lg:px-2' : ''}`}>
+            {items.length === 0 ? <p className="px-3 text-xs text-white/60">No se encontraron módulos.</p> : null}
             {GROUPS.map((group) => {
               const groupItems = items.filter((i) => group.modules.includes(i.module))
               if (groupItems.length === 0) return null
@@ -266,19 +337,18 @@ export function Layout() {
                           title={`${item.label} · ${item.hint}`}
                           onClick={() => setOpen(false)}
                           className={({ isActive }) =>
-                            `flex min-h-12 items-center gap-3 rounded-2xl px-3 py-2 transition ${
+                            `system-nav-item flex min-h-11 items-center gap-3 rounded-xl px-3 py-2.5 transition-colors ${
                               collapsed ? 'lg:justify-center lg:gap-0 lg:px-0 lg:py-2.5' : ''
                             } ${
                               isActive
-                                ? 'nav-active'
+                                ? 'system-nav-active'
                                 : 'text-white/75 hover:bg-white/10 hover:text-white'
                             }`
                           }
                         >
                           <Icon size={18} className="shrink-0" />
                           <span className={`min-w-0 ${collapsed ? 'lg:hidden' : ''}`}>
-                            <span className="block text-sm font-semibold leading-tight">{item.label}</span>
-                            <span className="block text-[11px] opacity-70">{item.hint}</span>
+                            <span className="block text-[13px] font-medium leading-tight">{item.label}</span>
                           </span>
                         </NavLink>
                       )
@@ -318,9 +388,6 @@ export function Layout() {
               <div className={`min-w-0 ${collapsed ? 'lg:hidden' : ''}`}>
                 <p className="truncate text-sm font-semibold">{user?.name}</p>
                 <p className="text-xs text-white/50">{user ? ROLE_LABEL[actingRole] : ''}</p>
-                <p className="mt-0.5 font-mono text-[10px] tracking-wider text-white/40">
-                  ID · {shortAccountId(user?.id)}
-                </p>
               </div>
             </div>
             <button
@@ -346,12 +413,13 @@ export function Layout() {
           aria-label="Cerrar menú"
         />
       ) : null}
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col pb-[5.25rem] lg:pb-0">
-        <header className="surface-header sticky top-0 z-20 flex items-center gap-2 px-3 py-2 pt-[max(0.5rem,env(safe-area-inset-top))] sm:gap-3 sm:px-5 lg:px-8">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col pb-[5.25rem] lg:pb-0" inert={open && isMobile ? true : undefined}>
+        <header className="system-header sticky top-0 z-20 flex min-h-[4.5rem] items-center gap-2 px-3 py-2 pt-[max(0.5rem,env(safe-area-inset-top))] sm:gap-3 sm:px-5 lg:px-8">
           <button
             className="tap rounded-xl p-2 hover:bg-ink/[0.04] lg:hidden"
             onClick={() => setOpen(true)}
             aria-label="Menú"
+            aria-expanded={open}
           >
             <Menu size={20} />
           </button>
@@ -364,12 +432,14 @@ export function Layout() {
           >
             {collapsed ? <ChevronsRight size={20} /> : <ChevronsLeft size={20} />}
           </button>
-          <div className="hidden min-w-0 xl:block">
-            <p className="truncate text-sm capitalize text-ink/40">
+          <div className="min-w-0">
+            <p className="truncate text-sm font-bold">{currentPage.label}</p>
+            <p className="hidden truncate text-[11px] capitalize text-ink/45 sm:block">
               {new Date().toLocaleDateString('es-PE', {
                 weekday: 'long',
                 day: 'numeric',
                 month: 'long',
+                timeZone: 'America/Lima',
               })}
             </p>
           </div>
@@ -384,7 +454,7 @@ export function Layout() {
                     setViewRole(next)
                     navigate(ROLE_HOME[next] || '/')
                   }}
-                  className="max-w-[9.5rem] truncate rounded-full border border-ink/10 bg-surface px-3 py-1.5 text-[11px] font-bold text-ink outline-none focus:border-gold"
+                  className="min-h-11 max-w-[8.5rem] truncate rounded-xl border border-ink/10 bg-surface px-2.5 py-1.5 text-xs font-semibold text-ink outline-none focus:border-ember sm:max-w-[9.5rem]"
                 >
                   {viewOptions.map((opt) => (
                     <option key={opt.id} value={opt.id}>
@@ -394,6 +464,9 @@ export function Layout() {
                 </select>
               </label>
             ) : null}
+            <button type="button" disabled={apiLoading} onClick={() => void reloadFromApi()} aria-label="Actualizar datos" title="Actualizar datos" className="tap hidden items-center justify-center rounded-xl text-ink/45 hover:bg-ink/5 disabled:opacity-40 sm:inline-flex">
+              <RefreshCw size={17} className={apiLoading ? 'animate-spin' : ''} />
+            </button>
             <ThemeToggle />
             {user ? (
               <button
@@ -413,7 +486,7 @@ export function Layout() {
                 </span>
                 <div className="hidden min-w-0 leading-tight xl:block">
                   <p className="truncate text-xs font-bold text-ink">{user.name}</p>
-                  <p className="font-mono text-[10px] text-ink/40">ID · {shortAccountId(user.id)}</p>
+                  <p className="text-[10px] text-ink/45">{ROLE_LABEL[actingRole]}</p>
                 </div>
               </button>
             ) : null}
@@ -423,20 +496,19 @@ export function Layout() {
                   apiError
                     ? 'bg-red-100 text-red-700'
                     : live
-                      ? 'bg-emerald-500/20 text-emerald-300'
+                      ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
                       : apiLoading
                         ? 'bg-amber-100 text-amber-800'
                         : 'bg-ink/[0.06] text-ink/45'
                 }`}
-                title={apiError || (live ? 'Socket en vivo + API/SQL' : 'API/SQL (sin socket)')}
+                title={apiError || (live ? 'Los pedidos se actualizan en tiempo real' : 'Actualización periódica de datos')}
               >
                 {live ? (
                   <span className="relative flex h-1.5 w-1.5">
-                    <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-500 opacity-60" />
                     <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-emerald-600" />
                   </span>
                 ) : null}
-                {apiError ? 'API error' : live ? 'En vivo' : apiLoading ? 'Sync…' : 'API · SQL'}
+                {apiError ? 'Sin sincronizar' : live ? 'En vivo' : apiLoading ? 'Actualizando' : 'Conectado'}
               </span>
             ) : (
               <span className="hidden rounded-full bg-ink/10 px-2.5 py-1 text-[10px] font-bold tracking-wide text-ink/50 uppercase sm:inline">
@@ -450,12 +522,20 @@ export function Layout() {
             No se pudo sincronizar con el API: {apiError}
           </div>
         ) : null}
-        <main className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto p-3 sm:p-5 md:p-6 lg:p-8">
-          {apiReady ? <Outlet /> : <SkeletonBoot />}
+        <main id="system-content" ref={mainRef} tabIndex={-1} className="system-content min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto p-4 outline-none sm:p-6 lg:p-8">
+          <div className={`mx-auto w-full max-w-[1600px] ${pathname === '/cocina' ? 'h-full' : ''}`}>
+            <ModuleErrorBoundary key={pathname}>
+              <Suspense fallback={<SkeletonBoot />}>
+                {apiReady ? <Outlet /> : <SkeletonBoot />}
+              </Suspense>
+            </ModuleErrorBoundary>
+          </div>
         </main>
       </div>
 
       <nav
+        aria-label="Accesos rápidos"
+        inert={open && isMobile ? true : undefined}
         className={`bottom-nav safe-bottom fixed inset-x-0 bottom-0 z-30 grid px-1.5 pt-1.5 lg:hidden ${
           bottomCount === 2 ? 'grid-cols-2' : bottomCount === 3 ? 'grid-cols-3' : 'grid-cols-4'
         }`}
@@ -470,7 +550,7 @@ export function Layout() {
                 : item.module === 'comandas'
                   ? actingRole === 'cajero'
                     ? 'Caja'
-                    : 'Ver'
+                    : 'Caja'
                   : item.module === 'cocina'
                     ? 'Cocina'
                     : item.module === 'mesas'

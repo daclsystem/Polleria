@@ -1,16 +1,20 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useDeferredValue, useEffect, useMemo, useState } from 'react'
 import { Search } from 'lucide-react'
 import { apiListCustomers, apiUpsertCustomer } from '../lib/apiClient'
 import type { Customer } from '../types'
 import { Field, Modal, PageTitle, inputClass } from '../components/ui'
 import { ConfirmProcess } from '../components/ConfirmProcess'
 import { formatDateTime } from '../lib/format'
+import { Pagination } from '../components/Pagination'
+import { PersonAvatar } from '../components/PersonAvatar'
+import { usePaginatedList } from '../hooks/usePaginatedList'
 
 export function Clientes() {
   const [customers, setCustomers] = useState<Customer[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [q, setQ] = useState('')
+  const deferredQuery = useDeferredValue(q)
   const [editing, setEditing] = useState<Partial<Customer> | null>(null)
   const [saving, setSaving] = useState(false)
   const [dlg, setDlg] = useState<'confirm' | 'busy' | 'done' | null>(null)
@@ -33,7 +37,7 @@ export function Clientes() {
   }, [load])
 
   const filtered = useMemo(() => {
-    const term = q.trim().toLowerCase()
+    const term = deferredQuery.trim().toLowerCase()
     if (!term) return customers
     return customers.filter(
       (c) =>
@@ -41,7 +45,8 @@ export function Clientes() {
         c.phone.includes(term) ||
         (c.email || '').toLowerCase().includes(term),
     )
-  }, [customers, q])
+  }, [customers, deferredQuery])
+  const pagination = usePaginatedList(filtered, deferredQuery)
 
   const save = async () => {
     if (!editing?.name?.trim() || !editing?.phone?.trim()) {
@@ -72,7 +77,7 @@ export function Clientes() {
       <div className="flex flex-wrap items-end justify-between gap-3">
         <PageTitle
           title="Clientes"
-          hint="Se guardan al tomar pedido (nombre + teléfono + foto por defecto)."
+          hint="Busca y consulta la agenda de clientes del local."
         />
         <button
           className="rounded-xl bg-ember px-4 py-2 text-sm font-semibold text-white"
@@ -87,6 +92,7 @@ export function Clientes() {
         <input
           className={`${inputClass} pl-9`}
           placeholder="Buscar por nombre o teléfono…"
+          aria-label="Buscar clientes"
           value={q}
           onChange={(e) => setQ(e.target.value)}
         />
@@ -101,20 +107,13 @@ export function Clientes() {
             Aún no hay clientes. Al tomar un pedido con nombre y teléfono se crean aquí.
           </p>
         ) : null}
-        {filtered.map((c) => (
+        {pagination.pageItems.map((c) => (
           <article
             key={c.id}
             className="flex flex-wrap items-center justify-between gap-3 rounded-2xl bg-white p-4 shadow-sm"
           >
             <div className="flex min-w-0 items-center gap-3">
-              <img
-                src={
-                  c.photoUrl ||
-                  `https://ui-avatars.com/api/?name=${encodeURIComponent(c.name)}&background=1a3d1a&color=ffd700&size=128&bold=true`
-                }
-                alt=""
-                className="h-12 w-12 rounded-full object-cover"
-              />
+              <PersonAvatar name={c.name} photoUrl={c.photoUrl} tone="customer" className="h-12 w-12 shrink-0 text-sm" />
               <div className="min-w-0">
                 <p className="font-semibold">{c.name}</p>
                 <p className="text-sm text-ink/45">{c.phone}</p>
@@ -123,13 +122,14 @@ export function Clientes() {
             </div>
             <div className="flex items-center gap-3">
               <span className="text-xs text-ink/35">{formatDateTime(c.createdAt)}</span>
-              <button className="text-sm text-ember" onClick={() => setEditing(c)}>
+              <button className="min-h-11 rounded-lg px-1 text-sm text-ember" onClick={() => setEditing(c)}>
                 Editar
               </button>
             </div>
           </article>
         ))}
       </div>
+      <Pagination page={pagination.page} total={filtered.length} onChange={pagination.setPage} noun="clientes" />
 
       <Modal open={!!editing} title="Cliente" onClose={() => setEditing(null)}>
         {editing ? (
