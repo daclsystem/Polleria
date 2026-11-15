@@ -314,20 +314,40 @@ export function Pos() {
         deliveryTimeMin: type === 'delivery' ? mins ?? undefined : undefined,
         tableId: type === 'salon' ? tableId : undefined,
         discount: 0,
-        paymentMethod: paid && mayCharge ? payMethod : 'pendiente',
-        paid: paid && mayCharge,
+        paymentMethod: 'pendiente',
+        paid: false,
         notes: notes || undefined,
         createdBy: user?.name ?? 'POS',
         createdByUserId: user?.id,
         source: 'pos',
         codPaymentMethod: type === 'delivery' ? (payMethod === 'yape' ? 'yape' : 'efectivo') : undefined,
       })
-      if (paid && mayCharge) await payOrder(order.id, payMethod)
+      let paymentConfirmed = false
+      let paymentError = ''
+      if (paid && mayCharge) {
+        try {
+          paymentConfirmed = await payOrder(order.id, {
+            payments: [{
+              method: payMethod,
+              amount: order.total,
+              cashTendered: payMethod === 'efectivo' ? order.total : undefined,
+            }],
+          })
+        } catch (error) {
+          paymentError = (error as Error).message
+        }
+      }
       const kitchenItems = filterKitchenItems(order.items, state.products)
       if (kitchenItems.length > 0) {
         printTicket({ ...order, items: kitchenItems }, state.settings, 'cocina', state.users)
       }
-      if (paid && mayCharge) setTimeout(() => printTicket(order, state.settings, 'caja', state.users), 400)
+      if (paymentConfirmed) {
+        setTimeout(() => printTicket({ ...order, paid: true, paymentMethod: payMethod }, state.settings, 'caja', state.users), 400)
+      } else if (paid && mayCharge) {
+        alert(`El pedido ${padOrder(order.number)} quedó registrado. Revisa su saldo en Caja antes de volver a cobrar.${paymentError ? ` ${paymentError}` : ''}`)
+        navigate('/comandas')
+        return
+      }
       navigate(type === 'salon' ? '/mesas' : '/pedidos-web')
     } catch (e) {
       alert((e as Error).message || 'No se pudo crear el pedido')

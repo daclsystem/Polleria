@@ -467,6 +467,7 @@ function mapOrder(r: Record<string, unknown>, items: unknown[] = []) {
     total: money.total,
     paymentMethod: r.Paid ? 'efectivo' : 'pendiente',
     paid: Boolean(r.Paid),
+    paidAmount: num(r.PaidAmount),
     codPaymentMethod: r.CodPaymentMethod ? String(r.CodPaymentMethod) : undefined,
     codCashAmount: r.CodCashAmount != null ? Number(r.CodCashAmount) : undefined,
     createdAt: new Date(r.CreatedAt as string).toISOString(),
@@ -510,9 +511,12 @@ catalogRouter.get('/bootstrap', authRequired, async (_req, res) => {
         pool.request().query(`SELECT * FROM dbo.Inventory ORDER BY Name`),
         pool.request().query(`SELECT TOP 1 * FROM dbo.Settings WHERE Id = 1`),
         pool.request().query(`
-          SELECT TOP 400 o.*, u.Name AS CreatedByName
+          SELECT TOP 400 o.*, u.Name AS CreatedByName, p.PaidAmount
           FROM dbo.Orders o
           LEFT JOIN dbo.Users u ON u.Id = o.CreatedByUserId
+          OUTER APPLY (
+            SELECT SUM(Amount) AS PaidAmount FROM dbo.OrderPayments WHERE OrderId = o.Id
+          ) p
           ORDER BY o.CreatedAt DESC
         `),
         pool.request().query(`SELECT Id, Name, Phone, Email, Address, PhotoUrl, CreatedAt FROM dbo.Customers ORDER BY CreatedAt DESC`),

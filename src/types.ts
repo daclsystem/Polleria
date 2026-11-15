@@ -139,6 +139,7 @@ export interface Order {
   total: number
   paymentMethod: PaymentMethod
   paid: boolean
+  paidAmount?: number
   /** Preferencia de cobro en puerta (web/delivery). Paid sigue en false hasta liquidar. */
   codPaymentMethod?: 'yape' | 'plin' | 'efectivo'
   codCashAmount?: number

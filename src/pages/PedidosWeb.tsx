@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { Bike, CalendarRange, MapPin, Search, ShoppingBag, Table2, Trash2, UtensilsCrossed } from 'lucide-react'
 import { useAuth } from '../auth/AuthContext'
 import { useStore } from '../store/StoreContext'
-import { formatDateTime, padOrder, reconcileOrderMoney, soles } from '../lib/format'
+import { formatDateTime, orderBalance, padOrder, reconcileOrderMoney, soles } from '../lib/format'
 import { filterKitchenItems } from '../lib/kitchen'
 import { staffLabel } from '../lib/staffLabel'
 import {
@@ -282,6 +282,9 @@ export function PedidosWeb({ vista = 'curso' }: { vista?: 'curso' | 'historial' 
         ) : null}
         {pagination.pageItems.map((o, idx) => {
           const mesa = channelOf(o) === 'mesa'
+          const total = reconcileOrderMoney(o).total
+          const hasPayments = o.paid || (o.paidAmount ?? 0) > 0
+          const canRemove = isAdmin && !isVoidOrder(o.status) && !hasPayments
           const mins = Math.max(
             0,
             Math.floor((now - new Date(o.updatedAt || o.createdAt).getTime()) / 60000),
@@ -318,10 +321,15 @@ export function PedidosWeb({ vista = 'curso' }: { vista?: 'curso' | 'historial' 
                     </p>
                   ) : null}
                   <p className="mt-1 font-black text-ember">
-                    {soles(reconcileOrderMoney(o).total)}
+                    {soles(total)}
                   </p>
                   {o.paid ? (
                     <p className="text-[11px] font-bold text-emerald-700 uppercase">Pagado</p>
+                  ) : isVoidOrder(o.status) ? null : hasPayments ? (
+                    <div className="mt-1 text-xs font-semibold tabular-nums text-ink/70">
+                      <p>Abonado {soles(o.paidAmount ?? 0)}</p>
+                      <p className="mt-0.5 text-ember">Saldo {soles(orderBalance(o, total))}</p>
+                    </div>
                   ) : o.codPaymentMethod ? (
                     <p className="text-[11px] font-bold text-ink/45 uppercase">{o.codPaymentMethod}</p>
                   ) : (
@@ -409,7 +417,7 @@ export function PedidosWeb({ vista = 'curso' }: { vista?: 'curso' | 'historial' 
                       </select>
                     </label>
                   ) : null}
-                  {isAdmin && !isVoidOrder(o.status) ? (
+                  {canRemove ? (
                     <button
                       type="button"
                       className="inline-flex min-h-10 items-center gap-1 rounded-xl bg-rose-50 px-3 py-1.5 text-sm font-bold text-rose-700 ring-1 ring-rose-200"
@@ -425,7 +433,7 @@ export function PedidosWeb({ vista = 'curso' }: { vista?: 'curso' | 'historial' 
                 </div>
               ) : (
                 <div className="mt-3 flex flex-wrap items-center justify-end gap-2">
-                  {isAdmin && !isVoidOrder(o.status) ? (
+                  {canRemove ? (
                     <button
                       type="button"
                       className="inline-flex min-h-10 items-center gap-1 rounded-xl bg-rose-50 px-3 py-1.5 text-sm font-bold text-rose-700 ring-1 ring-rose-200"

@@ -1,8 +1,7 @@
-import { useEffect, useMemo, useState } from 'react'
-import { Plus, X } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { Plus, Printer, X } from 'lucide-react'
 import { Field, inputClass } from './ui'
-import { ConfirmProcess } from './ConfirmProcess'
-import { reconcileOrderMoney, round2, soles } from '../lib/format'
+import { orderBalance, reconcileOrderMoney, round2, soles } from '../lib/format'
 import type { FiscalDocTipo, Order, PaySplit } from '../types'
 
 type ExtraKind = 'yape' | 'tarjeta'
@@ -16,7 +15,6 @@ export function CajaCobro({
   order,
   busy,
   onConfirm,
-  onFinished,
 }: {
   order: Order
   busy?: boolean
@@ -31,10 +29,9 @@ export function CajaCobro({
       docAddress?: string
     }
   }) => Promise<void>
-  onFinished?: () => void
 }) {
   const money = useMemo(() => reconcileOrderMoney(order), [order])
-  const total = round2(money.total)
+  const total = orderBalance(order, money.total)
   const [efectivo, setEfectivo] = useState(total)
   const [extras, setExtras] = useState<{ kind: ExtraKind; amount: number; op: string }[]>([])
   const [docTipo, setDocTipo] = useState<FiscalDocTipo>('ninguno')
@@ -44,13 +41,19 @@ export function CajaCobro({
   const [docPhone, setDocPhone] = useState(order.customerPhone || '')
   const [docAddress, setDocAddress] = useState(order.address || '')
   const [err, setErr] = useState('')
-  const [dlg, setDlg] = useState<'confirm' | 'busy' | 'done' | null>(null)
   const [pending, setPending] = useState<Parameters<typeof onConfirm>[0] | null>(null)
+  const inFlight = useRef(false)
+  const confirmButton = useRef<HTMLButtonElement>(null)
 
   useEffect(() => {
     setEfectivo(total)
     setExtras([])
+    setPending(null)
   }, [order.id, total])
+
+  useEffect(() => {
+    if (pending) confirmButton.current?.focus()
+  }, [pending])
 
   const extraSum = round2(extras.reduce((s, e) => s + e.amount, 0))
   const suma = round2(efectivo + extraSum)
@@ -91,7 +94,7 @@ export function CajaCobro({
   const opOk = extras.every((e) => e.amount <= 0 || e.op.trim().length >= 4)
 
   const canPay = useMemo(() => {
-    if (Math.abs(falta) > 0.01) return false
+    if (falta !== 0) return false
     if (suma <= 0) return false
     if (!opOk) return false
     if (needsDocData && !(nameOk && mailOk && phoneOk && addrOk && rucOk && dniOk)) return false
@@ -101,7 +104,7 @@ export function CajaCobro({
   const submit = () => {
     setErr('')
     if (!canPay) {
-      if (Math.abs(falta) > 0.01) setErr(`La suma debe ser ${soles(total)}`)
+      if (falta !== 0) setErr(`La suma debe ser ${soles(total)}`)
       else if (!opOk) setErr('Yape o tarjeta necesitan el número de operación')
       else setErr('Completa los datos del documento')
       return
@@ -123,211 +126,196 @@ export function CajaCobro({
       },
     }
     setPending(payload)
-    setDlg('confirm')
   }
 
   const runPay = async () => {
-    if (!pending) return
-    setDlg('busy')
+    if (!pending || inFlight.current) return
+    inFlight.current = true
     try {
       await onConfirm(pending)
-      setDlg('done')
     } catch (e) {
-      setDlg('confirm')
       setErr((e as Error).message || 'No se pudo cobrar')
+    } finally {
+      inFlight.current = false
+      setPending(null)
     }
   }
 
   return (
-    <div className="space-y-3 rounded-xl bg-white p-3">
-      <p className="text-xs font-semibold uppercase text-ink/40">Cobrar</p>
-      {order.tableNumber ? (
-        <p className="rounded-xl bg-gold px-3 py-2 text-center font-display text-3xl font-black text-[#1a3d1a]">
-          Mesa {order.tableNumber}
-        </p>
-      ) : (
-        <p className="text-sm font-bold text-ink/70">{order.type === 'llevar' ? 'Recojo' : order.type === 'delivery' || order.type === 'web' ? 'Delivery' : 'Salón'}</p>
-      )}
-      {isFactura ? (
-        <div className="space-y-0.5 text-sm text-ink/55">
-          <p className="flex justify-between">
-            <span>Op. gravadas</span>
-            <span>{soles(money.subtotal)}</span>
-          </p>
-          <p className="flex justify-between">
-            <span>IGV incluido</span>
-            <span>{soles(money.igv)}</span>
-          </p>
-          <p className="font-display text-2xl tracking-tight text-ember">{soles(total)}</p>
+    <section aria-label="Cobro" className="min-w-0 rounded-2xl border border-ink/10 bg-cream">
+      <div className="border-b border-ink/10 px-4 py-3 sm:px-5">
+        <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+          <h3 className="text-sm font-bold">Saldo por cobrar</h3>
+          <p className="text-2xl font-black tracking-tight text-ember tabular-nums">{soles(total)}</p>
         </div>
-      ) : (
-        <p className="font-display text-2xl tracking-tight text-ember">{soles(total)}</p>
-      )}
+        {!!order.paidAmount && (
+          <p className="mt-1 text-sm text-ink/70">Abonado {soles(order.paidAmount)} de {soles(money.total)}</p>
+        )}
+        {isFactura && (
+          <p className="mt-1 text-xs text-ink/70">Base gravada {soles(money.subtotal)} · IGV {soles(money.igv)}</p>
+        )}
+      </div>
 
-      <div className="space-y-2">
-        <div className="grid grid-cols-[5.5rem_1fr] items-center gap-2">
-          <span className="text-sm font-bold">Efectivo</span>
-          <input
-            className={inputClass}
-            inputMode="decimal"
-            value={efectivo || ''}
-            placeholder="0.00"
-            onChange={(e) => setEfectivo(Math.max(0, round2(Number(e.target.value) || 0)))}
-          />
-        </div>
+      <fieldset disabled={busy || !!pending} className="min-w-0 space-y-4 px-4 py-4 sm:px-5">
+        <legend className="sr-only">Datos del cobro</legend>
+        <div className="space-y-2">
+          <label className="grid grid-cols-[1fr_minmax(0,9rem)] items-center gap-2">
+            <span className="text-sm font-semibold">Efectivo</span>
+            <input
+              className={`${inputClass} text-right tabular-nums`}
+              inputMode="decimal"
+              value={efectivo || ''}
+              placeholder="0.00"
+              onChange={(e) => setEfectivo(Math.max(0, round2(Number(e.target.value) || 0)))}
+            />
+          </label>
 
-        {extras.map((e) => (
-          <div key={e.kind} className="rounded-xl bg-cream p-2.5 space-y-2">
-            <div className="flex items-center justify-between gap-2">
-              <span className="text-sm font-bold">{e.kind === 'yape' ? 'Yape' : 'Tarjeta'}</span>
-              <button
-                type="button"
-                onClick={() => removeExtra(e.kind)}
-                className="flex h-8 w-8 items-center justify-center rounded-full bg-white text-ink/45"
-                aria-label="Quitar"
-              >
-                <X size={16} />
-              </button>
+          {extras.map((e) => (
+            <div key={e.kind} className="rounded-xl bg-cream p-2.5 space-y-2">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-sm font-bold">{e.kind === 'yape' ? 'Yape' : 'Tarjeta'}</span>
+                <button
+                  type="button"
+                  onClick={() => removeExtra(e.kind)}
+                  className="flex h-8 w-8 items-center justify-center rounded-full bg-white text-ink/45"
+                  aria-label={`Quitar ${e.kind === 'yape' ? 'Yape' : 'Tarjeta'}`}
+                >
+                  <X size={16} />
+                </button>
+              </div>
+              <Field label="Con cuánto pagó">
+                <input
+                  className={inputClass}
+                  inputMode="decimal"
+                  value={e.amount || ''}
+                  placeholder="0.00"
+                  onChange={(ev) => setExtraAmount(e.kind, ev.target.value)}
+                />
+              </Field>
+              <Field label="Nº de operación">
+                <input
+                  className={inputClass}
+                  value={e.op}
+                  onChange={(ev) =>
+                    setExtras(extras.map((x) => (x.kind === e.kind ? { ...x, op: ev.target.value } : x)))
+                  }
+                  placeholder={e.kind === 'yape' ? 'Ej. 12345678' : 'Voucher / operación'}
+                />
+              </Field>
             </div>
-            <Field label="Con cuánto pagó">
-              <input
-                className={inputClass}
-                inputMode="decimal"
-                value={e.amount || ''}
-                placeholder="0.00"
-                onChange={(ev) => setExtraAmount(e.kind, ev.target.value)}
-              />
-            </Field>
-            <Field label="Nº de operación">
-              <input
-                className={inputClass}
-                value={e.op}
-                onChange={(ev) =>
-                  setExtras(extras.map((x) => (x.kind === e.kind ? { ...x, op: ev.target.value } : x)))
-                }
-                placeholder={e.kind === 'yape' ? 'Ej. 12345678' : 'Voucher / operación'}
-              />
-            </Field>
-          </div>
-        ))}
+          ))}
 
-        {available.length > 0 ? (
-          <div className="flex flex-wrap gap-1.5">
-            {available.map((m) => (
+          {available.length > 0 ? (
+            <div className="flex flex-wrap gap-1.5">
+              {available.map((m) => (
+                <button
+                  key={m.id}
+                  type="button"
+                  onClick={() => addExtra(m.id)}
+                  className="inline-flex min-h-11 items-center gap-1 rounded-xl border border-ink/12 bg-surface px-3 text-xs font-bold hover:border-ember/50"
+                >
+                  <Plus size={14} /> Agregar {m.label}
+                </button>
+              ))}
+            </div>
+          ) : null}
+        </div>
+        {falta !== 0 && (
+          <p role="status" className="text-sm font-semibold text-amber-800 dark:text-amber-300">
+            {falta > 0 ? `Falta asignar ${soles(falta)}` : `Exceso de ${soles(-falta)}`}
+          </p>
+        )}
+
+        <div>
+          <p className="mb-2 text-sm font-semibold">Documento</p>
+          <div className="grid grid-cols-2 gap-1.5">
+            {(
+              [
+                ['ninguno', 'Solo ticket'],
+                ['boleta_simple', 'Boleta simple'],
+                ['boleta_dni', 'Boleta con DNI'],
+                ['factura', 'Factura'],
+              ] as const
+            ).map(([id, label]) => (
               <button
-                key={m.id}
+                key={id}
                 type="button"
-                onClick={() => addExtra(m.id)}
-                className="inline-flex min-h-10 items-center gap-1 rounded-xl bg-ink/8 px-3 text-xs font-bold text-ink"
+                onClick={() => setDocTipo(id)}
+                aria-pressed={docTipo === id}
+                className={`min-h-11 rounded-xl border px-2 text-xs font-bold hover:border-ember/50 ${
+                  docTipo === id ? 'border-ember/55 bg-ember/10 text-ember' : 'border-ink/10 bg-surface text-ink'
+                }`}
               >
-                <Plus size={14} /> Agregar {m.label}
+                {label}
               </button>
             ))}
           </div>
+        </div>
+
+        {needsDocData ? (
+          <div className="space-y-2">
+            {needsRuc ? (
+              <Field label="RUC">
+                <input
+                  className={inputClass}
+                  inputMode="numeric"
+                  maxLength={11}
+                  value={docNumero}
+                  onChange={(e) => setDocNumero(e.target.value.replace(/\D/g, '').slice(0, 11))}
+                  placeholder="11 dígitos"
+                />
+              </Field>
+            ) : null}
+            {needsDni ? (
+              <Field label="DNI">
+                <input
+                  className={inputClass}
+                  inputMode="numeric"
+                  maxLength={8}
+                  value={docNumero}
+                  onChange={(e) => setDocNumero(e.target.value.replace(/\D/g, '').slice(0, 8))}
+                  placeholder="8 dígitos"
+                />
+              </Field>
+            ) : null}
+            <Field label={needsRuc ? 'Razón social' : 'Nombre'}>
+              <input className={inputClass} value={docNombre} onChange={(e) => setDocNombre(e.target.value)} />
+            </Field>
+            <Field label="Correo">
+              <input className={inputClass} type="email" value={docEmail} onChange={(e) => setDocEmail(e.target.value)} />
+            </Field>
+            <Field label="Teléfono">
+              <input className={inputClass} inputMode="tel" value={docPhone} onChange={(e) => setDocPhone(e.target.value)} />
+            </Field>
+            <Field label="Dirección">
+              <input className={inputClass} value={docAddress} onChange={(e) => setDocAddress(e.target.value)} />
+            </Field>
+          </div>
         ) : null}
+
+      </fieldset>
+      <div className="sticky bottom-0 space-y-2 rounded-b-2xl border-t border-ink/10 bg-cream px-4 py-3 sm:px-5">
+        {err && <p role="alert" className="text-sm font-semibold text-rose-700 dark:text-rose-300">{err}</p>}
+        {total === 0 ? (
+          <p className="text-sm text-ink/75">El saldo es cero y el pedido aún figura abierto. Revisa sus pagos en caja.</p>
+        ) : pending || busy ? (
+          <>
+            <p role="status" className="text-sm font-semibold">{busy ? 'Esperando confirmación de caja…' : `¿Confirmar el cobro de ${soles(total)}?`}</p>
+            <div className="flex gap-2">
+              <button type="button" disabled={busy} onClick={() => setPending(null)} className="min-h-12 rounded-xl border border-ink/12 bg-surface px-3 text-sm font-bold disabled:opacity-50">
+                Volver
+              </button>
+              <button ref={confirmButton} type="button" disabled={busy} onClick={() => void runPay()} className="btn-primary flex-1 gap-2 px-3 text-sm disabled:opacity-60">
+                {busy ? 'Registrando…' : 'Confirmar e imprimir'}
+              </button>
+            </div>
+          </>
+        ) : (
+          <button type="button" onClick={submit} className="btn-primary w-full gap-2 px-3 text-sm">
+            <Printer size={16} aria-hidden="true" /> Cobrar {soles(total)}
+          </button>
+        )}
       </div>
-      <p className={`text-xs font-semibold ${Math.abs(falta) < 0.01 ? 'text-emerald-700' : 'text-ember'}`}>
-        {Math.abs(falta) < 0.01 ? 'Suma completa' : `Falta ${soles(falta)}`}
-      </p>
-
-      <div>
-        <p className="mb-1.5 text-[11px] font-bold tracking-wide text-ink/40 uppercase">Documento</p>
-        <div className="grid grid-cols-2 gap-1.5">
-          {(
-            [
-              ['ninguno', 'Solo ticket'],
-              ['boleta_simple', 'Boleta simple'],
-              ['boleta_dni', 'Boleta con DNI'],
-              ['factura', 'Factura'],
-            ] as const
-          ).map(([id, label]) => (
-            <button
-              key={id}
-              type="button"
-              onClick={() => setDocTipo(id)}
-              className={`min-h-10 rounded-xl px-2 text-xs font-bold ${
-                docTipo === id ? 'bg-ink text-cream' : 'bg-cream text-ink'
-              }`}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      {needsDocData ? (
-        <div className="space-y-2">
-          {needsRuc ? (
-            <Field label="RUC">
-              <input
-                className={inputClass}
-                inputMode="numeric"
-                maxLength={11}
-                value={docNumero}
-                onChange={(e) => setDocNumero(e.target.value.replace(/\D/g, '').slice(0, 11))}
-                placeholder="11 dígitos"
-              />
-            </Field>
-          ) : null}
-          {needsDni ? (
-            <Field label="DNI">
-              <input
-                className={inputClass}
-                inputMode="numeric"
-                maxLength={8}
-                value={docNumero}
-                onChange={(e) => setDocNumero(e.target.value.replace(/\D/g, '').slice(0, 8))}
-                placeholder="8 dígitos"
-              />
-            </Field>
-          ) : null}
-          <Field label={needsRuc ? 'Razón social' : 'Nombre'}>
-            <input className={inputClass} value={docNombre} onChange={(e) => setDocNombre(e.target.value)} />
-          </Field>
-          <Field label="Correo">
-            <input className={inputClass} type="email" value={docEmail} onChange={(e) => setDocEmail(e.target.value)} />
-          </Field>
-          <Field label="Teléfono">
-            <input className={inputClass} inputMode="tel" value={docPhone} onChange={(e) => setDocPhone(e.target.value)} />
-          </Field>
-          <Field label="Dirección">
-            <input className={inputClass} value={docAddress} onChange={(e) => setDocAddress(e.target.value)} />
-          </Field>
-        </div>
-      ) : null}
-
-      {err ? <p className="text-xs font-semibold text-ember">{err}</p> : null}
-
-      <button
-        type="button"
-        disabled={busy || !canPay}
-        onClick={submit}
-        className="min-h-11 w-full rounded-xl bg-ember text-sm font-bold text-white disabled:opacity-40"
-      >
-        {busy ? 'Cobrando…' : 'Cobrar e imprimir'}
-      </button>
-
-      <ConfirmProcess
-        open={!!dlg}
-        phase={dlg === 'done' ? 'done' : dlg === 'busy' ? 'busy' : 'confirm'}
-        title="¿Cobrar este pedido?"
-        message={
-          <p>
-            Se registra el pago de <strong>{soles(total)}</strong>
-            {isFactura ? ' (factura con IGV incluido)' : ''} y se imprime el ticket.
-          </p>
-        }
-        confirmLabel="Sí, cobrar"
-        doneTitle="Cobro procesado"
-        doneMessage="El pedido quedó pagado y se envió a imprimir."
-        busyLabel="Cobrando…"
-        onConfirm={() => void runPay()}
-        onCancel={() => setDlg(null)}
-        onDone={() => {
-          setDlg(null)
-          onFinished?.()
-        }}
-      />
-    </div>
+    </section>
   )
 }

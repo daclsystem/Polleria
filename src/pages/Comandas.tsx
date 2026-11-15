@@ -1,9 +1,9 @@
 import { Navigate } from 'react-router-dom'
 import { useEffect, useMemo, useState } from 'react'
-import { Search } from 'lucide-react'
+import { CheckCircle2, Search } from 'lucide-react'
 import { useStore } from '../store/StoreContext'
 import { useAuth } from '../auth/AuthContext'
-import { formatDateTime, padOrder, reconcileOrderMoney, soles } from '../lib/format'
+import { formatDateTime, orderBalance, padOrder, reconcileOrderMoney, soles } from '../lib/format'
 import { printTicket } from '../lib/print'
 import { staffLabel } from '../lib/staffLabel'
 import { orderBelongsToStaff } from '../lib/realtime'
@@ -242,6 +242,8 @@ export function Comandas() {
   const pagination = usePaginatedList(list, JSON.stringify([filter, custNeedle, custPhone, cobroFrom, cobroTo, actingRole, user?.id]))
 
   const current = selected ? (state.orders.find((o) => o.id === selected.id) ?? null) : null
+  const currentTotal = current ? reconcileOrderMoney(current, state.settings.igvRate).total : 0
+  const showCheckout = mayCharge && current && !isVoidOrder(current.status)
 
   useEffect(() => {
     setPickedDriverId(current?.driverId || '')
@@ -416,7 +418,8 @@ export function Comandas() {
                   ) : null}
                   {!o.paid && !isVoidOrder(o.status) ? (
                     <span className="rounded-full bg-ember/15 px-2 py-0.5 text-[11px] font-bold text-ember">
-                      {o.source === 'web' || o.type === 'delivery' ? 'Pend. liquidación' : 'Por cobrar'}
+                      {o.paidAmount ? `Saldo ${soles(orderBalance(o, reconcileOrderMoney(o).total))}`
+                        : o.source === 'web' || o.type === 'delivery' ? 'Pend. liquidación' : 'Por cobrar'}
                     </span>
                   ) : null}
                   <span className="text-xs text-ink/35">{formatDateTime(o.createdAt)}</span>
@@ -473,13 +476,14 @@ export function Comandas() {
                     <td className="px-4 py-3">
                       {o.paid ? (
                         <span className="capitalize text-ink/60">{o.paymentMethod}</span>
-                      ) : (
+                      ) : !isVoidOrder(o.status) ? (
                         <span className="font-semibold text-ember">
-                          {o.source === 'web' || o.type === 'delivery'
+                          {o.paidAmount ? `Saldo ${soles(orderBalance(o, reconcileOrderMoney(o).total))}`
+                            : o.source === 'web' || o.type === 'delivery'
                             ? `Pend. liquidación${o.codPaymentMethod ? ` · ${o.codPaymentMethod}` : ''}`
                             : 'Pendiente'}
                         </span>
-                      )}
+                      ) : null}
                     </td>
                     <td className="px-4 py-3 text-ink/50">{formatDateTime(o.createdAt)}</td>
                     <td className="px-4 py-3 text-right font-medium">
@@ -503,254 +507,263 @@ export function Comandas() {
             : ''
         }
         onClose={() => setSelected(null)}
-        wide
+        closeDisabled={paying}
+        wide={showCheckout ? 'xl' : true}
       >
         {current ? (
-          <div className="space-y-4">
-            <div className="rounded-2xl bg-gold px-4 py-3 text-center">
-              <p className="text-[11px] font-black tracking-[0.18em] text-[#1a3d1a]/70 uppercase">
-                {current.tableNumber ? 'Mesa' : 'Canal'}
-              </p>
-              <p className="font-display text-4xl font-black tracking-tight text-[#1a3d1a]">
-                {current.tableNumber ? current.tableNumber : orderPlaceLabel(current)}
-              </p>
-            </div>
-            <div className="flex flex-wrap gap-2">
-              <StatusBadge status={current.status} />
-              <TypeBadge type={current.type} />
-            </div>
-            <OrderPeople customer={current.customerName} attendant={staffLabel(current, state.users)} attendantLabel={current.source === 'web' ? 'Origen' : 'Mozo'} />
-            {current.address || (current.customerPhone && /[1-9]/.test(current.customerPhone)) ? <p className="text-sm text-ink/60 [overflow-wrap:anywhere]">{current.customerPhone && /[1-9]/.test(current.customerPhone) ? current.customerPhone : ''} {current.address || ''}</p> : null}
-            <ul className="divide-y divide-ink/5 rounded-xl bg-white">
-              {current.items.map((i, idx) => (
-                <li key={idx} className="flex justify-between gap-3 px-3 py-3 text-sm">
-                  <span className="min-w-0 [overflow-wrap:anywhere]">
-                    {i.qty} {i.name}
-                    {i.notes ? <span className="block text-xs text-ember">{i.notes}</span> : null}
-                  </span>
-                  <span className="shrink-0 font-semibold tabular-nums">{soles(i.qty * i.price)}</span>
-                </li>
-              ))}
-            </ul>
-            <div className="text-sm text-ink/50">
-              <p className="font-display text-xl text-ink">
-                Total {soles(reconcileOrderMoney(current, state.settings.igvRate).total)}
-              </p>
-            </div>
-            {current.notes ? <p className="text-sm">Nota: {current.notes}</p> : null}
+          <div className={showCheckout ? 'grid items-start gap-4 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] md:gap-5' : ''}>
+            <div className="min-w-0 space-y-4">
+              <div className="flex flex-wrap items-center gap-2">
+                <StatusBadge status={current.status} />
+                <TypeBadge type={current.type} />
+              </div>
+              <OrderPeople customer={current.customerName} attendant={staffLabel(current, state.users)} attendantLabel={current.source === 'web' ? 'Origen' : 'Mozo'} />
+              {current.address || (current.customerPhone && /[1-9]/.test(current.customerPhone)) ? <p className="text-sm text-ink/60 [overflow-wrap:anywhere]">{current.customerPhone && /[1-9]/.test(current.customerPhone) ? current.customerPhone : ''} {current.address || ''}</p> : null}
+              <section aria-label="Consumo" className="rounded-2xl border border-ink/10">
+                <h3 className="border-b border-ink/10 px-4 py-3 text-sm font-bold">Consumo</h3>
+                <ul className="divide-y divide-ink/8">
+                  {current.items.map((i, idx) => (
+                    <li key={idx} className="flex justify-between gap-3 px-4 py-2.5 text-sm">
+                      <span className="min-w-0 [overflow-wrap:anywhere]">
+                        {i.qty} {i.name}
+                        {i.notes ? <span className="block text-xs text-ember">{i.notes}</span> : null}
+                      </span>
+                      <span className="shrink-0 font-semibold tabular-nums">{soles(i.qty * i.price)}</span>
+                    </li>
+                  ))}
+                </ul>
+                <div className="flex flex-wrap items-baseline justify-between gap-2 border-t border-ink/10 px-4 py-3">
+                  <span className="text-sm font-semibold">Total del pedido</span>
+                  <span className="text-lg font-extrabold tabular-nums">{soles(currentTotal)}</span>
+                </div>
+              </section>
+              {current.notes ? <p className="text-sm">Nota: {current.notes}</p> : null}
 
-            {(current.type === 'delivery' || current.type === 'web') &&
-            current.address &&
-            !isVoidOrder(current.status) &&
-            current.status !== 'entregado' ? (
-              <div className="rounded-xl bg-teal-50 p-3">
-                <p className="mb-1 text-xs font-semibold tracking-wide text-teal-800 uppercase">
-                  1. Elige repartidor
-                </p>
-                <p className="mb-2 text-sm font-medium text-teal-950">
-                  {current.driverId
-                    ? `Asignado a ${current.driverName || 'repartidor'}. Puedes cambiarlo y tocar Asignar.`
-                    : 'Toca un nombre y luego el botón Asignar.'}
-                </p>
-                <div className="space-y-1.5">
-                  <button
-                    type="button"
-                    disabled={assigning}
-                    className={`flex min-h-11 w-full items-center rounded-xl px-3 text-left text-sm font-semibold ${
-                      !pickedDriverId ? 'bg-ink text-cream' : 'bg-white text-ink'
-                    }`}
-                    onClick={() => setPickedDriverId('')}
-                  >
-                    Sin asignar
-                  </button>
-                  {drivers.map((d) => {
-                    const on = pickedDriverId === d.id
-                    return (
-                      <button
-                        key={d.id}
-                        type="button"
-                        disabled={assigning}
-                        className={`flex min-h-11 w-full items-center rounded-xl px-3 text-left text-sm font-semibold ${
-                          on ? 'bg-ink text-cream' : 'bg-white text-ink'
-                        }`}
-                        onClick={() => setPickedDriverId(d.id)}
-                      >
-                        <span className="flex min-w-0 items-center gap-2">
-                          <img
-                            src={
-                              d.photoUrl ||
-                              `https://ui-avatars.com/api/?name=${encodeURIComponent(d.name)}&background=0f766e&color=ffffff&size=64`
-                            }
-                            alt=""
-                            className="h-8 w-8 rounded-full object-cover"
-                          />
-                          <span className="min-w-0">
-                            <span className="block truncate">{d.name}</span>
-                            <span className="block text-[11px] font-medium opacity-70">
-                              {d.phone}
-                              {d.plate || d.vehicleInfo ? ` · ${d.plate || d.vehicleInfo}` : ''}
+              {(current.type === 'delivery' || current.type === 'web') &&
+              current.address &&
+              !isVoidOrder(current.status) &&
+              current.status !== 'entregado' ? (
+                <div className="rounded-xl bg-teal-50 p-3">
+                  <p className="mb-1 text-xs font-semibold tracking-wide text-teal-800 uppercase">
+                    1. Elige repartidor
+                  </p>
+                  <p className="mb-2 text-sm font-medium text-teal-950">
+                    {current.driverId
+                      ? `Asignado a ${current.driverName || 'repartidor'}. Puedes cambiarlo y tocar Asignar.`
+                      : 'Toca un nombre y luego el botón Asignar.'}
+                  </p>
+                  <div className="space-y-1.5">
+                    <button
+                      type="button"
+                      disabled={assigning}
+                      className={`flex min-h-11 w-full items-center rounded-xl px-3 text-left text-sm font-semibold ${
+                        !pickedDriverId ? 'bg-ink text-cream' : 'bg-white text-ink'
+                      }`}
+                      onClick={() => setPickedDriverId('')}
+                    >
+                      Sin asignar
+                    </button>
+                    {drivers.map((d) => {
+                      const on = pickedDriverId === d.id
+                      return (
+                        <button
+                          key={d.id}
+                          type="button"
+                          disabled={assigning}
+                          className={`flex min-h-11 w-full items-center rounded-xl px-3 text-left text-sm font-semibold ${
+                            on ? 'bg-ink text-cream' : 'bg-white text-ink'
+                          }`}
+                          onClick={() => setPickedDriverId(d.id)}
+                        >
+                          <span className="flex min-w-0 items-center gap-2">
+                            <img
+                              src={
+                                d.photoUrl ||
+                                `https://ui-avatars.com/api/?name=${encodeURIComponent(d.name)}&background=0f766e&color=ffffff&size=64`
+                              }
+                              alt=""
+                              className="h-8 w-8 rounded-full object-cover"
+                            />
+                            <span className="min-w-0">
+                              <span className="block truncate">{d.name}</span>
+                              <span className="block text-[11px] font-medium opacity-70">
+                                {d.phone}
+                                {d.plate || d.vehicleInfo ? ` · ${d.plate || d.vehicleInfo}` : ''}
+                              </span>
                             </span>
                           </span>
-                        </span>
-                      </button>
-                    )
-                  })}
-                </div>
-                {(() => {
-                  const dirty = (pickedDriverId || '') !== (current.driverId || '')
-                  const picked = drivers.find((d) => d.id === pickedDriverId)
-                  const assigned = current.driverId
-                    ? drivers.find((d) => d.id === current.driverId)
-                    : null
-                  return (
-                    <>
-                      <button
-                        type="button"
-                        disabled={assigning || !dirty}
-                        className="mt-3 min-h-11 w-full rounded-xl bg-teal-700 px-3 text-sm font-bold text-white disabled:opacity-40"
-                        onClick={() => void assignDriver(current, pickedDriverId || null)}
-                      >
-                        {assigning
-                          ? 'Asignando…'
-                          : !dirty
-                            ? picked
-                              ? `Ya asignado a ${picked.name}`
-                              : 'Elige un repartidor'
-                            : picked
-                              ? `Asignar a ${picked.name}`
-                              : 'Quitar repartidor'}
-                      </button>
-                      <div className="mt-3 rounded-xl bg-white/80 p-3 text-sm text-teal-950">
-                        <p className="text-xs font-bold tracking-wide text-teal-800 uppercase">
-                          2. El repartidor entra así
-                        </p>
-                        <a
-                          href={driverAppUrl}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="mt-1 block font-bold text-teal-800 underline"
+                        </button>
+                      )
+                    })}
+                  </div>
+                  {(() => {
+                    const dirty = (pickedDriverId || '') !== (current.driverId || '')
+                    const picked = drivers.find((d) => d.id === pickedDriverId)
+                    const assigned = current.driverId
+                      ? drivers.find((d) => d.id === current.driverId)
+                      : null
+                    return (
+                      <>
+                        <button
+                          type="button"
+                          disabled={assigning || !dirty}
+                          className="mt-3 min-h-11 w-full rounded-xl bg-teal-700 px-3 text-sm font-bold text-white disabled:opacity-40"
+                          onClick={() => void assignDriver(current, pickedDriverId || null)}
                         >
-                          Abrir app repartidor
-                        </a>
-                        <p className="mt-1.5 text-xs leading-relaxed text-teal-900/80">
-                          Celular del conductor
-                          {assigned || picked
-                            ? ` (${(assigned || picked)?.phone})`
-                            : ''}
-                          {' '}
-                          + código por WhatsApp. Si no llega, usa <strong>123456</strong>.
-                          No usa el login del sistema.
-                        </p>
-                      </div>
-                    </>
-                  )
-                })()}
-              </div>
-            ) : null}
-
-            {current.paid ? <PrintOrderActions order={current} /> : null}
-
-            {!isVoidOrder(current.status) && current.status !== 'entregado' ? (
-              <div className="flex flex-wrap gap-2">
-                {current.status === 'nuevo' ? (
-                  <button
-                    className="min-h-11 rounded-xl bg-amber-500 px-4 py-2 text-sm font-semibold text-white"
-                    onClick={() => {
-                      updateOrderStatus(current.id, 'en_cocina')
-                      setSelected(null)
-                    }}
-                  >
-                    Pasar a cocina
-                  </button>
-                ) : null}
-                {current.status === 'en_cocina' ? (
-                  <button
-                    className="min-h-11 rounded-xl bg-emerald-600 px-4 py-2 text-sm font-semibold text-white"
-                    onClick={() => {
-                      updateOrderStatus(current.id, 'listo')
-                      setSelected(null)
-                    }}
-                  >
-                    Marcar listo
-                  </button>
-                ) : null}
-                {current.status === 'listo' ? (
-                  current.type === 'delivery' || current.type === 'web' ? (
-                    current.driverId ? (
-                      <p className="w-full rounded-xl bg-teal-50 px-3 py-2 text-sm text-teal-900">
-                        Repartidor asignado. La entrega la confirma él en su app. En caja solo se cobra.
-                      </p>
-                    ) : (
-                      <p className="w-full rounded-xl bg-amber-50 px-3 py-2 text-sm font-semibold text-amber-900">
-                        Asigna un repartidor arriba. Sin conductor no se puede marcar entregado.
-                      </p>
+                          {assigning
+                            ? 'Asignando…'
+                            : !dirty
+                              ? picked
+                                ? `Ya asignado a ${picked.name}`
+                                : 'Elige un repartidor'
+                              : picked
+                                ? `Asignar a ${picked.name}`
+                                : 'Quitar repartidor'}
+                        </button>
+                        <div className="mt-3 rounded-xl bg-white/80 p-3 text-sm text-teal-950">
+                          <p className="text-xs font-bold tracking-wide text-teal-800 uppercase">
+                            2. El repartidor entra así
+                          </p>
+                          <a
+                            href={driverAppUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="mt-1 block font-bold text-teal-800 underline"
+                          >
+                            Abrir app repartidor
+                          </a>
+                          <p className="mt-1.5 text-xs leading-relaxed text-teal-900/80">
+                            Celular del conductor
+                            {assigned || picked
+                              ? ` (${(assigned || picked)?.phone})`
+                              : ''}
+                            {' '}
+                            + código por WhatsApp. Si no llega, usa <strong>123456</strong>.
+                            No usa el login del sistema.
+                          </p>
+                        </div>
+                      </>
                     )
-                  ) : current.paid && !mayCharge ? (
+                  })()}
+                </div>
+              ) : null}
+
+              {current.paid && !showCheckout ? <PrintOrderActions order={current} /> : null}
+
+              {!isVoidOrder(current.status) && current.status !== 'entregado' ? (
+                <div className="flex flex-wrap gap-2">
+                  {current.status === 'nuevo' ? (
                     <button
-                      className="min-h-11 rounded-xl bg-ink px-4 py-2 text-sm font-semibold text-cream"
+                      className="min-h-11 rounded-xl bg-amber-500 px-4 py-2 text-sm font-semibold text-white"
                       onClick={() => {
-                        updateOrderStatus(current.id, 'entregado')
+                        updateOrderStatus(current.id, 'en_cocina')
                         setSelected(null)
                       }}
                     >
-                      {current.type === 'salon' || current.tableNumber
-                        ? `Liberar mesa${current.tableNumber ? ` ${current.tableNumber}` : ''}`
-                        : 'Entregar recojo'}
+                      Pasar a cocina
                     </button>
-                  ) : null
+                  ) : null}
+                  {current.status === 'en_cocina' ? (
+                    <button
+                      className="min-h-11 rounded-xl bg-emerald-600 px-4 py-2 text-sm font-semibold text-white"
+                      onClick={() => {
+                        updateOrderStatus(current.id, 'listo')
+                        setSelected(null)
+                      }}
+                    >
+                      Marcar listo
+                    </button>
+                  ) : null}
+                  {current.status === 'listo' ? (
+                    current.type === 'delivery' || current.type === 'web' ? (
+                      current.driverId ? (
+                        <p className="w-full rounded-xl bg-teal-50 px-3 py-2 text-sm text-teal-900">
+                          Repartidor asignado. La entrega la confirma él en su app. En caja solo se cobra.
+                        </p>
+                      ) : (
+                        <p className="w-full rounded-xl bg-amber-50 px-3 py-2 text-sm font-semibold text-amber-900">
+                          Asigna un repartidor arriba. Sin conductor no se puede marcar entregado.
+                        </p>
+                      )
+                    ) : current.paid && !mayCharge ? (
+                      <button
+                        className="min-h-11 rounded-xl bg-ink px-4 py-2 text-sm font-semibold text-cream"
+                        onClick={() => {
+                          updateOrderStatus(current.id, 'entregado')
+                          setSelected(null)
+                        }}
+                      >
+                        {current.type === 'salon' || current.tableNumber
+                          ? `Liberar mesa${current.tableNumber ? ` ${current.tableNumber}` : ''}`
+                          : 'Entregar recojo'}
+                      </button>
+                    ) : null
+                  ) : null}
+                </div>
+              ) : null}
+              {!mayCharge && !current.paid && !isVoidOrder(current.status) ? (
+                <p className="rounded-xl bg-amber-50 px-3 py-2 text-sm font-semibold text-amber-900">
+                  Por cobrar · solo caja confirma el pago.
+                </p>
+              ) : null}
+            </div>
+            {showCheckout && (
+              <div className="min-w-0 space-y-3">
+                {current.paid ? (
+                  <section aria-label="Pago confirmado" className="space-y-3 rounded-2xl border border-ember/20 bg-ember/5 p-4 sm:p-5">
+                    <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
+                      <h3 className="flex items-center gap-2 text-sm font-bold text-ember"><CheckCircle2 size={18} aria-hidden="true" /> Pagado</h3>
+                      <p className="text-xl font-extrabold tabular-nums">{soles(current.paidAmount || currentTotal)}</p>
+                    </div>
+                    <PrintOrderActions order={current} />
+                  </section>
+                ) : (
+                  <CajaCobro
+                    key={current.id}
+                    order={current}
+                    busy={paying}
+                    onConfirm={async (payload) => {
+                      setPaying(true)
+                      try {
+                        const paid = await payOrder(current.id, payload)
+                        if (!paid) throw new Error('El abono quedó registrado. Revisa el saldo actualizado.')
+                        if (current.status !== 'entregado' && (current.type === 'salon' || current.type === 'llevar' || current.tableNumber)) {
+                          updateOrderStatus(current.id, 'entregado')
+                        }
+                        const paidOrder = {
+                          ...reconcileOrderMoney(current, state.settings.igvRate),
+                          paid: true,
+                          paymentMethod: payload.payments[0]?.method ?? 'efectivo',
+                          docTipo: payload.billing.docTipo,
+                          docNumero: payload.billing.docNumero,
+                          docNombre: payload.billing.docNombre,
+                          docEmail: payload.billing.docEmail,
+                          docPhone: payload.billing.docPhone,
+                          docAddress: payload.billing.docAddress,
+                        }
+                        printTicket(paidOrder, state.settings, 'caja', state.users)
+                      } finally {
+                        setPaying(false)
+                      }
+                    }}
+                  />
+                )}
+                {needsCashierSettle(current) ? (
+                  <div className="rounded-xl bg-teal-50 p-3">
+                    <p className="mb-2 text-xs font-semibold uppercase text-teal-700">Liquidar en caja</p>
+                    <p className="mb-3 text-sm text-teal-900">
+                      Pedido web ya pagado online y entregado. Confirma la liquidación.
+                    </p>
+                    <button
+                      className="min-h-10 rounded-lg bg-teal-600 px-4 py-2 text-sm font-semibold text-white"
+                      onClick={() => setSettleDlg('confirm')}
+                    >
+                      Confirmar liquidación
+                    </button>
+                  </div>
                 ) : null}
               </div>
-            ) : null}
-            {!mayCharge && !current.paid && !isVoidOrder(current.status) ? (
-              <p className="rounded-xl bg-amber-50 px-3 py-2 text-sm font-semibold text-amber-900">
-                Por cobrar · solo caja confirma el pago.
-              </p>
-            ) : null}
-            {mayCharge && !current.paid && !isVoidOrder(current.status) ? (
-              <CajaCobro
-                key={current.id}
-                order={current}
-                busy={paying}
-                onConfirm={async (payload) => {
-                  setPaying(true)
-                  try {
-                    await payOrder(current.id, payload)
-                    if (current.type === 'salon' || current.type === 'llevar' || current.tableNumber) {
-                      updateOrderStatus(current.id, 'entregado')
-                    }
-                    const paidOrder = {
-                      ...reconcileOrderMoney(current, state.settings.igvRate),
-                      paid: true,
-                      paymentMethod: payload.payments[0]?.method ?? 'efectivo',
-                      docTipo: payload.billing.docTipo,
-                      docNumero: payload.billing.docNumero,
-                      docNombre: payload.billing.docNombre,
-                      docEmail: payload.billing.docEmail,
-                      docPhone: payload.billing.docPhone,
-                      docAddress: payload.billing.docAddress,
-                    }
-                    printTicket(paidOrder, state.settings, 'caja', state.users)
-                  } finally {
-                    setPaying(false)
-                  }
-                }}
-                onFinished={() => setSelected(null)}
-              />
-            ) : null}
-            {mayCharge && needsCashierSettle(current) ? (
-              <div className="rounded-xl bg-teal-50 p-3">
-                <p className="mb-2 text-xs font-semibold uppercase text-teal-700">Liquidar en caja</p>
-                <p className="mb-3 text-sm text-teal-900">
-                  Pedido web ya pagado online y entregado. Confirma la liquidación.
-                </p>
-                <button
-                  className="min-h-10 rounded-lg bg-teal-600 px-4 py-2 text-sm font-semibold text-white"
-                  onClick={() => setSettleDlg('confirm')}
-                >
-                  Confirmar liquidación
-                </button>
-              </div>
-            ) : null}
+            )}
           </div>
         ) : null}
       </Modal>

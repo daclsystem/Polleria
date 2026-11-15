@@ -231,20 +231,8 @@ interface StoreApi {
   addItemsToOrder: (id: string, newItems: OrderItem[], createdBy: string) => void
   payOrder: (
     id: string,
-    input:
-      | PaymentMethod
-      | {
-          payments: Array<{ method: string; amount: number; cashTendered?: number; reference?: string }>
-          billing?: {
-            docTipo?: string
-            docNumero?: string
-            docNombre?: string
-            docEmail?: string
-            docPhone?: string
-            docAddress?: string
-          }
-        },
-  ) => Promise<void>
+    input: { payments: Parameters<typeof apiPayOrder>[1]; billing?: Parameters<typeof apiPayOrder>[2] },
+  ) => Promise<boolean>
   cancelOrder: (id: string) => void
   updateOrder: (id: string, patch: Partial<Order>) => void
   saveProduct: (product: Product) => void
@@ -693,11 +681,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         let tables = prev.tables
         if (order?.tableId && (status === 'entregado' || status === 'cancelado' || status === 'eliminado')) {
           tables = tables.map((t) =>
-            t.id === order.tableId ? { ...t, status: 'libre', orderId: undefined } : t,
+            t.id === order.tableId && t.orderId === id ? { ...t, status: 'libre', orderId: undefined } : t,
           )
         }
         if (order?.tableId && status === 'listo') {
-          tables = tables.map((t) => (t.id === order.tableId ? { ...t, status: 'cuenta' } : t))
+          tables = tables.map((t) => (t.id === order.tableId && t.orderId === id ? { ...t, status: 'cuenta' } : t))
         }
         return { ...prev, orders, tables }
       })
@@ -708,7 +696,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           if (kitchenFrom) return
           void reloadFromApi()
         })
-        .catch((e) => setApiError((e as Error).message))
+        .catch(async (e) => {
+          await reloadFromApi()
+          setApiError((e as Error).message)
+        })
     },
     [patchLocal, reloadFromApi],
   )
@@ -832,65 +823,35 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     [patchLocal, reloadFromApi],
   )
 
-  const payOrder = useCallback(
-    async (
-      id: string,
-      input:
-        | PaymentMethod
-        | {
-            payments: Array<{ method: string; amount: number; cashTendered?: number; reference?: string }>
-            billing?: {
-              docTipo?: string
-              docNumero?: string
-              docNombre?: string
-              docEmail?: string
-              docPhone?: string
-              docAddress?: string
-            }
-          },
-    ) => {
+  const payOrder = useCallback<StoreApi['payOrder']>(
+    async (id, { payments, billing }) => {
       requireApi()
-      const current = stateRef.current.orders.find((o) => o.id === id)
-      const amount = current
-        ? reconcileOrderMoney(current, stateRef.current.settings.igvRate).total
-        : 0
-      const payload =
-        typeof input === 'string'
-          ? {
-              payments: [
-                {
-                  method: input,
-                  amount,
-                  cashTendered: input === 'efectivo' ? amount : undefined,
-                },
-              ],
-            }
-          : input
-      const method = (payload.payments[0]?.method || 'efectivo') as PaymentMethod
-      patchLocal((prev) => ({
-        ...prev,
-        orders: prev.orders.map((o) =>
-          o.id === id
-            ? {
-                ...o,
-                paid: true,
-                paymentMethod: method,
-                docTipo: payload.billing?.docTipo as Order['docTipo'],
-                docNumero: payload.billing?.docNumero,
-                docNombre: payload.billing?.docNombre,
-                docEmail: payload.billing?.docEmail,
-                docPhone: payload.billing?.docPhone,
-                docAddress: payload.billing?.docAddress,
-                updatedAt: new Date().toISOString(),
-              }
-            : o,
-        ),
-      }))
       try {
-        await apiPayOrder(id, payload.payments, payload.billing)
+        const { paid, paidAmount } = await apiPayOrder(id, payments, billing)
         await reloadFromApi()
+        patchLocal((prev) => ({
+          ...prev,
+          orders: prev.orders.map((o) => {
+            if (o.id !== id) return o
+            return {
+              ...o,
+              paid: o.paid || paid,
+              paidAmount: paidAmount == null ? o.paidAmount : Math.max(o.paidAmount ?? 0, paidAmount),
+              ...(paid ? {
+                paymentMethod: (payments[0]?.method || 'efectivo') as PaymentMethod,
+                docTipo: billing?.docTipo as Order['docTipo'],
+                docNumero: billing?.docNumero,
+                docNombre: billing?.docNombre,
+                docEmail: billing?.docEmail,
+                docPhone: billing?.docPhone,
+                docAddress: billing?.docAddress,
+              } : {}),
+            }
+          }),
+        }))
+        return paid
       } catch (e) {
-        setApiError((e as Error).message)
+        await reloadFromApi()
         throw e
       }
     },

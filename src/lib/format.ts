@@ -1,3 +1,5 @@
+import type { Order } from '../types'
+
 const pe = new Intl.NumberFormat('es-PE', {
   style: 'currency',
   currency: 'PEN',
@@ -133,6 +135,10 @@ export function reconcileOrderMoney<
 
 export function round2(n: number) {
   return Math.round(n * 100) / 100
+}
+
+export function orderBalance(order: Pick<Order, 'paid' | 'paidAmount'>, total: number) {
+  return order.paid ? 0 : Math.max(0, round2(total - (order.paidAmount ?? 0)))
 }
 
 export function qtyLabel(n: number) {

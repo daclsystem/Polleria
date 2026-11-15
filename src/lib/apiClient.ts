@@ -213,9 +213,9 @@ export async function apiPayOrder(
     docAddress?: string
   },
 ) {
-  return apiFetch<{ order: unknown; paid: boolean }>(`/api/orders/${id}/payments`, {
+  return apiFetch<{ order: unknown; paid: boolean; paidAmount?: number }>(`/api/orders/${id}/payments`, {
     method: 'POST',
-    body: JSON.stringify({ payments, billing }),
+    body: JSON.stringify({ payments, billing, closeBalance: true }),
   })
 }
 

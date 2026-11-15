@@ -40,19 +40,22 @@ export function Modal({
   onClose,
   children,
   wide,
+  closeDisabled,
 }: {
   open: boolean
   title: string
   onClose: () => void
   children: ReactNode
-  wide?: boolean
+  wide?: boolean | 'xl'
+  closeDisabled?: boolean
 }) {
   const titleId = useId()
-  const { panelRef, onKeyDown } = useDialogFocus(open, onClose)
+  const close = () => { if (!closeDisabled) onClose() }
+  const { panelRef, onKeyDown } = useDialogFocus(open, close)
   if (!open) return null
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center p-0 sm:items-center sm:p-4">
-      <button type="button" tabIndex={-1} className="absolute inset-0 bg-ink/50 backdrop-blur-[3px]" onClick={onClose} aria-label="Cerrar diálogo" />
+      <button type="button" tabIndex={-1} className="absolute inset-0 bg-ink/50 backdrop-blur-[3px]" onClick={close} disabled={closeDisabled} aria-label="Cerrar diálogo" />
       <div
         ref={panelRef}
         role="dialog"
@@ -62,7 +65,7 @@ export function Modal({
         onKeyDown={onKeyDown}
         style={{ paddingBottom: 'max(1.25rem, env(safe-area-inset-bottom))' }}
         className={`relative min-w-0 max-h-[92dvh] w-full overflow-y-auto overscroll-contain rounded-t-[1.75rem] bg-surface p-5 text-ink shadow-2xl outline-none sm:rounded-[1.75rem] ${
-          wide ? 'sm:max-w-2xl' : 'sm:max-w-md'
+          wide === 'xl' ? 'sm:max-w-4xl' : wide ? 'sm:max-w-2xl' : 'sm:max-w-md'
         }`}
       >
         <div className="mx-auto mb-3 h-1 w-10 rounded-full bg-ink/10 sm:hidden" />
@@ -70,9 +73,10 @@ export function Modal({
           <h2 id={titleId} className="min-w-0 text-xl font-black tracking-tight [overflow-wrap:anywhere] sm:text-2xl">{title}</h2>
           <button
             type="button"
-            onClick={onClose}
+            onClick={close}
+            disabled={closeDisabled}
             aria-label="Cerrar diálogo"
-            className="tap flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-ink/[0.04] text-xl text-ink/45 hover:bg-ink/[0.08] hover:text-ink"
+            className="tap flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-ink/[0.04] text-xl text-ink/45 hover:bg-ink/[0.08] hover:text-ink disabled:opacity-50"
           >
             ×
           </button>

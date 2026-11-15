@@ -1,7 +1,7 @@
 import { Router } from 'express'
 import { v4 as uuid } from 'uuid'
 import { getPool, sql } from '../db.js'
-import { authRequired } from '../auth.js'
+import { authRequired, requireRoles } from '../auth.js'
 import { emitEvent, roomsForOrderStatus } from '../realtime.js'
 import { notifyOrderCreatedServer, notifyOrderPaidServer, notifyOrderStatusServer } from '../lib/whatsappNotify.js'
 import {
@@ -17,7 +17,7 @@ import {
   customerCouponUses,
   loadCouponByCode,
 } from './coupons.js'
-import { moneyFromItemLines, num, persistOrderTotals, pickOrderMoney } from '../lib/money.js'
+import { moneyFromItemLines, num, persistOrderTotals, pickOrderMoney, round2 } from '../lib/money.js'
 
 export const ordersRouter = Router()
 
@@ -179,21 +179,18 @@ function mapTrackOrder(
   }
 }
 
-async function loadOrder(orderId: string) {
-  const pool = await getPool()
-  const order = await pool
-    .request()
+async function loadOrder(orderId: string, tx?: sql.Transaction) {
+  const connection = tx ?? (await getPool())
+  const order = await connection.request()
     .input('id', sql.UniqueIdentifier, orderId)
-    .query(`SELECT * FROM dbo.Orders WHERE Id = @id`)
+    .query(`SELECT * FROM dbo.Orders ${tx ? 'WITH (UPDLOCK, HOLDLOCK)' : ''} WHERE Id = @id`)
   if (!order.recordset[0]) return null
 
-  const items = await pool
-    .request()
+  const items = await connection.request()
     .input('id', sql.UniqueIdentifier, orderId)
     .query(`SELECT * FROM dbo.OrderItems WHERE OrderId = @id ORDER BY SortOrder`)
 
-  const payments = await pool
-    .request()
+  const payments = await connection.request()
     .input('id', sql.UniqueIdentifier, orderId)
     .query(`SELECT * FROM dbo.OrderPayments WHERE OrderId = @id ORDER BY CreatedAt`)
 
@@ -685,22 +682,26 @@ ordersRouter.patch('/:id/status', authRequired, async (req, res) => {
 
   const pool = await getPool()
   const orderId = paramId(req.params.id)
-  const existing = await loadOrder(orderId)
-  if (!existing) return res.status(404).json({ error: 'Pedido no encontrado' })
-
-  const orderType = String(existing.Type || '')
-  const isDeliveryOrder = orderType === 'delivery' || orderType === 'web'
-
-  // Delivery: no marcar entregado sin repartidor asignado (solo el conductor o con DriverId)
-  if (status === 'entregado' && isDeliveryOrder && !existing.DriverId) {
-    return res.status(400).json({
-      error: 'Asigna un repartidor antes de marcar entregado. El conductor confirma la entrega en su app.',
-    })
-  }
-
   const tx = new sql.Transaction(pool)
   await tx.begin()
   try {
+    const existing = await loadOrder(orderId, tx)
+    if (!existing) {
+      await tx.rollback()
+      return res.status(404).json({ error: 'Pedido no encontrado' })
+    }
+    if (status === 'eliminado' && (existing.Paid || existing.payments.length > 0)) {
+      await tx.rollback()
+      return res.status(409).json({ error: 'El pedido tiene pagos registrados y no se puede eliminar.' })
+    }
+    const orderType = String(existing.Type || '')
+    if (status === 'entregado' && (orderType === 'delivery' || orderType === 'web') && !existing.DriverId) {
+      await tx.rollback()
+      return res.status(400).json({
+        error: 'Asigna un repartidor antes de marcar entregado. El conductor confirma la entrega en su app.',
+      })
+    }
+
     if (status === 'en_cocina') {
       const from = kitchenFrom || 'pendiente'
       await new sql.Request(tx)
@@ -751,11 +752,13 @@ ordersRouter.patch('/:id/status', authRequired, async (req, res) => {
       if (finalStatus === 'listo') {
         await new sql.Request(tx)
           .input('tableId', sql.UniqueIdentifier, existing.TableId)
-          .query(`UPDATE dbo.Tables SET Status = N'cuenta' WHERE Id = @tableId`)
+          .input('orderId', sql.UniqueIdentifier, orderId)
+          .query(`UPDATE dbo.Tables SET Status = N'cuenta' WHERE Id = @tableId AND CurrentOrderId = @orderId`)
       } else if (finalStatus === 'entregado' || finalStatus === 'cancelado' || finalStatus === 'eliminado') {
         await new sql.Request(tx)
           .input('tableId', sql.UniqueIdentifier, existing.TableId)
-          .query(`UPDATE dbo.Tables SET Status = N'libre', CurrentOrderId = NULL WHERE Id = @tableId`)
+          .input('orderId', sql.UniqueIdentifier, orderId)
+          .query(`UPDATE dbo.Tables SET Status = N'libre', CurrentOrderId = NULL WHERE Id = @tableId AND CurrentOrderId = @orderId`)
       }
     }
 
@@ -881,13 +884,23 @@ ordersRouter.post('/:id/items', authRequired, async (req, res) => {
   }
 
   const pool = await getPool()
-  const existing = await loadOrder(orderId)
-  if (!existing) return res.status(404).json({ error: 'Pedido no encontrado' })
-  if (existing.Paid) return res.status(400).json({ error: 'Pedido ya pagado' })
-
   const tx = new sql.Transaction(pool)
   await tx.begin()
   try {
+    const existing = await loadOrder(orderId, tx)
+    if (!existing) {
+      await tx.rollback()
+      return res.status(404).json({ error: 'Pedido no encontrado' })
+    }
+    if (existing.Paid) {
+      await tx.rollback()
+      return res.status(400).json({ error: 'Pedido ya pagado' })
+    }
+    if (existing.Status === 'cancelado' || existing.Status === 'eliminado') {
+      await tx.rollback()
+      return res.status(409).json({ error: 'El pedido está anulado' })
+    }
+
     const needsKitchenBump = await productsNeedKitchen(items.map((i) => i.productId))
     const maxSort = await new sql.Request(tx)
       .input('orderId', sql.UniqueIdentifier, orderId)
@@ -970,7 +983,7 @@ ordersRouter.post('/:id/items', authRequired, async (req, res) => {
 type PayMethod = 'efectivo' | 'yape' | 'plin' | 'tarjeta'
 
 /** Cobro de mesa — soporta pago múltiple */
-ordersRouter.post('/:id/payments', authRequired, async (req, res) => {
+ordersRouter.post('/:id/payments', authRequired, requireRoles('admin', 'cajero'), async (req, res) => {
   const payments = req.body?.payments as Array<{
     method: PayMethod
     amount: number
@@ -983,35 +996,48 @@ ordersRouter.post('/:id/payments', authRequired, async (req, res) => {
   }
 
   for (const p of payments) {
-    if (!['efectivo', 'yape', 'plin', 'tarjeta'].includes(p.method)) {
-      return res.status(400).json({ error: `Método inválido: ${p.method}` })
+    if (!p || !['efectivo', 'yape', 'plin', 'tarjeta'].includes(p.method)) {
+      return res.status(400).json({ error: 'Método de pago inválido' })
     }
-    if (!(p.amount > 0)) return res.status(400).json({ error: 'Monto inválido' })
+    if (!(round2(num(p.amount)) > 0)) return res.status(400).json({ error: 'Monto inválido' })
     if (p.method === 'efectivo' && p.cashTendered != null && p.cashTendered < p.amount) {
       return res.status(400).json({ error: 'Efectivo recibido menor al monto' })
     }
   }
 
   const pool = await getPool()
-  const existing = await loadOrder(paramId(req.params.id))
-  if (!existing) return res.status(404).json({ error: 'Pedido no encontrado' })
-
-  const already = (existing.payments as Array<{ Amount: number }>).reduce((s, x) => s + num(x.Amount), 0)
-  const incoming = payments.reduce((s, p) => s + num(p.amount), 0)
-  const totalPaid = already + incoming
-  const items = (existing.items as Array<{ Qty: number; Price: number }>) || []
-  const money = pickOrderMoney(existing as Record<string, unknown>, items)
-  const orderTotal = money.total
-
-  if (totalPaid > orderTotal + 0.01) {
-    return res.status(400).json({ error: 'La suma de pagos supera el total' })
-  }
-
+  const orderId = paramId(req.params.id)
   const tx = new sql.Transaction(pool)
   await tx.begin()
+  let paid: boolean
+  let totalPaid: number
   try {
+    const existing = await loadOrder(orderId, tx)
+    if (!existing) {
+      await tx.rollback()
+      return res.status(404).json({ error: 'Pedido no encontrado' })
+    }
+    if (existing.Paid || existing.Status === 'cancelado' || existing.Status === 'eliminado') {
+      await tx.rollback()
+      return res.status(409).json({ error: existing.Paid ? 'El pedido ya está pagado.' : 'El pedido está anulado.' })
+    }
+
+    const already = (existing.payments as Array<{ Amount: number }>).reduce((sum, payment) => sum + num(payment.Amount), 0)
+    const incoming = payments.reduce((sum, payment) => sum + round2(num(payment.amount)), 0)
+    totalPaid = round2(already + incoming)
+    const money = pickOrderMoney(existing, existing.items)
+    const orderTotal = money.total
+    if (totalPaid > orderTotal) {
+      await tx.rollback()
+      return res.status(409).json({ error: 'El cobro supera el saldo pendiente. Revisa el importe actualizado.' })
+    }
+    if (req.body?.closeBalance === true && totalPaid !== orderTotal) {
+      await tx.rollback()
+      return res.status(409).json({ error: 'El saldo cambió. Revisa el importe actualizado antes de cobrar.' })
+    }
+
     if (Math.abs(num(existing.Total) - orderTotal) > 0.01) {
-      await persistOrderTotals(tx, paramId(req.params.id), money.discount)
+      await persistOrderTotals(tx, orderId, money.discount)
     }
 
     for (const p of payments) {
@@ -1021,9 +1047,9 @@ ordersRouter.post('/:id/payments', authRequired, async (req, res) => {
           : null
       await new sql.Request(tx)
         .input('id', sql.UniqueIdentifier, uuid())
-        .input('orderId', sql.UniqueIdentifier, paramId(req.params.id))
+        .input('orderId', sql.UniqueIdentifier, orderId)
         .input('method', sql.NVarChar, p.method)
-        .input('amount', sql.Decimal(10, 2), p.amount)
+        .input('amount', sql.Decimal(10, 2), round2(num(p.amount)))
         .input('cashTendered', sql.Decimal(10, 2), p.cashTendered ?? null)
         .input('cashChange', sql.Decimal(10, 2), change)
         .input('reference', sql.NVarChar, p.reference || null)
@@ -1034,21 +1060,22 @@ ordersRouter.post('/:id/payments', authRequired, async (req, res) => {
         `)
     }
 
-    const paid = totalPaid >= orderTotal - 0.01
+    paid = totalPaid === orderTotal
     await new sql.Request(tx)
-      .input('id', sql.UniqueIdentifier, paramId(req.params.id))
+      .input('id', sql.UniqueIdentifier, orderId)
       .input('paid', sql.Bit, paid)
       .query(`UPDATE dbo.Orders SET Paid = @paid, UpdatedAt = SYSUTCDATETIME() WHERE Id = @id`)
 
     // Barra / gaseosa / sin cocina: descuenta stock solo al liquidar el cobro
-    if (paid && !existing.Paid) {
-      await deductStockForSaleItems(paramId(req.params.id), tx, req.user?.id || null)
+    if (paid) {
+      await deductStockForSaleItems(orderId, tx, req.user?.id || null)
     }
 
     if (paid && existing.TableId) {
       await new sql.Request(tx)
         .input('tableId', sql.UniqueIdentifier, existing.TableId)
-        .query(`UPDATE dbo.Tables SET Status = N'libre', CurrentOrderId = NULL WHERE Id = @tableId`)
+        .input('orderId', sql.UniqueIdentifier, orderId)
+        .query(`UPDATE dbo.Tables SET Status = N'libre', CurrentOrderId = NULL WHERE Id = @tableId AND CurrentOrderId = @orderId`)
     }
 
     const billing = req.body?.billing as
@@ -1064,7 +1091,7 @@ ordersRouter.post('/:id/payments', authRequired, async (req, res) => {
     if (billing?.docTipo) {
       try {
         await new sql.Request(tx)
-          .input('id', sql.UniqueIdentifier, paramId(req.params.id))
+          .input('id', sql.UniqueIdentifier, orderId)
           .input('docTipo', sql.NVarChar, String(billing.docTipo).slice(0, 20))
           .input('docNumero', sql.NVarChar, billing.docNumero ? String(billing.docNumero).slice(0, 20) : null)
           .input('docNombre', sql.NVarChar, billing.docNombre ? String(billing.docNombre).slice(0, 160) : null)
@@ -1084,38 +1111,41 @@ ordersRouter.post('/:id/payments', authRequired, async (req, res) => {
     }
 
     await tx.commit()
-    const order = await loadOrder(paramId(req.params.id))
-    emitEvent('order:paid', order, ['ops', 'caja', 'mesas'])
-    if (paid && !existing.Paid) {
-      void publishInventorySnapshot()
-      const paidOrder = await loadOrder(paramId(req.params.id))
-      if (paidOrder) {
-        void notifyOrderPaidServer({
-          Id: String(paidOrder.Id),
-          Number: Number(paidOrder.Number),
-          Type: String(paidOrder.Type),
-          Status: String(paidOrder.Status),
-          CustomerName: String(paidOrder.CustomerName || ''),
-          CustomerPhone: paidOrder.CustomerPhone ? String(paidOrder.CustomerPhone) : null,
-          Address: paidOrder.Address ? String(paidOrder.Address) : null,
-          Total: Number(paidOrder.Total),
-          TableNumber: paidOrder.TableNumber != null ? Number(paidOrder.TableNumber) : null,
-          CodPaymentMethod: paidOrder.CodPaymentMethod ? String(paidOrder.CodPaymentMethod) : null,
-          Source: paidOrder.Source ? String(paidOrder.Source) : null,
-          items: Array.isArray(paidOrder.items)
-            ? (paidOrder.items as Array<{ Name: string; Qty: number; Price: number }>).map((i) => ({
-                Name: String(i.Name),
-                Qty: Number(i.Qty),
-                Price: Number(i.Price),
-              }))
-            : [],
-        })
-      }
-    }
-    res.json({ order, paid })
   } catch (e) {
     await tx.rollback()
-    res.status(500).json({ error: (e as Error).message })
+    return res.status(500).json({ error: (e as Error).message })
+  }
+
+  const paidOrder = await loadOrder(orderId).catch((e) => {
+    console.warn('[orders] reload after payment', (e as Error).message)
+    return null
+  })
+  res.json({ order: paidOrder, paid, paidAmount: totalPaid })
+  emitEvent(paid ? 'order:paid' : 'order:updated', paidOrder, ['ops', 'caja', 'mesas'])
+  if (paid) {
+    void publishInventorySnapshot()
+    if (paidOrder) {
+      void notifyOrderPaidServer({
+        Id: String(paidOrder.Id),
+        Number: Number(paidOrder.Number),
+        Type: String(paidOrder.Type),
+        Status: String(paidOrder.Status),
+        CustomerName: String(paidOrder.CustomerName || ''),
+        CustomerPhone: paidOrder.CustomerPhone ? String(paidOrder.CustomerPhone) : null,
+        Address: paidOrder.Address ? String(paidOrder.Address) : null,
+        Total: Number(paidOrder.Total),
+        TableNumber: paidOrder.TableNumber != null ? Number(paidOrder.TableNumber) : null,
+        CodPaymentMethod: paidOrder.CodPaymentMethod ? String(paidOrder.CodPaymentMethod) : null,
+        Source: paidOrder.Source ? String(paidOrder.Source) : null,
+        items: Array.isArray(paidOrder.items)
+          ? (paidOrder.items as Array<{ Name: string; Qty: number; Price: number }>).map((i) => ({
+              Name: String(i.Name),
+              Qty: Number(i.Qty),
+              Price: Number(i.Price),
+            }))
+          : [],
+      })
+    }
   }
 })
 
