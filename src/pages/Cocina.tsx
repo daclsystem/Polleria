@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Bike, ChevronLeft, ChevronRight, Clock, Volume2 } from 'lucide-react'
-import { elapsedMinutes, padOrder } from '../lib/format'
+import { elapsedMinutes, formatDayShort, formatTime, limaWeekdayShort, padOrder } from '../lib/format'
 import { orderPlaceLabel } from '../lib/orderType'
 import { playSound, unlockSounds } from '../lib/sounds'
 import {
@@ -93,7 +93,7 @@ export function Cocina() {
   const [now, setNow] = useState(() => new Date())
 
   useEffect(() => {
-    const id = window.setInterval(() => setNow(new Date()), 30_000)
+    const id = window.setInterval(() => setNow(new Date()), 15_000)
     return () => window.clearInterval(id)
   }, [])
 
@@ -136,9 +136,26 @@ export function Cocina() {
           ) : (
             <span className="rounded-full bg-ink/10 px-3 py-1.5 text-xs font-semibold text-ink/60">Sonido ON</span>
           )}
-          <div className="inline-flex min-h-11 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full bg-ink px-3 py-2 font-display text-base text-gold tabular-nums sm:px-3.5 sm:text-xl">
-            <Clock size={14} className="opacity-70" />
-            {now.toLocaleTimeString('es-PE', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'America/Lima' })}
+          <div className="inline-flex min-h-11 shrink-0 items-center gap-2 whitespace-nowrap rounded-full bg-ink px-3 py-1.5 text-gold sm:px-3.5">
+            <Clock size={16} className="opacity-70" />
+            <span className="flex flex-col leading-tight">
+              <span className="text-[10px] font-semibold capitalize tracking-wide text-gold/75">
+                {now.toLocaleDateString('es-PE', {
+                  weekday: 'short',
+                  day: 'numeric',
+                  month: 'short',
+                  timeZone: 'America/Lima',
+                })}
+              </span>
+              <span className="font-display text-base tabular-nums sm:text-xl">
+                {now.toLocaleTimeString('es-PE', {
+                  hour: '2-digit',
+                  minute: '2-digit',
+                  hour12: false,
+                  timeZone: 'America/Lima',
+                })}
+              </span>
+            </span>
           </div>
         </div>
       </div>
@@ -316,6 +333,9 @@ function KitchenCard({
             ) : null}
           </div>
           <p className="mt-1 font-display text-3xl tracking-tight text-ember">{who}</p>
+          <p className="mt-0.5 text-[11px] font-semibold capitalize tabular-nums text-ink/55">
+            {limaWeekdayShort(order.createdAt)} {formatDayShort(order.createdAt)} · {formatTime(order.createdAt)}
+          </p>
           <p className="truncate text-xs text-ink/55">
             {order.customerName || 'Cliente'}
             {' · '}

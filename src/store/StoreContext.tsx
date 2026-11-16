@@ -231,7 +231,12 @@ interface StoreApi {
   addItemsToOrder: (id: string, newItems: OrderItem[], createdBy: string) => void
   payOrder: (
     id: string,
-    input: { payments: Parameters<typeof apiPayOrder>[1]; billing?: Parameters<typeof apiPayOrder>[2] },
+    input: {
+      payments: Parameters<typeof apiPayOrder>[1]
+      billing?: Parameters<typeof apiPayOrder>[2]
+      /** Cobrar y enviar: el pedido acaba de crearse y cocina todavía debe verlo. */
+      keepKitchen?: boolean
+    },
   ) => Promise<boolean>
   cancelOrder: (id: string) => void
   updateOrder: (id: string, patch: Partial<Order>) => void
@@ -824,10 +829,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   )
 
   const payOrder = useCallback<StoreApi['payOrder']>(
-    async (id, { payments, billing }) => {
+    async (id, { payments, billing, keepKitchen }) => {
       requireApi()
       try {
-        const { paid, paidAmount } = await apiPayOrder(id, payments, billing)
+        const { paid, paidAmount } = await apiPayOrder(id, payments, billing, { keepKitchen })
         await reloadFromApi()
         patchLocal((prev) => ({
           ...prev,

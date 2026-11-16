@@ -465,7 +465,11 @@ driversRouter.post('/me/delivered', authRequired, async (req, res) => {
         SET Status = N'entregado',
             DeliveryPhotoUrl = @photo,
             UpdatedAt = SYSUTCDATETIME()
-        WHERE Id = @id
+        WHERE Id = @id;
+
+        UPDATE dbo.OrderItems
+        SET KitchenStatus = CASE WHEN KitchenStatus IS NOT NULL THEN N'listo' ELSE KitchenStatus END
+        WHERE OrderId = @id
       `)
 
     const updated = await pool

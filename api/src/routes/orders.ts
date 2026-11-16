@@ -690,6 +690,10 @@ ordersRouter.patch('/:id/status', authRequired, async (req, res) => {
       await tx.rollback()
       return res.status(404).json({ error: 'Pedido no encontrado' })
     }
+    if (existing.Status === status && (status === 'entregado' || status === 'cancelado' || status === 'eliminado')) {
+      await tx.rollback()
+      return res.json({ order: existing })
+    }
     if (status === 'eliminado' && (existing.Paid || existing.payments.length > 0)) {
       await tx.rollback()
       return res.status(409).json({ error: 'El pedido tiene pagos registrados y no se puede eliminar.' })
@@ -1011,6 +1015,7 @@ ordersRouter.post('/:id/payments', authRequired, requireRoles('admin', 'cajero')
   await tx.begin()
   let paid: boolean
   let totalPaid: number
+  let closedAsDelivered = false
   try {
     const existing = await loadOrder(orderId, tx)
     if (!existing) {
@@ -1078,6 +1083,30 @@ ordersRouter.post('/:id/payments', authRequired, requireRoles('admin', 'cajero')
         .query(`UPDATE dbo.Tables SET Status = N'libre', CurrentOrderId = NULL WHERE Id = @tableId AND CurrentOrderId = @orderId`)
     }
 
+    // Salón/recojo cobrados después de crearse: ya se entregaron aunque cocina no haya
+    // pulsado Empezar → Listo. "Cobrar y enviar" (pedido recién creado) se queda en cocina.
+    if (paid) {
+      const orderType = String(existing.Type || '')
+      const keepKitchen = req.body?.keepKitchen === true
+      const createdMs = existing.CreatedAt ? new Date(existing.CreatedAt).getTime() : Date.now()
+      const ageSec = (Date.now() - createdMs) / 1000
+      const isCounter = orderType === 'salon' || orderType === 'llevar'
+      const openStatus = !['entregado', 'cancelado', 'eliminado'].includes(String(existing.Status || ''))
+      if (isCounter && !keepKitchen && openStatus && ageSec >= 180) {
+        await new sql.Request(tx)
+          .input('orderId', sql.UniqueIdentifier, orderId)
+          .query(`
+            UPDATE dbo.OrderItems
+            SET KitchenStatus = CASE WHEN KitchenStatus IS NOT NULL THEN N'listo' ELSE KitchenStatus END
+            WHERE OrderId=@orderId
+          `)
+        await new sql.Request(tx)
+          .input('id', sql.UniqueIdentifier, orderId)
+          .query(`UPDATE dbo.Orders SET Status = N'entregado', UpdatedAt = SYSUTCDATETIME() WHERE Id = @id`)
+        closedAsDelivered = true
+      }
+    }
+
     const billing = req.body?.billing as
       | {
           docTipo?: string
@@ -1122,6 +1151,31 @@ ordersRouter.post('/:id/payments', authRequired, requireRoles('admin', 'cajero')
   })
   res.json({ order: paidOrder, paid, paidAmount: totalPaid })
   emitEvent(paid ? 'order:paid' : 'order:updated', paidOrder, ['ops', 'caja', 'mesas'])
+  if (closedAsDelivered && paidOrder) {
+    emitEvent('order:status', paidOrder, roomsForOrderStatus('entregado'))
+    const phone = (paidOrder as { CustomerPhone?: string }).CustomerPhone
+    if (phone) {
+      void notifyOrderStatusServer(
+        {
+          Id: String((paidOrder as { Id: string }).Id),
+          Number: Number((paidOrder as { Number: number }).Number),
+          Type: String((paidOrder as { Type: string }).Type),
+          Status: 'entregado',
+          CustomerName: String((paidOrder as { CustomerName?: string }).CustomerName || ''),
+          CustomerPhone: String(phone),
+          Address: (paidOrder as { Address?: string }).Address,
+          Total: Number((paidOrder as { Total: number }).Total),
+          Source: (paidOrder as { Source?: string }).Source,
+          items: ((paidOrder as { items?: Array<{ Name: string; Qty: number; Price: number }> }).items || []).map((i) => ({
+            Name: i.Name,
+            Qty: i.Qty,
+            Price: i.Price,
+          })),
+        },
+        'entregado',
+      ).catch((e) => console.warn('[whatsapp] paid-delivered', (e as Error).message))
+    }
+  }
   if (paid) {
     void publishInventorySnapshot()
     if (paidOrder) {

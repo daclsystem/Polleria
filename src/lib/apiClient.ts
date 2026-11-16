@@ -212,10 +212,11 @@ export async function apiPayOrder(
     docPhone?: string
     docAddress?: string
   },
+  opts?: { keepKitchen?: boolean },
 ) {
   return apiFetch<{ order: unknown; paid: boolean; paidAmount?: number }>(`/api/orders/${id}/payments`, {
     method: 'POST',
-    body: JSON.stringify({ payments, billing, closeBalance: true }),
+    body: JSON.stringify({ payments, billing, closeBalance: true, keepKitchen: opts?.keepKitchen === true }),
   })
 }
 

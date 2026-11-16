@@ -332,6 +332,7 @@ export function Pos() {
               amount: order.total,
               cashTendered: payMethod === 'efectivo' ? order.total : undefined,
             }],
+            keepKitchen: true,
           })
         } catch (error) {
           paymentError = (error as Error).message

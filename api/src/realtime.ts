@@ -70,7 +70,7 @@ export function roomsForOrderStatus(status: string): string[] {
     case 'listo':
       return ['mesas', 'caja', 'ops', 'delivery']
     case 'entregado':
-      return ['ops', 'caja', 'mesas', 'delivery']
+      return ['ops', 'caja', 'cocina', 'mesas', 'delivery']
     case 'cancelado':
     case 'eliminado':
       return ['ops', 'caja', 'cocina', 'mesas', 'delivery']
