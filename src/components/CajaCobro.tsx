@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Plus, Printer, X } from 'lucide-react'
 import { Field, inputClass } from './ui'
+import { apiLookupDoc } from '../lib/apiClient'
 import { orderBalance, reconcileOrderMoney, round2, soles } from '../lib/format'
 import type { FiscalDocTipo, Order, PaySplit } from '../types'
 
@@ -41,6 +42,7 @@ export function CajaCobro({
   const [docPhone, setDocPhone] = useState(order.customerPhone || '')
   const [docAddress, setDocAddress] = useState(order.address || '')
   const [err, setErr] = useState('')
+  const [lookupNote, setLookupNote] = useState('')
   const [pending, setPending] = useState<Parameters<typeof onConfirm>[0] | null>(null)
   const inFlight = useRef(false)
   const confirmButton = useRef<HTMLButtonElement>(null)
@@ -54,6 +56,34 @@ export function CajaCobro({
   useEffect(() => {
     if (pending) confirmButton.current?.focus()
   }, [pending])
+
+  useEffect(() => {
+    const digits = docNumero.replace(/\D/g, '')
+    const kind = docTipo === 'factura' ? 'ruc' : docTipo === 'boleta_dni' ? 'dni' : ''
+    const ready = (kind === 'dni' && digits.length === 8) || (kind === 'ruc' && digits.length === 11)
+    if (!ready || (kind !== 'dni' && kind !== 'ruc')) {
+      setLookupNote('')
+      return
+    }
+    let cancel = false
+    const timer = setTimeout(() => {
+      setLookupNote('Consultando Factiliza…')
+      void apiLookupDoc(kind, digits)
+        .then((data) => {
+          if (cancel) return
+          if (data.nombre) setDocNombre(data.nombre)
+          if (data.direccion) setDocAddress(data.direccion)
+          setLookupNote('')
+        })
+        .catch(() => {
+          if (!cancel) setLookupNote('')
+        })
+    }, 400)
+    return () => {
+      cancel = true
+      clearTimeout(timer)
+    }
+  }, [docNumero, docTipo])
 
   const extraSum = round2(extras.reduce((s, e) => s + e.amount, 0))
   const suma = round2(efectivo + extraSum)
@@ -82,7 +112,8 @@ export function CajaCobro({
     setEfectivo(Math.max(0, round2(total - other)))
   }
 
-  const needsDocData = docTipo !== 'ninguno'
+  const genericBoleta = docTipo === 'boleta_simple'
+  const needsDocData = docTipo === 'boleta_dni' || docTipo === 'factura'
   const needsRuc = isFactura
   const needsDni = docTipo === 'boleta_dni'
   const rucOk = !needsRuc || docNumero.replace(/\D/g, '').length === 11
@@ -118,8 +149,8 @@ export function CajaCobro({
       payments,
       billing: {
         docTipo,
-        docNumero: needsDocData ? docNumero.trim() : undefined,
-        docNombre: needsDocData ? docNombre.trim() : undefined,
+        docNumero: genericBoleta ? '00000000' : needsDocData ? docNumero.trim() : undefined,
+        docNombre: genericBoleta ? 'CLIENTES VARIOS' : needsDocData ? docNombre.trim() : undefined,
         docEmail: needsDocData ? docEmail.trim() : undefined,
         docPhone: needsDocData ? docPhone.trim() : undefined,
         docAddress: needsDocData ? docAddress.trim() : undefined,
@@ -252,6 +283,12 @@ export function CajaCobro({
           </div>
         </div>
 
+        {genericBoleta ? (
+          <p className="rounded-xl bg-cream px-3 py-2 text-xs text-ink/70">
+            Boleta a cliente genérico: CLIENTES VARIOS · 00000000
+          </p>
+        ) : null}
+
         {needsDocData ? (
           <div className="space-y-2">
             {needsRuc ? (
@@ -290,6 +327,7 @@ export function CajaCobro({
             <Field label="Dirección">
               <input className={inputClass} value={docAddress} onChange={(e) => setDocAddress(e.target.value)} />
             </Field>
+            {lookupNote ? <p className="text-xs text-ink/50">{lookupNote}</p> : null}
           </div>
         ) : null}
 

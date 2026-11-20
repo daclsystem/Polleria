@@ -484,6 +484,12 @@ function mapOrder(r: Record<string, unknown>, items: unknown[] = []) {
     driverArrivedAt: r.DriverArrivedAt ? new Date(r.DriverArrivedAt as string).toISOString() : undefined,
     deliveryPhotoUrl: r.DeliveryPhotoUrl ? String(r.DeliveryPhotoUrl) : undefined,
     driverSettledAt: r.DriverSettledAt ? new Date(r.DriverSettledAt as string).toISOString() : undefined,
+    docTipo: r.DocTipo ? String(r.DocTipo) : undefined,
+    docNumero: r.DocNumero ? String(r.DocNumero) : undefined,
+    docNombre: r.DocNombre ? String(r.DocNombre) : undefined,
+    docEmail: r.DocEmail ? String(r.DocEmail) : undefined,
+    docPhone: r.DocPhone ? String(r.DocPhone) : undefined,
+    docAddress: r.DocAddress ? String(r.DocAddress) : undefined,
   }
 }
 

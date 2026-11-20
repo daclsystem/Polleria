@@ -1,9 +1,25 @@
+import fs from 'fs/promises'
 import { Router } from 'express'
+import multer from 'multer'
 import { getPool, sql } from '../db.js'
 import { authRequired, requireRoles } from '../auth.js'
 import { sendWhatsAppSoon } from '../lib/wspgo.js'
+import { lookupFactiliza, factilizaToken } from '../lib/factiliza.js'
+import { certificadoInfo, saveCertificado } from '../lib/certificado.js'
+import { activarEmision, emisionActiva, emitirComprobante } from '../lib/emision.js'
+import {
+  comprobanteContentType,
+  comprobanteFilePath,
+  isComprobanteKind,
+  listComprobanteFiles,
+} from '../lib/comprobantes.js'
 
 export const configRouter = Router()
+
+const certUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 1024 * 1024 },
+})
 
 async function getConfig(key: string): Promise<unknown | null> {
   const pool = await getPool()
@@ -132,8 +148,17 @@ configRouter.post('/whatsapp/send', authRequired, async (req, res) => {
 
 configRouter.get('/sunat', authRequired, requireRoles('admin'), async (_req, res) => {
   try {
-    const data = await getConfig('sunat')
-    res.json({ config: data })
+    const data = (await getConfig('sunat')) as Record<string, unknown> | null
+    const config = data && typeof data === 'object' ? { ...data } : {}
+    if (!config.factilizaToken) {
+      const token = await factilizaToken()
+      if (token) config.factilizaToken = token
+    }
+    const cert = await certificadoInfo()
+    config.certificadoCargado = cert.cargado
+    config.certificadoNombre = cert.nombre
+    config.certificadoClave = cert.tieneClave
+    res.json({ config })
   } catch (e) {
     res.status(500).json({ error: (e as Error).message })
   }
@@ -141,10 +166,39 @@ configRouter.get('/sunat', authRequired, requireRoles('admin'), async (_req, res
 
 configRouter.put('/sunat', authRequired, requireRoles('admin'), async (req, res) => {
   try {
-    await putConfig('sunat', req.body?.config ?? req.body)
+    const incoming = (req.body?.config ?? req.body ?? {}) as Record<string, unknown>
+    delete incoming.certificadoCargado
+    delete incoming.certificadoNombre
+    delete incoming.certificadoClave
+    if (!String(incoming.factilizaToken || '').trim()) {
+      const prev = (await getConfig('sunat')) as Record<string, unknown> | null
+      const kept = String(prev?.factilizaToken || process.env.FACTILIZA_TOKEN || '').trim()
+      if (kept) incoming.factilizaToken = kept
+    }
+    await putConfig('sunat', incoming)
     res.json({ ok: true })
   } catch (e) {
     res.status(500).json({ error: (e as Error).message })
+  }
+})
+
+/** Guarda el .pfx en el servidor. La clave no vuelve al navegador. */
+configRouter.post('/sunat/certificado', authRequired, requireRoles('admin'), (req, res, next) => {
+  certUpload.single('file')(req, res, (err) => {
+    if (err) return res.status(400).json({ error: 'El certificado debe ser .pfx o .p12 y no pasar de 1 MB' })
+    next()
+  })
+}, async (req, res) => {
+  try {
+    const file = req.file
+    const nombre = String(file?.originalname || '')
+    if (!file || !/\.(pfx|p12)$/i.test(nombre)) {
+      return res.status(400).json({ error: 'Selecciona el archivo .pfx o .p12' })
+    }
+    const info = await saveCertificado(file.buffer, nombre, String(req.body?.clave || ''))
+    res.json({ ok: true, ...info })
+  } catch (e) {
+    res.status(400).json({ error: (e as Error).message })
   }
 })
 
@@ -165,5 +219,70 @@ configRouter.put('/invoices', authRequired, requireRoles('admin', 'cajero'), asy
     res.json({ ok: true })
   } catch (e) {
     res.status(500).json({ error: (e as Error).message })
+  }
+})
+
+/** Consulta DNI o RUC en Factiliza. El token no sale del servidor. */
+configRouter.get('/factiliza/:kind/:numero', authRequired, requireRoles('admin', 'cajero', 'mozo'), async (req, res) => {
+  const kind = req.params.kind === 'ruc' ? 'ruc' : req.params.kind === 'dni' ? 'dni' : ''
+  const numero = String(req.params.numero || '').replace(/\D/g, '')
+  if (!kind) return res.status(400).json({ error: 'Consulta inválida' })
+  if (kind === 'dni' && numero.length !== 8) return res.status(400).json({ error: 'El DNI tiene 8 dígitos' })
+  if (kind === 'ruc' && numero.length !== 11) return res.status(400).json({ error: 'El RUC tiene 11 dígitos' })
+  try {
+    const data = await lookupFactiliza(kind, numero)
+    res.json(data)
+  } catch (e) {
+    const status = (e as Error & { status?: number }).status || 502
+    res.status(status).json({ error: (e as Error).message })
+  }
+})
+
+configRouter.get('/emision', authRequired, requireRoles('admin', 'cajero'), async (_req, res) => {
+  try {
+    res.json({ activa: await emisionActiva() })
+  } catch (e) {
+    res.status(500).json({ error: (e as Error).message })
+  }
+})
+
+configRouter.post('/emision/activar', authRequired, requireRoles('admin', 'cajero'), async (req, res) => {
+  try {
+    res.json(await activarEmision(String(req.body?.clave || '')))
+  } catch (e) {
+    const status = (e as Error & { status?: number }).status || 500
+    res.status(status).json({ error: (e as Error).message })
+  }
+})
+
+configRouter.post('/comprobantes/emit', authRequired, requireRoles('admin', 'cajero'), async (req, res) => {
+  try {
+    const result = await emitirComprobante(req.body || {})
+    res.json({ ok: true, ...result })
+  } catch (e) {
+    const status = (e as Error & { status?: number }).status || 500
+    res.status(status).json({ error: (e as Error).message })
+  }
+})
+
+configRouter.get('/comprobantes/files', authRequired, requireRoles('admin', 'cajero'), async (_req, res) => {
+  try {
+    res.json({ files: await listComprobanteFiles() })
+  } catch (e) {
+    res.status(500).json({ error: (e as Error).message })
+  }
+})
+
+configRouter.get('/comprobantes/:orderId/:kind', authRequired, requireRoles('admin', 'cajero'), async (req, res) => {
+  const kind = String(req.params.kind || '')
+  if (!isComprobanteKind(kind)) return res.status(400).json({ error: 'Archivo inválido' })
+  try {
+    const file = comprobanteFilePath(String(req.params.orderId), kind)
+    const body = await fs.readFile(file)
+    res.setHeader('Content-Type', comprobanteContentType(kind))
+    res.setHeader('Content-Disposition', `attachment; filename="${kind}-${req.params.orderId}.${kind === 'cdr' ? 'zip' : kind}"`)
+    res.send(body)
+  } catch {
+    res.status(404).json({ error: 'Todavía no hay archivo en el servidor' })
   }
 })

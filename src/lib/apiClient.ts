@@ -707,6 +707,16 @@ export async function apiSaveSunatConfig(config: unknown) {
   })
 }
 
+export async function apiUploadCertificado(file: File, clave: string) {
+  const body = new FormData()
+  body.append('file', file)
+  body.append('clave', clave)
+  return apiFetch<{ ok: boolean; cargado: boolean; nombre: string; tieneClave: boolean }>(
+    '/api/config/sunat/certificado',
+    { method: 'POST', body },
+  )
+}
+
 export async function apiGetInvoices() {
   return apiFetch<{ invoices: unknown[] }>('/api/config/invoices')
 }
@@ -716,6 +726,51 @@ export async function apiSaveInvoices(invoices: unknown[]) {
     method: 'PUT',
     body: JSON.stringify({ invoices }),
   })
+}
+
+export async function apiLookupDoc(kind: 'dni' | 'ruc', numero: string) {
+  return apiFetch<{ nombre: string; direccion: string }>(`/api/config/factiliza/${kind}/${numero}`)
+}
+
+export async function apiEmisionEstado() {
+  return apiFetch<{ activa: boolean }>('/api/config/emision')
+}
+
+export async function apiActivarEmision(clave: string) {
+  return apiFetch<{ activa: boolean }>('/api/config/emision/activar', {
+    method: 'POST',
+    body: JSON.stringify({ clave }),
+  })
+}
+
+export async function apiEmitComprobante(body: unknown) {
+  return apiFetch<{ ok: boolean; invoice: { orderId: string; tipo: 'boleta' | 'factura'; serie: string; numero: number; status: 'pendiente' | 'enviada' | 'aceptada' | 'rechazada'; fechaEmision: string; hashCdr?: string; mensaje?: string; clienteDoc?: string; clienteNombre?: string } }>(
+    '/api/config/comprobantes/emit',
+    { method: 'POST', body: JSON.stringify(body) },
+  )
+}
+
+export async function apiComprobanteFiles() {
+  return apiFetch<{ files: Record<string, { pdf: boolean; xml: boolean; cdr: boolean }> }>('/api/config/comprobantes/files')
+}
+
+export async function apiDownloadComprobante(orderId: string, kind: 'pdf' | 'xml' | 'cdr') {
+  const token = getApiToken()
+  const res = await fetch(apiUrl(`/api/config/comprobantes/${orderId}/${kind}`), {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  })
+  if (!res.ok) {
+    const data = await res.json().catch(() => null) as { error?: string } | null
+    throw new Error(data?.error || 'No se pudo descargar')
+  }
+  const blob = await res.blob()
+  const ext = kind === 'cdr' ? 'zip' : kind
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `${kind}-${orderId}.${ext}`
+  a.click()
+  URL.revokeObjectURL(url)
 }
 
 
