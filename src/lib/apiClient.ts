@@ -734,8 +734,8 @@ export async function apiSaveInvoices(invoices: unknown[]) {
   })
 }
 
-export async function apiLookupDoc(kind: 'dni' | 'ruc', numero: string) {
-  return apiFetch<{ nombre: string; direccion: string }>(`/api/config/documentos/${kind}/${numero}`)
+export async function apiLookupDoc(kind: 'dni' | 'ruc', numero: string, signal?: AbortSignal) {
+  return apiFetch<{ nombre: string; direccion: string }>(`/api/config/documentos/${kind}/${numero}`, { signal })
 }
 
 export async function apiEmisionEstado() {

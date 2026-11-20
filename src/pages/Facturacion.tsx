@@ -15,6 +15,7 @@ import {
   apiGetInvoices,
   apiGetPruebasSunat,
   apiGetSunatConfig,
+  apiLookupDoc,
   apiProbarSunat,
   apiReintentarComprobante,
   apiSaveSunatConfig,
@@ -84,24 +85,37 @@ function configuracionGuardada(value: unknown): SunatConfig {
 }
 
 type DetalleLine = { descripcion: string; cantidad: number; precio: number }
+type TipoDocumentoCliente = 'ninguno' | 'dni' | 'ruc'
+type DatosCliente = { tipo: TipoDocumentoCliente; numero: string; nombre: string }
+const DOCUMENTOS_CLIENTE: ReadonlyArray<{ tipo: TipoDocumentoCliente; etiqueta: string }> = [
+  { tipo: 'ninguno', etiqueta: 'Sin documento' }, { tipo: 'dni', etiqueta: 'DNI' }, { tipo: 'ruc', etiqueta: 'RUC' },
+]
 
-function clienteComprobante(order: Order, tipo: 'boleta' | 'factura') {
-  if (tipo === 'factura') {
-    const num = (order.docNumero || '').replace(/\D/g, '')
-    const nombre = (order.docNombre || '').trim()
-    return {
-      tipDoc: '6',
-      num,
-      nombre,
-      ok: num.length === 11 && nombre.length >= 2,
-    }
+function clienteInicial(order: Order, tipo: 'boleta' | 'factura'): DatosCliente {
+  const numero = (order.docNumero || '').replace(/\D/g, '')
+  const tieneRuc = order.docTipo === 'factura' || numero.length === 11
+  if (tipo === 'factura' || tieneRuc) {
+    return { tipo: 'ruc', numero: tieneRuc ? numero.slice(0, 11) : '', nombre: tieneRuc ? order.docNombre || '' : '' }
   }
   if (order.docTipo === 'boleta_dni') {
-    const num = (order.docNumero || '').replace(/\D/g, '')
-    const nombre = (order.docNombre || order.customerName || '').trim()
-    return { tipDoc: '1', num, nombre, ok: num.length === 8 && nombre.length >= 2 }
+    return { tipo: 'dni', numero: numero.slice(0, 8), nombre: order.docNombre || order.customerName || '' }
   }
-  return { ...CLIENTE_GENERICO, ok: order.total <= 700 }
+  if (order.total > 700) return { tipo: 'dni', numero: '', nombre: order.customerName || '' }
+  return { tipo: 'ninguno', numero: '', nombre: '' }
+}
+
+function errorDatosCliente(cliente: DatosCliente, tipo: 'boleta' | 'factura', total: number) {
+  if (tipo === 'factura' && cliente.tipo !== 'ruc') return 'La factura requiere RUC y razón social.'
+  if (cliente.tipo === 'ninguno') return total > 700 ? 'Selecciona DNI o RUC para este pedido.' : null
+  const esRuc = cliente.tipo === 'ruc'
+  if (cliente.numero.length !== (esRuc ? 11 : 8)) return esRuc ? 'Ingresa un RUC de 11 dígitos.' : 'Ingresa un DNI de 8 dígitos.'
+  if (cliente.nombre.trim().length < 2) return esRuc ? 'Ingresa la razón social.' : 'Ingresa el nombre del cliente.'
+  return null
+}
+
+function clienteComprobante(cliente: DatosCliente) {
+  if (cliente.tipo === 'ninguno') return CLIENTE_GENERICO
+  return { tipDoc: cliente.tipo === 'ruc' ? '6' : '1', num: cliente.numero, nombre: cliente.nombre.trim() }
 }
 
 function detalleDe(order: Order): DetalleLine[] {
@@ -129,6 +143,92 @@ function totalDetalle(lines: DetalleLine[]) {
 function separarIgv(total: number, rate: number) {
   const base = round2(total / (1 + (rate > 0 ? rate : 0.18)))
   return { base, igv: round2(total - base), total: round2(total) }
+}
+
+function DocumentoCliente({ cliente, tipo, total, disabled, error, onChange }: {
+  cliente: DatosCliente
+  tipo: 'boleta' | 'factura'
+  total: number
+  disabled: boolean
+  error: string | null
+  onChange: (cliente: DatosCliente) => void
+}) {
+  const id = useId()
+  const solicitud = useRef<AbortController | null>(null)
+  const [consultando, setConsultando] = useState(false)
+  const [aviso, setAviso] = useState('')
+  const esRuc = cliente.tipo === 'ruc'
+  const longitud = esRuc ? 11 : 8
+  const etiqueta = esRuc ? 'RUC' : 'DNI'
+
+  useEffect(() => () => solicitud.current?.abort(), [])
+
+  function actualizar(datos: DatosCliente) {
+    solicitud.current?.abort()
+    setConsultando(false)
+    setAviso('')
+    onChange(datos)
+  }
+
+  async function consultar() {
+    if (cliente.tipo === 'ninguno' || cliente.numero.length !== longitud || consultando) return
+    const controller = new AbortController()
+    solicitud.current = controller
+    setConsultando(true)
+    setAviso('')
+    try {
+      const datos = await apiLookupDoc(cliente.tipo, cliente.numero, controller.signal)
+      if (controller.signal.aborted) return
+      const nombre = datos.nombre?.trim().slice(0, 100)
+      if (nombre) onChange({ ...cliente, nombre })
+      else setAviso('Ingresa el nombre o la razón social manualmente.')
+    } catch {
+      if (!controller.signal.aborted) setAviso('No se pudo consultar el documento. Puedes ingresar los datos manualmente.')
+    } finally {
+      if (!controller.signal.aborted) setConsultando(false)
+    }
+  }
+
+  return (
+    <fieldset disabled={disabled} aria-describedby={error ? `${id}-error` : undefined} className="min-w-0 space-y-3 rounded-xl border border-ink/12 px-3 pb-3">
+      <legend className="px-1 text-sm font-semibold">Cliente del comprobante</legend>
+      {tipo === 'boleta' ? (
+        <div className="flex flex-wrap gap-2" role="group" aria-label="Tipo de documento del cliente">
+          {DOCUMENTOS_CLIENTE.filter((doc) => doc.tipo !== 'ninguno' || total <= 700).map((doc) => (
+            <button key={doc.tipo} type="button" aria-pressed={cliente.tipo === doc.tipo}
+              onClick={() => { if (cliente.tipo !== doc.tipo) actualizar({ tipo: doc.tipo, numero: '', nombre: '' }) }}
+              className={`min-h-11 rounded-lg border px-3 text-sm font-semibold focus-visible:outline-2 focus-visible:outline-ember ${cliente.tipo === doc.tipo ? 'border-ember/55 bg-ember/10 text-ember' : 'border-ink/12 hover:bg-ink/8'}`}>
+              {doc.etiqueta}
+            </button>
+          ))}
+        </div>
+      ) : null}
+      {cliente.tipo !== 'ninguno' ? (
+        <div className="grid gap-3 sm:grid-cols-2">
+          <div className="min-w-0 space-y-1.5">
+            <label htmlFor={id} className="text-[11px] font-bold tracking-[0.14em] text-ink/60 uppercase">{etiqueta}</label>
+            <div className="flex items-stretch gap-2">
+              <input id={id} className={`${inputClass} min-w-0 flex-1`} inputMode="numeric" placeholder={`${longitud} dígitos`}
+                value={cliente.numero} onChange={(event) => {
+                  const numero = event.target.value.replace(/\D/g, '').slice(0, longitud)
+                  if (numero !== cliente.numero) actualizar({ ...cliente, numero, nombre: cliente.numero.length === longitud ? '' : cliente.nombre })
+                }} />
+              <button type="button" disabled={cliente.numero.length !== longitud || consultando} onClick={() => void consultar()}
+                className="min-h-11 shrink-0 rounded-lg border border-ink/15 px-3 text-xs font-semibold enabled:hover:bg-ink/8 focus-visible:outline-2 focus-visible:outline-ember disabled:opacity-50">
+                {consultando ? 'Consultando…' : 'Consultar'}
+              </button>
+            </div>
+          </div>
+          <Field label={esRuc ? 'Razón social' : 'Nombre del cliente'}>
+            <input className={inputClass} maxLength={100} value={cliente.nombre}
+              onChange={(event) => actualizar({ ...cliente, nombre: event.target.value })} />
+          </Field>
+        </div>
+      ) : null}
+      {error ? <p id={`${id}-error`} className="text-xs font-medium text-ink/75">{error}</p> : null}
+      {aviso ? <p role="status" className="text-xs text-ink/75">{aviso}</p> : null}
+    </fieldset>
+  )
 }
 
 function CampoClaveSol({ clave, guardada, puedeVerGuardada, onChange }: {
@@ -246,6 +346,7 @@ export function Facturacion() {
   const [queueAt, setQueueAt] = useState(0)
   const [picked, setPicked] = useState<string[]>([])
   const [emitType, setEmitType] = useState<'boleta' | 'factura'>('boleta')
+  const [datosClientes, setDatosClientes] = useState<Record<string, DatosCliente>>({})
   const [lines, setLines] = useState<DetalleLine[]>([])
   const [sending, setSending] = useState(false)
   const [lastResult, setLastResult] = useState<string | null>(null)
@@ -389,6 +490,9 @@ export function Facturacion() {
   }
 
   const selectedOrder = queue[queueAt] ?? null
+  const claveCliente = `${selectedOrder?.id}:${emitType}`
+  const cliente = selectedOrder && (datosClientes[claveCliente] ?? clienteInicial(selectedOrder, emitType))
+  const clienteError = selectedOrder && cliente ? errorDatosCliente(cliente, emitType, selectedOrder.total) : null
   const igvRate = state.settings.igvRate > 0 ? state.settings.igvRate : 0.18
 
   const cargarPedido = (order: Order) => {
@@ -399,6 +503,7 @@ export function Facturacion() {
 
   const abrirCola = (orders: Order[]) => {
     if (!orders.length || !disponible || (primeraEmision && orders[0].docTipo === 'factura')) return
+    setDatosClientes({})
     setQueue(emisionMasiva ? orders : orders.slice(0, 1))
     setQueueAt(0)
     cargarPedido(orders[0])
@@ -412,12 +517,16 @@ export function Facturacion() {
     cargarPedido(order)
   }
 
+  const cerrarEmision = () => {
+    setEmitOpen(false)
+    setDatosClientes({})
+  }
+
   const handleEmit = async () => {
-    if (!selectedOrder) return
+    if (!selectedOrder || !cliente) return
     if (primeraEmision && emitType !== 'boleta') return
-    const cliente = clienteComprobante(selectedOrder, emitType)
-    if (!cliente.ok) {
-      setLastResult('Completa el documento y el nombre del cliente en el pedido.')
+    if (clienteError) {
+      setLastResult(clienteError)
       return
     }
     if (!lines.some((line) => line.descripcion.trim() && line.cantidad > 0)) {
@@ -434,12 +543,7 @@ export function Facturacion() {
       const result = await apiEmitComprobante({
         orderId: selectedOrder.id,
         tipo: emitType,
-        cliente: {
-          tipDoc: cliente.tipDoc,
-          num: cliente.num,
-          nombre: cliente.nombre,
-          direccion: selectedOrder.docAddress || '-',
-        },
+        cliente: clienteComprobante(cliente),
         lines: lines
           .filter((line) => line.descripcion.trim() && line.cantidad > 0)
           .map((line) => ({ descripcion: line.descripcion.trim(), cantidad: line.cantidad, precio: line.precio })),
@@ -451,7 +555,7 @@ export function Facturacion() {
       setLastResult(`${result.invoice.tipo} ${result.invoice.serie}-${numero} · ${result.invoice.status}${result.invoice.mensaje ? ' · ' + result.invoice.mensaje : ''}`)
       if (!primeraEmision && result.invoice.status === 'aceptada' && queueAt < queue.length - 1) irA(queueAt + 1)
       else {
-        setEmitOpen(false)
+        cerrarEmision()
         setVista('emitidos')
       }
     } catch (e) {
@@ -695,9 +799,8 @@ export function Facturacion() {
       )}
 
       {/* Emit Modal */}
-      <Modal open={emitOpen} title={queue.length > 1 ? `Preparar ${queueAt + 1} de ${queue.length}` : 'Preparar comprobante'} onClose={() => setEmitOpen(false)} wide>
-        {selectedOrder && (() => {
-          const cliente = clienteComprobante(selectedOrder, emitType)
+      <Modal open={emitOpen} title={queue.length > 1 ? `Preparar ${queueAt + 1} de ${queue.length}` : 'Preparar comprobante'} onClose={cerrarEmision} closeDisabled={sending} wide>
+        {selectedOrder && cliente && (() => {
           const total = totalDetalle(lines)
           const dinero = separarIgv(total, igvRate)
           return (
@@ -706,29 +809,17 @@ export function Facturacion() {
                 Pedido <strong>{padOrder(selectedOrder.number)}</strong> · {selectedOrder.customerName} · <strong>{soles(selectedOrder.total)}</strong>
               </p>
               <div className="flex gap-2">
-                <button type="button" onClick={() => setEmitType('boleta')} className={`flex-1 rounded-xl py-3 text-sm font-bold ${emitType === 'boleta' ? 'bg-ink text-cream' : 'bg-cream'}`}>
+                <button type="button" disabled={sending} onClick={() => setEmitType('boleta')} className={`flex-1 rounded-xl py-3 text-sm font-bold ${emitType === 'boleta' ? 'bg-ink text-cream' : 'bg-cream'}`}>
                   Boleta
                 </button>
                 {emision?.activa ? (
-                  <button type="button" onClick={() => setEmitType('factura')} className={`flex-1 rounded-xl py-3 text-sm font-bold ${emitType === 'factura' ? 'bg-ink text-cream' : 'bg-cream'}`}>
+                  <button type="button" disabled={sending} onClick={() => setEmitType('factura')} className={`flex-1 rounded-xl py-3 text-sm font-bold ${emitType === 'factura' ? 'bg-ink text-cream' : 'bg-cream'}`}>
                     Factura
                   </button>
                 ) : null}
               </div>
-              <div className="rounded-xl bg-cream px-3 py-2 text-xs text-ink/70">
-                {emitType === 'boleta' && cliente.tipDoc === '0' ? (
-                  <>
-                    <p className="font-semibold text-ink">CLIENTES VARIOS</p>
-                    {!cliente.ok ? <p className="mt-1 font-semibold text-amber-800 dark:text-amber-300">Para este importe, registra el DNI y nombre del cliente en el pedido.</p> : null}
-                  </>
-                ) : (
-                  <>
-                    <p className="font-semibold text-ink">{cliente.nombre || 'Sin razón social'}</p>
-                    <p>{cliente.tipDoc === '6' ? 'RUC' : 'DNI'} {cliente.num || '—'}</p>
-                    {!cliente.ok ? <p className="mt-1 font-semibold text-amber-800 dark:text-amber-300">Completa el documento y el nombre en el pedido.</p> : null}
-                  </>
-                )}
-              </div>
+              <DocumentoCliente key={claveCliente} cliente={cliente} tipo={emitType} total={selectedOrder.total} disabled={sending} error={clienteError}
+                onChange={(datos) => setDatosClientes((prev) => ({ ...prev, [claveCliente]: datos }))} />
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
                   <p className="text-sm font-semibold">Detalle</p>
@@ -771,20 +862,20 @@ export function Facturacion() {
               </p>
               <div className="flex gap-2">
                 {queue.length > 1 ? (
-                  <button type="button" disabled={queueAt === 0} onClick={() => irA(queueAt - 1)} className="min-h-11 rounded-xl border border-ink/12 px-3 text-sm font-bold disabled:opacity-40">
+                  <button type="button" disabled={sending || queueAt === 0} onClick={() => irA(queueAt - 1)} className="min-h-11 rounded-xl border border-ink/12 px-3 text-sm font-bold disabled:opacity-40">
                     Anterior
                   </button>
                 ) : null}
                 <button
                   type="button"
                   onClick={() => void handleEmit()}
-                  disabled={sending || !disponible || (primeraEmision && emitType !== 'boleta') || !cliente.ok || total !== selectedOrder.total}
+                  disabled={sending || !disponible || (primeraEmision && emitType !== 'boleta') || Boolean(clienteError) || total !== selectedOrder.total}
                   className="min-h-11 flex-1 rounded-xl bg-ember font-semibold text-white disabled:opacity-50"
                 >
                   {sending ? 'Revisando…' : 'Emitir'}
                 </button>
                 {queue.length > 1 ? (
-                  <button type="button" disabled={queueAt >= queue.length - 1} onClick={() => irA(queueAt + 1)} className="min-h-11 rounded-xl border border-ink/12 px-3 text-sm font-bold disabled:opacity-40">
+                  <button type="button" disabled={sending || queueAt >= queue.length - 1} onClick={() => irA(queueAt + 1)} className="min-h-11 rounded-xl border border-ink/12 px-3 text-sm font-bold disabled:opacity-40">
                     Siguiente
                   </button>
                 ) : null}
