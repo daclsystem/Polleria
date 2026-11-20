@@ -7,6 +7,7 @@ import { SignedXml } from 'xml-crypto'
 const CBC = 'urn:oasis:names:specification:ubl:schema:xsd:CommonBasicComponents-2'
 const CAC = 'urn:oasis:names:specification:ubl:schema:xsd:CommonAggregateComponents-2'
 const EXT = 'urn:oasis:names:specification:ubl:schema:xsd:CommonExtensionComponents-2'
+const SAC = 'urn:sunat:names:specification:ubl:peru:schema:xsd:SunatAggregateComponents-1'
 const DS = 'http://www.w3.org/2000/09/xmldsig#'
 const SOAP = 'http://schemas.xmlsoap.org/soap/envelope/'
 const SERVICE = 'http://service.sunat.gob.pe'
@@ -42,6 +43,8 @@ export interface SunatDocument {
 }
 
 type SigningKeys = { privateKey: string; publicCert: string }
+type SunatAuth = { ruc: string; usuario: string; clave: string }
+type SunatEnvironment = 'beta' | 'produccion'
 
 export function xmlText(value: string | number) {
   // XML 1.0 no admite estos caracteres incluso si se representan como entidades.
@@ -162,7 +165,7 @@ export function pkcs12SigningKeys(archivo: Buffer, clave: string): SigningKeys {
   throw Object.assign(new Error('No pude abrir la firma del certificado .p12 o .pfx. Revisa el archivo y su clave.'), { status: 400 })
 }
 
-export function signedInvoice(document: SunatDocument, keys: SigningKeys) {
+function signXml(unsigned: string, keys: SigningKeys) {
   const signer = new SignedXml({
     ...keys,
     canonicalizationAlgorithm: C14N,
@@ -174,7 +177,7 @@ export function signedInvoice(document: SunatDocument, keys: SigningKeys) {
     transforms: [DS + 'enveloped-signature', C14N],
     digestAlgorithm: 'http://www.w3.org/2001/04/xmlenc#sha256',
   })
-  signer.computeSignature(unsignedInvoice(document), {
+  signer.computeSignature(unsigned, {
     prefix: 'ds',
     attrs: { Id: SIGNATURE_ID },
     location: { reference: `//*[local-name()='ExtensionContent' and namespace-uri()='${EXT}']`, action: 'append' },
@@ -183,6 +186,55 @@ export function signedInvoice(document: SunatDocument, keys: SigningKeys) {
   const digest = parseXml(xml).getElementsByTagNameNS(DS, 'DigestValue').item(0)?.textContent
   if (!digest) throw new Error('No se pudo calcular el resumen de la firma digital.')
   return { xml: Buffer.from(xml, 'utf8'), digest }
+}
+
+export function signedInvoice(document: SunatDocument, keys: SigningKeys) {
+  return signXml(unsignedInvoice(document), keys)
+}
+
+export function signedBoletaSummary(d: SunatDocument, referencia: string, keys: SigningKeys) {
+  const fecha = d.fecha.slice(0, 10)
+  const billing = (code: string, value: number) => `<sac:BillingPayment>${amount('PaidAmount', value)}<cbc:InstructionID>${code}</cbc:InstructionID></sac:BillingPayment>`
+  const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<SummaryDocuments xmlns="urn:sunat:names:specification:ubl:peru:schema:xsd:SummaryDocuments-1" xmlns:cbc="${CBC}" xmlns:cac="${CAC}" xmlns:ext="${EXT}" xmlns:sac="${SAC}">
+  <ext:UBLExtensions><ext:UBLExtension><ext:ExtensionContent/></ext:UBLExtension></ext:UBLExtensions>
+  <cbc:UBLVersionID>2.0</cbc:UBLVersionID>
+  <cbc:CustomizationID>1.1</cbc:CustomizationID>
+  <cbc:ID>${xmlText(referencia)}</cbc:ID>
+  <cbc:ReferenceDate>${fecha}</cbc:ReferenceDate>
+  <cbc:IssueDate>${fecha}</cbc:IssueDate>
+  <cac:Signature>
+    <cbc:ID>${SIGNATURE_ID}</cbc:ID>
+    <cac:SignatoryParty>
+      <cac:PartyIdentification><cbc:ID>${d.ruc}</cbc:ID></cac:PartyIdentification>
+      <cac:PartyName><cbc:Name>${xmlText(d.razonSocial)}</cbc:Name></cac:PartyName>
+    </cac:SignatoryParty>
+    <cac:DigitalSignatureAttachment><cac:ExternalReference><cbc:URI>#${SIGNATURE_ID}</cbc:URI></cac:ExternalReference></cac:DigitalSignatureAttachment>
+  </cac:Signature>
+  <cac:AccountingSupplierParty>
+    <cbc:CustomerAssignedAccountID>${d.ruc}</cbc:CustomerAssignedAccountID>
+    <cbc:AdditionalAccountID>6</cbc:AdditionalAccountID>
+    <cac:Party><cac:PartyLegalEntity><cbc:RegistrationName>${xmlText(d.razonSocial)}</cbc:RegistrationName></cac:PartyLegalEntity></cac:Party>
+  </cac:AccountingSupplierParty>
+  <sac:SummaryDocumentsLine>
+    <cbc:LineID>1</cbc:LineID>
+    <cbc:DocumentTypeCode>03</cbc:DocumentTypeCode>
+    <cbc:ID>${d.serie}-${d.numero}</cbc:ID>
+    <cac:AccountingCustomerParty>
+      <cbc:CustomerAssignedAccountID>${xmlText(d.cliente.documento)}</cbc:CustomerAssignedAccountID>
+      <cbc:AdditionalAccountID>${d.cliente.tipo}</cbc:AdditionalAccountID>
+    </cac:AccountingCustomerParty>
+    <cac:Status><cbc:ConditionCode>1</cbc:ConditionCode></cac:Status>
+    <sac:TotalAmount currencyID="PEN">${d.total.toFixed(2)}</sac:TotalAmount>
+    ${billing('01', d.base)}${billing('02', 0)}${billing('03', 0)}
+    <cac:TaxTotal>${amount('TaxAmount', d.igv)}
+      <cac:TaxSubtotal>${amount('TaxAmount', d.igv)}
+        <cac:TaxCategory><cbc:Percent>${d.tasa.toFixed(2)}</cbc:Percent><cac:TaxScheme><cbc:ID>1000</cbc:ID><cbc:Name>IGV</cbc:Name><cbc:TaxTypeCode>VAT</cbc:TaxTypeCode></cac:TaxScheme></cac:TaxCategory>
+      </cac:TaxSubtotal>
+    </cac:TaxTotal>
+  </sac:SummaryDocumentsLine>
+</SummaryDocuments>`
+  return signXml(xml, keys).xml
 }
 
 export function parseXml(xml: string) {
@@ -217,7 +269,7 @@ export function parseCdr(zip: Buffer, fileName: string) {
   const reference = response && child(response, CBC, 'ReferenceID')?.textContent?.trim()
   const code = response && child(response, CBC, 'ResponseCode')?.textContent?.trim()
   const description = response && child(response, CBC, 'Description')?.textContent?.trim()
-  const expectedReference = fileName.split('-').slice(2).join('-')
+  const expectedReference = /^\d{11}-RC-/.test(fileName) ? fileName.slice(12) : fileName.split('-').slice(2).join('-')
   if (!code || !/^\d{1,4}$/.test(code) || reference !== expectedReference) {
     throw new Error('SUNAT devolvió una constancia sin código válido o con una numeración distinta.')
   }
@@ -225,17 +277,11 @@ export function parseCdr(zip: Buffer, fileName: string) {
   return { code, message: [description, ...notes].filter(Boolean).join(' · ').slice(0, 900), zip }
 }
 
-export async function sendBill(
-  environment: 'beta' | 'produccion',
-  auth: { ruc: string; usuario: string; clave: string },
-  fileName: string,
-  xml: Buffer,
-) {
-  const zip = zipSync({ [fileName + '.xml']: xml })
+async function callBillService(environment: SunatEnvironment, auth: SunatAuth, action: 'sendBill' | 'sendSummary' | 'getStatus', payload: string) {
   const envelope = `<?xml version="1.0" encoding="UTF-8"?>
 <soap:Envelope xmlns:soap="${SOAP}" xmlns:ser="${SERVICE}" xmlns:wsse="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-secext-1.0.xsd">
   <soap:Header><wsse:Security><wsse:UsernameToken><wsse:Username>${xmlText(auth.ruc + auth.usuario)}</wsse:Username><wsse:Password>${xmlText(auth.clave)}</wsse:Password></wsse:UsernameToken></wsse:Security></soap:Header>
-  <soap:Body><ser:sendBill><fileName>${xmlText(fileName)}.zip</fileName><contentFile>${Buffer.from(zip).toString('base64')}</contentFile></ser:sendBill></soap:Body>
+  <soap:Body><ser:${action}>${payload}</ser:${action}></soap:Body>
 </soap:Envelope>`
   const response = await fetch(environment === 'beta' ? SUNAT_BETA : SUNAT_PRODUCTION, {
     method: 'POST',
@@ -266,9 +312,42 @@ export async function sendBill(
     const safe = (message || 'El servicio devolvió un error.').replaceAll(auth.clave, '[omitida]').replaceAll(auth.ruc + auth.usuario, '[omitido]')
     throw new Error(`SUNAT${code ? ' ' + code : ''}: ${safe.slice(0, 500)}`)
   }
-  const result = child(body, SERVICE, 'sendBillResponse')
-  const content = result?.getElementsByTagName('applicationResponse').item(0)?.textContent?.replace(/\s/g, '')
-    || result?.getElementsByTagNameNS(SERVICE, 'applicationResponse').item(0)?.textContent?.replace(/\s/g, '')
-  if (!response.ok || !content) throw new Error(`SUNAT no devolvió una constancia (HTTP ${response.status}).`)
+  const result = child(body, SERVICE, `${action}Response`)
+  if (!response.ok || !result) throw new Error(`SUNAT devolvió una respuesta inesperada (HTTP ${response.status}).`)
+  return result
+}
+
+function responseText(root: Element, tag: string) {
+  return (child(root, '', tag) || child(root, SERVICE, tag))?.textContent?.trim() || ''
+}
+
+function zipPayload(fileName: string, xml: Buffer) {
+  const content = Buffer.from(zipSync({ [`${fileName}.xml`]: xml })).toString('base64')
+  return `<fileName>${xmlText(fileName)}.zip</fileName><contentFile>${content}</contentFile>`
+}
+
+export async function sendBill(environment: SunatEnvironment, auth: SunatAuth, fileName: string, xml: Buffer) {
+  const result = await callBillService(environment, auth, 'sendBill', zipPayload(fileName, xml))
+  const content = responseText(result, 'applicationResponse').replace(/\s/g, '')
+  if (!content) throw new Error('SUNAT no devolvió una constancia de recepción.')
   return parseCdr(Buffer.from(content, 'base64'), fileName)
+}
+
+export async function sendBoletaSummary(environment: SunatEnvironment, auth: SunatAuth, fileName: string, xml: Buffer) {
+  const result = await callBillService(environment, auth, 'sendSummary', zipPayload(fileName, xml))
+  const ticket = responseText(result, 'ticket')
+  if (!/^\d{1,40}$/.test(ticket)) throw new Error('SUNAT no devolvió un ticket válido para el resumen diario.')
+  return ticket
+}
+
+export async function getBoletaSummaryStatus(environment: SunatEnvironment, auth: SunatAuth, fileName: string, ticket: string) {
+  const result = await callBillService(environment, auth, 'getStatus', `<ticket>${xmlText(ticket)}</ticket>`)
+  const status = child(result, '', 'status') || child(result, SERVICE, 'status')
+  const code = status && responseText(status, 'statusCode')
+  if (code === '98') return null
+  const content = status && responseText(status, 'content').replace(/\s/g, '')
+  if ((code !== '0' && code !== '99') || !content) throw new Error(`SUNAT aún no devolvió la constancia del resumen diario${code ? ` (código ${code})` : ''}.`)
+  const cdr = parseCdr(Buffer.from(content, 'base64'), fileName)
+  if (code === '99' && Number(cdr.code) === 0) throw new Error('SUNAT devolvió códigos incompatibles para el resumen diario.')
+  return cdr
 }

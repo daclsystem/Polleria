@@ -84,23 +84,32 @@ test('solo admite una constancia con el nombre, referencia y código esperados',
   assert.throws(() => parseCdr(cdrZip(name, 'F001-1', '0'), '20100066603-01-F001-2'), /no corresponde/)
 })
 
-test('la prueba envía únicamente una boleta ficticia al ambiente Beta', async (t) => {
+test('la prueba usa el encabezado configurado y envía una boleta ficticia solo a Beta', async (t) => {
   const fake = t.mock.method(globalThis, 'fetch', async (url, options) => {
     assert.equal(url, 'https://e-beta.sunat.gob.pe/ol-ti-itcpfegem-beta/billService')
     assert.equal(options.redirect, 'error')
     const request = parseXml(options.body)
     const name = request.getElementsByTagName('fileName').item(0).textContent
-    assert.equal(name, '20100066603-03-B001-1.zip')
+    assert.match(name, /^20100066603-03-B555-\d{8}\.zip$/)
+    assert.equal(request.getElementsByTagName('wsse:Username').item(0).textContent, '20100066603MODDATOS')
     const content = request.getElementsByTagName('contentFile').item(0).textContent
     const files = unzipSync(Buffer.from(content, 'base64'))
-    assert.deepEqual(Object.keys(files), ['20100066603-03-B001-1.xml'])
-    assert.match(Buffer.from(Object.values(files)[0]).toString(), /Consumo de prueba/)
-    const cdr = cdrZip('20100066603-03-B001-1', 'B001-1', '0')
+    const fileName = name.replace(/\.zip$/, '')
+    assert.deepEqual(Object.keys(files), [`${fileName}.xml`])
+    const xml = Buffer.from(Object.values(files)[0]).toString()
+    assert.match(xml, /Consumo de prueba/)
+    assert.match(xml, /<cbc:RegistrationName>EMISOR CONFIGURADO<\/cbc:RegistrationName>/)
+    assert.match(xml, /<cbc:PayableAmount currencyID="PEN">13\.00<\/cbc:PayableAmount>/)
+    const cdr = cdrZip(fileName, fileName.split('-').slice(2).join('-'), '0')
     return new Response(`<soap:Envelope xmlns:soap="${SOAP}" xmlns:ser="${SERVICE}">
       <soap:Body><ser:sendBillResponse><applicationResponse>${cdr.toString('base64')}</applicationResponse></ser:sendBillResponse></soap:Body>
     </soap:Envelope>`)
   })
-  assert.equal((await probarSunat('boleta')).codigo, '0')
+  const prueba = await probarSunat('boleta', { numero: 7767, total: 13, tasa: 0.18 }, {
+    ruc: '20100066603', razonSocial: 'EMISOR CONFIGURADO', serieboleta: 'B555',
+  })
+  assert.equal(prueba.codigo, '0')
+  assert.equal(prueba.pedidoNumero, 7767)
   assert.equal(fake.mock.callCount(), 1)
 })
 
@@ -147,19 +156,33 @@ test('reserva un solo comprobante sin licencia, conserva su XML al reintentar y 
   })
 
   const payloads = []
+  const resultXml = (content) => new Response(`<soap:Envelope xmlns:soap="${SOAP}" xmlns:ser="${SERVICE}">
+      <soap:Body>${content}</soap:Body></soap:Envelope>`)
   const fetchMock = t.mock.method(globalThis, 'fetch', async (url, options) => {
     assert.equal(url, 'https://e-factura.sunat.gob.pe/ol-ti-itcpfegem/billService')
     assert.equal(storage.get('invoices')[0].status, 'pendiente')
     const request = parseXml(options.body)
+    if (request.getElementsByTagNameNS(SERVICE, 'getStatus').length) {
+      assert.equal(request.getElementsByTagName('ticket').item(0).textContent, '123456')
+      const filename = storage.get('invoices')[0].resumen.nombre
+      const cdr = cdrZip(filename, filename.slice(12), '0')
+      return resultXml(`<ser:getStatusResponse><status><statusCode>0</statusCode><content>${cdr.toString('base64')}</content></status></ser:getStatusResponse>`)
+    }
     const contents = request.getElementsByTagName('contentFile').item(0).textContent
     const filename = request.getElementsByTagName('fileName').item(0).textContent.replace(/\.zip$/, '')
-    const xml = Buffer.from(unzipSync(Buffer.from(contents, 'base64'))[`${filename}.xml`])
+    const zip = unzipSync(Buffer.from(contents, 'base64'))
+    const xml = Buffer.from(zip[`${filename}.xml`])
     payloads.push(xml)
-    if (payloads.length === 1) throw new Error('Corte ficticio después de la reserva')
+    if (request.getElementsByTagNameNS(SERVICE, 'sendSummary').length) {
+      assert.match(filename, /^20100066603-RC-\d{8}-1$/)
+      assert.deepEqual(Object.keys(zip), [`${filename}.xml`])
+      assert.match(xml.toString(), /<cbc:ID>B003-7<\/cbc:ID>/)
+      assert.match(xml.toString(), /<cbc:Percent>18\.00<\/cbc:Percent>/)
+      if (payloads.length === 1) throw new Error('Corte ficticio después de la reserva')
+      return resultXml('<ser:sendSummaryResponse><ticket>123456</ticket></ser:sendSummaryResponse>')
+    }
     const cdr = cdrZip(filename, filename.split('-').slice(2).join('-'), '0')
-    return new Response(`<soap:Envelope xmlns:soap="${SOAP}" xmlns:ser="${SERVICE}">
-      <soap:Body><ser:sendBillResponse><applicationResponse>${cdr.toString('base64')}</applicationResponse></ser:sendBillResponse></soap:Body>
-    </soap:Envelope>`)
+    return resultXml(`<ser:sendBillResponse><applicationResponse>${cdr.toString('base64')}</applicationResponse></ser:sendBillResponse>`)
   })
 
   const input = {
@@ -195,13 +218,17 @@ test('reserva un solo comprobante sin licencia, conserva su XML al reintentar y 
   }
   await assert.rejects(emitirComprobante(secondInput), /Ya se usó la emisión sin licencia/)
   assert.equal(fetchMock.mock.callCount(), 1)
+  const sentSummary = await reintentarSunat(input.orderId)
+  assert.equal(sentSummary.status, 'pendiente')
+  assert.equal(sentSummary.resumen.ticket, '123456')
   const accepted = await reintentarSunat(input.orderId)
   assert.equal(accepted.status, 'aceptada')
   assert.equal(accepted.numero, 7)
   assert.deepEqual(payloads[0], payloads[1])
-  assert.deepEqual(await readFile(join(dir, 'comprobantes', input.orderId, 'xml.xml')), payloads[0])
+  assert.deepEqual(await readFile(join(dir, 'comprobantes', input.orderId, 'resumen.xml')), payloads[0])
+  assert.match(await readFile(join(dir, 'comprobantes', input.orderId, 'xml.xml'), 'utf8'), /<cbc:ID>B003-7<\/cbc:ID>/)
   assert.equal((await emitirComprobante(input)).invoice.status, 'aceptada')
-  assert.equal(fetchMock.mock.callCount(), 2)
+  assert.equal(fetchMock.mock.callCount(), 3)
 
   const licenciaDePrueba = t.mock.method(crypto, 'timingSafeEqual', () => true)
   syncBuiltinESMExports()
@@ -217,5 +244,5 @@ test('reserva un solo comprobante sin licencia, conserva su XML al reintentar y 
   const { invoice: second } = await emitirComprobante(secondInput)
   assert.equal(second.status, 'aceptada')
   assert.equal(second.tipo, 'factura')
-  assert.equal(fetchMock.mock.callCount(), 3)
+  assert.equal(fetchMock.mock.callCount(), 4)
 })

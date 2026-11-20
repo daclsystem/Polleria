@@ -5,7 +5,10 @@ import { getPool, sql } from '../db.js'
 import { certificadoInfo, leerCertificado } from './certificado.js'
 import { comprobanteFilePath, saveComprobanteFile } from './comprobantes.js'
 import { loadIgvRate, round2 } from './money.js'
-import { parseCdr, pkcs12SigningKeys, sendBill, signedInvoice, type SunatDocument } from './sunat.js'
+import {
+  getBoletaSummaryStatus, parseCdr, pkcs12SigningKeys, sendBill, sendBoletaSummary,
+  signedBoletaSummary, signedInvoice, type SunatDocument,
+} from './sunat.js'
 import { comprobantePdf } from './sunatPdf.js'
 
 /** SHA-256 de la clave de activación. La clave en claro no está en el código. */
@@ -42,6 +45,7 @@ type Invoice = {
   clienteNombre?: string
   canal?: 'sunat'
   rucEmisor?: string
+  resumen?: { nombre: string; ticket?: string }
 }
 
 function claveValida(clave: string) {
@@ -298,6 +302,37 @@ function nombreSunat(invoice: Invoice) {
   return [invoice.rucEmisor, invoice.tipo === 'factura' ? '01' : '03', invoice.serie, invoice.numero].join('-')
 }
 
+function nombreResumen(document: SunatDocument, invoices: Invoice[]) {
+  const prefijo = `${document.ruc}-RC-${document.fecha.slice(0, 10).replaceAll('-', '')}-`
+  const usados = invoices.reduce((max, invoice) => {
+    const nombre = invoice?.resumen?.nombre
+    return nombre?.startsWith(prefijo) ? Math.max(max, Number(nombre.slice(prefijo.length)) || 0) : max
+  }, 0)
+  const numero = usados + 1
+  if (numero > 99_999) throw new Error('Se agotó la numeración diaria de resúmenes SUNAT.')
+  return `${prefijo}${numero}`
+}
+
+async function consultarResumen(invoice: Invoice, resumen: NonNullable<Invoice['resumen']>, auth: ReturnType<typeof credencialesSunat>) {
+  const ticketGuardado = resumen.ticket || await fs.readFile(comprobanteFilePath(invoice.orderId, 'ticket'), 'utf8')
+    .catch((error: NodeJS.ErrnoException) => {
+      if (error.code !== 'ENOENT') throw error
+      return ''
+    })
+  if (!ticketGuardado) {
+    const xml = await fs.readFile(comprobanteFilePath(invoice.orderId, 'resumen'))
+    const ticket = await sendBoletaSummary('produccion', auth, resumen.nombre, xml)
+    resumen.ticket = ticket
+    await saveComprobanteFile(invoice.orderId, 'ticket', Buffer.from(ticket))
+    invoice.mensaje = `Resumen enviado. SUNAT asignó el ticket ${ticket}.`
+    return null
+  }
+  resumen.ticket = ticketGuardado
+  const cdr = await getBoletaSummaryStatus('produccion', auth, resumen.nombre, ticketGuardado)
+  if (!cdr) invoice.mensaje = `SUNAT está procesando el resumen. Ticket ${ticketGuardado}.`
+  return cdr
+}
+
 async function recibirSunat(orderId: string, config: SunatConfig) {
   return withInvoiceLock(async (tx) => {
     const invoices = await readInvoices(tx)
@@ -307,8 +342,8 @@ async function recibirSunat(orderId: string, config: SunatConfig) {
     if (invoice.rucEmisor !== String(config.ruc || '').trim()) {
       throw Object.assign(new Error('El comprobante pendiente corresponde a otro RUC.'), { status: 409 })
     }
-    const nombre = nombreSunat(invoice)
-    const xml = await fs.readFile(comprobanteFilePath(orderId, 'xml'))
+    const resumen = invoice.resumen
+    const nombre = resumen?.nombre || nombreSunat(invoice)
     const auth = credencialesSunat(config, invoice.rucEmisor)
     // Si la base de datos falló después de recibir el CDR, recupera la constancia antes de reenviar.
     let cdr = await fs.readFile(comprobanteFilePath(orderId, 'cdr'))
@@ -319,9 +354,18 @@ async function recibirSunat(orderId: string, config: SunatConfig) {
       })
     if (!cdr) {
       try {
-        cdr = await sendBill('produccion', auth, nombre, xml)
+        if (resumen) {
+          cdr = await consultarResumen(invoice, resumen, auth)
+        } else if (invoice.tipo === 'factura') {
+          const xml = await fs.readFile(comprobanteFilePath(orderId, 'xml'))
+          cdr = await sendBill('produccion', auth, nombre, xml)
+        } else {
+          invoice.mensaje = 'Verifica el envío anterior en SUNAT antes de volver a informar la boleta.'
+        }
       } catch (error) {
         invoice.mensaje = (error as Error).message || 'SUNAT aún no confirmó el envío.'
+      }
+      if (!cdr) {
         await writeConfig('invoices', invoices, tx)
         return invoice
       }
@@ -363,13 +407,16 @@ async function emitirDirecto(input: EmitInput, config: SunatConfig, tipo: EmitIn
     const now = new Date()
     const document = { ...data, numero, fecha: fechaLima(now) }
     const { archivo, clave } = await leerCertificado()
-    const { xml, digest } = signedInvoice(document, pkcs12SigningKeys(archivo, clave))
+    const keys = pkcs12SigningKeys(archivo, clave)
+    const { xml, digest } = signedInvoice(document, keys)
     const pdf = await comprobantePdf(document, digest)
     await saveComprobanteFile(orderId, 'xml', xml)
     await saveComprobanteFile(orderId, 'pdf', pdf)
+    const resumen = tipo === 'boleta' ? { nombre: nombreResumen(document, invoices) } : undefined
+    if (resumen) await saveComprobanteFile(orderId, 'resumen', signedBoletaSummary(document, resumen.nombre.slice(12), keys))
     const reserved: Invoice = {
       orderId, tipo, serie: data.serie, numero, fechaEmision: now.toISOString(), status: 'pendiente', hashCdr: digest,
-      clienteDoc: data.cliente.documento, clienteNombre: data.cliente.nombre, canal: 'sunat', rucEmisor: ruc,
+      clienteDoc: data.cliente.documento, clienteNombre: data.cliente.nombre, canal: 'sunat', rucEmisor: ruc, resumen,
       mensaje: 'En espera de la constancia de SUNAT.',
     }
     await writeConfig('invoices', [reserved, ...invoices], tx)

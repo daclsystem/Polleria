@@ -3,11 +3,14 @@ import path from 'path'
 import { randomUUID } from 'node:crypto'
 
 export type ComprobanteKind = 'pdf' | 'xml' | 'cdr'
+type ComprobanteStoredFile = ComprobanteKind | 'resumen' | 'ticket'
 
-const KIND_FILE: Record<ComprobanteKind, string> = {
+const KIND_FILE: Record<ComprobanteStoredFile, string> = {
   pdf: 'pdf.pdf',
   xml: 'xml.xml',
   cdr: 'cdr.zip',
+  resumen: 'resumen.xml',
+  ticket: 'ticket.txt',
 }
 
 const KIND_TYPE: Record<ComprobanteKind, string> = {
@@ -26,13 +29,13 @@ export function isComprobanteKind(value: string): value is ComprobanteKind {
   return value === 'pdf' || value === 'xml' || value === 'cdr'
 }
 
-export function comprobanteFilePath(orderId: string, kind: ComprobanteKind) {
+export function comprobanteFilePath(orderId: string, kind: ComprobanteStoredFile) {
   if (!ORDER_ID.test(orderId)) throw new Error('Pedido inválido')
   return path.join(comprobantesRoot(), orderId, KIND_FILE[kind])
 }
 
 /** Guarda el archivo generado para descargarlo después desde el sistema. */
-export async function saveComprobanteFile(orderId: string, kind: ComprobanteKind, body: Buffer) {
+export async function saveComprobanteFile(orderId: string, kind: ComprobanteStoredFile, body: Buffer) {
   const file = comprobanteFilePath(orderId, kind)
   const temporary = `${file}.${randomUUID()}.tmp`
   await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 })
