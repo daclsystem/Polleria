@@ -129,3 +129,11 @@ npm run dev
 ```
 
 Usuarios seed: `admin@lopez.pe` / `admin123` (y roles del README del front). Al primer login el API migra el password a bcrypt.
+
+### Emisión desde el POS
+
+En **Facturación → Configurar SUNAT**, el canal **SUNAT directo** usa el SEE del Contribuyente. **Probar factura** y **Probar boleta** envían datos ficticios a Beta y no consumen correlativos del POS. Para Producción, el RUC debe estar habilitado, el certificado debe estar registrado en SOL y el usuario secundario debe tener permiso de emisión.
+
+Completa la dirección fiscal, el código de establecimiento y las series. Usa series disponibles para ese RUC si anteriormente emitiste con otro sistema. Carga el `.p12` o `.pfx` y habilita la emisión directa en Producción. Mantén persistentes `CERTIFICADO_DIR` y `COMPROBANTES_DIR` en el servidor.
+
+El POS guarda el XML, el PDF y la constancia de recepción. Si queda pendiente, **Reintentar envío** reutiliza la serie, el número y el XML firmado. El canal directo permite descargar los archivos para entregarlos al cliente.

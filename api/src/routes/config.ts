@@ -6,7 +6,9 @@ import { authRequired, requireRoles } from '../auth.js'
 import { sendWhatsAppSoon } from '../lib/wspgo.js'
 import { lookupFactiliza, factilizaToken } from '../lib/factiliza.js'
 import { certificadoInfo, saveCertificado } from '../lib/certificado.js'
-import { activarEmision, emisionActiva, emitirComprobante } from '../lib/emision.js'
+import {
+  activarEmision, emitirComprobante, estadoEmision, guardarComprobantes, probarSunat, reintentarSunat,
+} from '../lib/emision.js'
 import {
   comprobanteContentType,
   comprobanteFilePath,
@@ -150,10 +152,11 @@ configRouter.get('/sunat', authRequired, requireRoles('admin'), async (_req, res
   try {
     const data = (await getConfig('sunat')) as Record<string, unknown> | null
     const config = data && typeof data === 'object' ? { ...data } : {}
-    if (!config.factilizaToken) {
-      const token = await factilizaToken()
-      if (token) config.factilizaToken = token
-    }
+    config.claveSolGuardada = Boolean(config.clave)
+    config.factilizaTokenGuardado = Boolean(await factilizaToken())
+    delete config.clave
+    delete config.factilizaToken
+    delete config.certificado
     const cert = await certificadoInfo()
     config.certificadoCargado = cert.cargado
     config.certificadoNombre = cert.nombre
@@ -170,15 +173,31 @@ configRouter.put('/sunat', authRequired, requireRoles('admin'), async (req, res)
     delete incoming.certificadoCargado
     delete incoming.certificadoNombre
     delete incoming.certificadoClave
+    delete incoming.claveSolGuardada
+    delete incoming.factilizaTokenGuardado
+    delete incoming.certificado
+    const prev = (await getConfig('sunat')) as Record<string, unknown> | null
+    if (!String(incoming.clave || '').trim() && typeof prev?.clave === 'string') {
+      incoming.clave = prev.clave
+    }
     if (!String(incoming.factilizaToken || '').trim()) {
-      const prev = (await getConfig('sunat')) as Record<string, unknown> | null
-      const kept = String(prev?.factilizaToken || process.env.FACTILIZA_TOKEN || '').trim()
+      const kept = String(prev?.factilizaToken || '').trim()
       if (kept) incoming.factilizaToken = kept
     }
     await putConfig('sunat', incoming)
     res.json({ ok: true })
   } catch (e) {
     res.status(500).json({ error: (e as Error).message })
+  }
+})
+
+configRouter.post('/sunat/prueba', authRequired, requireRoles('admin'), async (req, res) => {
+  const tipo = req.body?.tipo
+  if (tipo !== 'factura' && tipo !== 'boleta') return res.status(400).json({ error: 'Elige factura o boleta.' })
+  try {
+    res.json(await probarSunat(tipo))
+  } catch (error) {
+    res.status(502).json({ error: (error as Error).message || 'SUNAT Beta no respondió.' })
   }
 })
 
@@ -215,7 +234,7 @@ configRouter.put('/invoices', authRequired, requireRoles('admin', 'cajero'), asy
   try {
     const invoices = req.body?.invoices
     if (!Array.isArray(invoices)) return res.status(400).json({ error: 'invoices[] requerido' })
-    await putConfig('invoices', invoices)
+    await guardarComprobantes(invoices)
     res.json({ ok: true })
   } catch (e) {
     res.status(500).json({ error: (e as Error).message })
@@ -240,7 +259,7 @@ configRouter.get('/factiliza/:kind/:numero', authRequired, requireRoles('admin',
 
 configRouter.get('/emision', authRequired, requireRoles('admin', 'cajero'), async (_req, res) => {
   try {
-    res.json({ activa: await emisionActiva() })
+    res.json(await estadoEmision())
   } catch (e) {
     res.status(500).json({ error: (e as Error).message })
   }
@@ -248,7 +267,8 @@ configRouter.get('/emision', authRequired, requireRoles('admin', 'cajero'), asyn
 
 configRouter.post('/emision/activar', authRequired, requireRoles('admin', 'cajero'), async (req, res) => {
   try {
-    res.json(await activarEmision(String(req.body?.clave || '')))
+    await activarEmision(String(req.body?.clave || ''))
+    res.json(await estadoEmision())
   } catch (e) {
     const status = (e as Error & { status?: number }).status || 500
     res.status(status).json({ error: (e as Error).message })
@@ -270,6 +290,15 @@ configRouter.get('/comprobantes/files', authRequired, requireRoles('admin', 'caj
     res.json({ files: await listComprobanteFiles() })
   } catch (e) {
     res.status(500).json({ error: (e as Error).message })
+  }
+})
+
+configRouter.post('/comprobantes/:orderId/reintentar', authRequired, requireRoles('admin', 'cajero'), async (req, res) => {
+  try {
+    res.json({ ok: true, invoice: await reintentarSunat(String(req.params.orderId)) })
+  } catch (error) {
+    const err = error as Error & { status?: number }
+    res.status(err.status || 500).json({ error: err.message })
   }
 })
 

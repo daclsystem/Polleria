@@ -1,5 +1,6 @@
 import fs from 'fs/promises'
 import path from 'path'
+import { randomUUID } from 'node:crypto'
 
 export type ComprobanteKind = 'pdf' | 'xml' | 'cdr'
 
@@ -33,8 +34,15 @@ export function comprobanteFilePath(orderId: string, kind: ComprobanteKind) {
 /** Guarda el archivo generado para descargarlo después desde el sistema. */
 export async function saveComprobanteFile(orderId: string, kind: ComprobanteKind, body: Buffer) {
   const file = comprobanteFilePath(orderId, kind)
-  await fs.mkdir(path.dirname(file), { recursive: true })
-  await fs.writeFile(file, body)
+  const temporary = `${file}.${randomUUID()}.tmp`
+  await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 })
+  try {
+    await fs.writeFile(temporary, body, { mode: 0o600 })
+    await fs.rename(temporary, file)
+  } catch (error) {
+    await fs.rm(temporary, { force: true }).catch(() => undefined)
+    throw error
+  }
   return file
 }
 

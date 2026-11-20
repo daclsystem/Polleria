@@ -733,21 +733,49 @@ export async function apiLookupDoc(kind: 'dni' | 'ruc', numero: string) {
 }
 
 export async function apiEmisionEstado() {
-  return apiFetch<{ activa: boolean }>('/api/config/emision')
+  return apiFetch<{ activa: boolean; directa?: boolean; disponible?: boolean }>('/api/config/emision')
 }
 
 export async function apiActivarEmision(clave: string) {
-  return apiFetch<{ activa: boolean }>('/api/config/emision/activar', {
+  return apiFetch<{ activa: boolean; disponible?: boolean }>('/api/config/emision/activar', {
     method: 'POST',
     body: JSON.stringify({ clave }),
   })
 }
 
+type EmissionResponse = {
+  ok: boolean
+  invoice: {
+    orderId: string
+    tipo: 'boleta' | 'factura'
+    serie: string
+    numero: number
+    status: 'pendiente' | 'enviada' | 'aceptada' | 'rechazada'
+    fechaEmision: string
+    hashCdr?: string
+    mensaje?: string
+    clienteDoc?: string
+    clienteNombre?: string
+    canal?: 'sunat'
+  }
+}
+
 export async function apiEmitComprobante(body: unknown) {
-  return apiFetch<{ ok: boolean; invoice: { orderId: string; tipo: 'boleta' | 'factura'; serie: string; numero: number; status: 'pendiente' | 'enviada' | 'aceptada' | 'rechazada'; fechaEmision: string; hashCdr?: string; mensaje?: string; clienteDoc?: string; clienteNombre?: string } }>(
+  return apiFetch<EmissionResponse>(
     '/api/config/comprobantes/emit',
     { method: 'POST', body: JSON.stringify(body) },
   )
+}
+
+export async function apiReintentarComprobante(orderId: string) {
+  return apiFetch<EmissionResponse>(`/api/config/comprobantes/${encodeURIComponent(orderId)}/reintentar`, { method: 'POST' })
+}
+
+export async function apiProbarSunat(tipo: 'boleta' | 'factura') {
+  return apiFetch<{ codigo: string; mensaje: string }>('/api/config/sunat/prueba', {
+    method: 'POST',
+    body: JSON.stringify({ tipo }),
+  })
 }
 
 export async function apiComprobanteFiles() {
