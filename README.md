@@ -54,3 +54,11 @@ npm run dev:cliente   # :5177
 ## Login
 
 Celular + código WhatsApp (respaldo `123456` si WhatsApp falla).
+
+## Clave de emisión
+
+En Facturación se pide una sola vez. Si no es esta, la emisión no se activa.
+
+```
+C867-ZZ9W-QK9Y-FUMS
+```
