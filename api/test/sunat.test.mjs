@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict'
+import crypto from 'node:crypto'
 import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { syncBuiltinESMExports } from 'node:module'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
@@ -8,7 +10,10 @@ import { zipSync, unzipSync } from 'fflate'
 import { SignedXml } from 'xml-crypto'
 import { sql } from '../dist/db.js'
 import { saveCertificado } from '../dist/lib/certificado.js'
-import { comprobantePrueba, emitirComprobante, probarSunat, reintentarSunat } from '../dist/lib/emision.js'
+import {
+  comprobantePrueba, configuracionSunat, emitirComprobante, estadoEmision,
+  guardarConfiguracionSunat, probarSunat, reintentarSunat,
+} from '../dist/lib/emision.js'
 import { parseCdr, parseXml, pkcs12SigningKeys, signedInvoice } from '../dist/lib/sunat.js'
 import { comprobantePdf } from '../dist/lib/sunatPdf.js'
 
@@ -99,7 +104,7 @@ test('la prueba envía únicamente una boleta ficticia al ambiente Beta', async 
   assert.equal(fake.mock.callCount(), 1)
 })
 
-test('reserva un comprobante antes del envío y conserva su XML y correlativo al reintentar', async (t) => {
+test('reserva un solo comprobante sin licencia, conserva su XML al reintentar y desbloquea al activar', async (t) => {
   const dir = await mkdtemp(join(tmpdir(), 'polleria-emision-'))
   const prevCert = process.env.CERTIFICADO_DIR
   const prevInvoices = process.env.COMPROBANTES_DIR
@@ -115,11 +120,12 @@ test('reserva un comprobante antes del envío y conserva su XML y correlativo al
   const password = 'clave-certificado-ficticio'
   await saveCertificado(certificadoFicticio(password), 'ficticio.p12', password)
   const storage = new Map([
-    ['emision_activa', { activa: true }],
+    ['emision_activa', { activa: false }],
     ['sunat', {
-      proveedor: 'sunat', ambiente: 'produccion', enabled: true, ruc: '20100066603',
+      ruc: '20100066603',
       razonSocial: 'LOCAL DE PRUEBA', direccionFiscal: 'LIMA, PERÚ', usuario: 'FICTICIO', clave: 'clave-ficticia',
       serieboleta: 'B003', seriefactura: 'F003',
+      factilizaToken: 'token-ficticio',
     }],
     ['invoices', [{ orderId: 'pedido-previo', serie: 'B003', numero: 6, status: 'aceptada' }]],
   ])
@@ -146,10 +152,11 @@ test('reserva un comprobante antes del envío y conserva su XML y correlativo al
     assert.equal(storage.get('invoices')[0].status, 'pendiente')
     const request = parseXml(options.body)
     const contents = request.getElementsByTagName('contentFile').item(0).textContent
-    const xml = Buffer.from(unzipSync(Buffer.from(contents, 'base64'))['20100066603-03-B003-7.xml'])
+    const filename = request.getElementsByTagName('fileName').item(0).textContent.replace(/\.zip$/, '')
+    const xml = Buffer.from(unzipSync(Buffer.from(contents, 'base64'))[`${filename}.xml`])
     payloads.push(xml)
     if (payloads.length === 1) throw new Error('Corte ficticio después de la reserva')
-    const cdr = cdrZip('20100066603-03-B003-7', 'B003-7', '0')
+    const cdr = cdrZip(filename, filename.split('-').slice(2).join('-'), '0')
     return new Response(`<soap:Envelope xmlns:soap="${SOAP}" xmlns:ser="${SERVICE}">
       <soap:Body><ser:sendBillResponse><applicationResponse>${cdr.toString('base64')}</applicationResponse></ser:sendBillResponse></soap:Body>
     </soap:Envelope>`)
@@ -160,11 +167,34 @@ test('reserva un comprobante antes del envío y conserva su XML y correlativo al
     tipo: 'boleta', cliente: { tipDoc: '0', num: '00000000', nombre: 'CLIENTES VARIOS' },
     lines: [{ descripcion: 'Consumo ficticio', cantidad: 2, precio: 10 }],
   }
+  assert.equal((await estadoEmision()).disponible, true)
+  assert.equal((await estadoEmision()).cupoSinLicencia, 1)
+  await assert.rejects(
+    guardarConfiguracionSunat({ razonSocial: 'OTRO NOMBRE' }, 'licencia-invalida'),
+    /licencia .* no es válida/i,
+  )
+  assert.equal(storage.get('sunat').razonSocial, 'LOCAL DE PRUEBA')
+  await guardarConfiguracionSunat({ razonSocial: 'LOCAL DE PRUEBA ACTUALIZADO', clave: '', factilizaToken: 'otro valor' }, '')
+  assert.equal(storage.get('sunat').clave, 'clave-ficticia')
+  assert.equal(storage.get('sunat').factilizaToken, 'token-ficticio')
+  const configPublica = await configuracionSunat()
+  assert.equal(configPublica.claveSolGuardada, true)
+  assert.equal(Object.hasOwn(configPublica, 'clave'), false)
+  assert.equal(Object.hasOwn(configPublica, 'factilizaToken'), false)
   await assert.rejects(emitirComprobante({ ...input, lines: [{ ...input.lines[0], precio: 11 }] }), /importe pagado/)
   assert.equal(storage.get('invoices').length, 1)
+  assert.equal((await estadoEmision()).cupoSinLicencia, 1)
   const { invoice: pending } = await emitirComprobante(input)
   assert.equal(pending.status, 'pendiente')
   assert.equal(pending.numero, 7)
+  assert.equal((await estadoEmision()).disponible, false)
+  assert.equal((await estadoEmision()).cupoSinLicencia, 0)
+  const secondInput = {
+    ...input, orderId: '452b5e9e-441d-45ba-b946-26c4c3ef02d7', tipo: 'factura',
+    cliente: { tipDoc: '6', num: '20600000005', nombre: 'CLIENTE FICTICIO' },
+  }
+  await assert.rejects(emitirComprobante(secondInput), /Ya se usó la emisión sin licencia/)
+  assert.equal(fetchMock.mock.callCount(), 1)
   const accepted = await reintentarSunat(input.orderId)
   assert.equal(accepted.status, 'aceptada')
   assert.equal(accepted.numero, 7)
@@ -172,4 +202,20 @@ test('reserva un comprobante antes del envío y conserva su XML y correlativo al
   assert.deepEqual(await readFile(join(dir, 'comprobantes', input.orderId, 'xml.xml')), payloads[0])
   assert.equal((await emitirComprobante(input)).invoice.status, 'aceptada')
   assert.equal(fetchMock.mock.callCount(), 2)
+
+  const licenciaDePrueba = t.mock.method(crypto, 'timingSafeEqual', () => true)
+  syncBuiltinESMExports()
+  try {
+    await assert.rejects(guardarConfiguracionSunat({ ruc: '' }, 'licencia-ficticia'), /Completa los datos/)
+    assert.equal((await estadoEmision()).activa, false)
+    await guardarConfiguracionSunat({}, 'licencia-ficticia')
+  } finally {
+    licenciaDePrueba.mock.restore()
+    syncBuiltinESMExports()
+  }
+  assert.equal((await estadoEmision()).disponible, true)
+  const { invoice: second } = await emitirComprobante(secondInput)
+  assert.equal(second.status, 'aceptada')
+  assert.equal(second.tipo, 'factura')
+  assert.equal(fetchMock.mock.callCount(), 3)
 })

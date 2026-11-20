@@ -2,12 +2,13 @@ import fs from 'fs/promises'
 import { Router } from 'express'
 import multer from 'multer'
 import { getPool, sql } from '../db.js'
-import { authRequired, requireRoles } from '../auth.js'
+import { authRequired, requireRoles, requireSystemAdmin } from '../auth.js'
 import { sendWhatsAppSoon } from '../lib/wspgo.js'
-import { lookupFactiliza, factilizaToken } from '../lib/factiliza.js'
-import { certificadoInfo, saveCertificado } from '../lib/certificado.js'
+import { lookupFactiliza } from '../lib/factiliza.js'
+import { saveCertificado } from '../lib/certificado.js'
 import {
-  activarEmision, emitirComprobante, estadoEmision, guardarComprobantes, probarSunat, reintentarSunat,
+  activarEmision, configuracionSunat, emitirComprobante, estadoEmision, guardarComprobantes,
+  guardarConfiguracionSunat, pedidoParaBeta, probarSunat, reintentarSunat, type EmisorBeta,
 } from '../lib/emision.js'
 import {
   comprobanteContentType,
@@ -150,44 +151,41 @@ configRouter.post('/whatsapp/send', authRequired, async (req, res) => {
 
 configRouter.get('/sunat', authRequired, requireRoles('admin'), async (_req, res) => {
   try {
-    const data = (await getConfig('sunat')) as Record<string, unknown> | null
-    const config = data && typeof data === 'object' ? { ...data } : {}
-    config.claveSolGuardada = Boolean(config.clave)
-    config.factilizaTokenGuardado = Boolean(await factilizaToken())
-    delete config.clave
-    delete config.factilizaToken
-    delete config.certificado
-    const cert = await certificadoInfo()
-    config.certificadoCargado = cert.cargado
-    config.certificadoNombre = cert.nombre
-    config.certificadoClave = cert.tieneClave
-    res.json({ config })
+    res.json({ config: await configuracionSunat() })
   } catch (e) {
     res.status(500).json({ error: (e as Error).message })
   }
 })
 
+configRouter.get('/sunat/clave-sol', authRequired, requireSystemAdmin, async (_req, res) => {
+  res.set('Cache-Control', 'no-store')
+  try {
+    const config = (await getConfig('sunat')) as { clave?: unknown } | null
+    if (typeof config?.clave !== 'string' || !config.clave) {
+      return res.status(404).json({ error: 'No hay una clave SOL guardada.' })
+    }
+    res.json({ clave: config.clave })
+  } catch {
+    res.status(500).json({ error: 'No se pudo consultar la clave SOL. Intenta de nuevo.' })
+  }
+})
+
 configRouter.put('/sunat', authRequired, requireRoles('admin'), async (req, res) => {
   try {
-    const incoming = (req.body?.config ?? req.body ?? {}) as Record<string, unknown>
-    delete incoming.certificadoCargado
-    delete incoming.certificadoNombre
-    delete incoming.certificadoClave
-    delete incoming.claveSolGuardada
-    delete incoming.factilizaTokenGuardado
-    delete incoming.certificado
-    const prev = (await getConfig('sunat')) as Record<string, unknown> | null
-    if (!String(incoming.clave || '').trim() && typeof prev?.clave === 'string') {
-      incoming.clave = prev.clave
-    }
-    if (!String(incoming.factilizaToken || '').trim()) {
-      const kept = String(prev?.factilizaToken || '').trim()
-      if (kept) incoming.factilizaToken = kept
-    }
-    await putConfig('sunat', incoming)
-    res.json({ ok: true })
+    await guardarConfiguracionSunat(req.body?.config ?? req.body ?? {}, String(req.body?.licencia || ''))
+    res.json({ ok: true, config: await configuracionSunat(), estado: await estadoEmision() })
   } catch (e) {
-    res.status(500).json({ error: (e as Error).message })
+    const error = e as Error & { status?: number }
+    res.status(error.status || 500).json({ error: error.message })
+  }
+})
+
+configRouter.get('/sunat/prueba', authRequired, requireRoles('admin'), async (_req, res) => {
+  try {
+    const pruebas = await Promise.all(['factura', 'boleta'].map((tipo) => getConfig(`sunat_beta_${tipo}`)))
+    res.json({ pruebas: pruebas.filter(Boolean) })
+  } catch {
+    res.status(500).json({ error: 'No se pudieron consultar las pruebas de SUNAT Beta.' })
   }
 })
 
@@ -195,9 +193,17 @@ configRouter.post('/sunat/prueba', authRequired, requireRoles('admin'), async (r
   const tipo = req.body?.tipo
   if (tipo !== 'factura' && tipo !== 'boleta') return res.status(400).json({ error: 'Elige factura o boleta.' })
   try {
-    res.json(await probarSunat(tipo))
+    const emisor = (await getConfig('sunat')) as EmisorBeta | null
+    if (!emisor?.ruc || !emisor.razonSocial) {
+      return res.status(400).json({ error: 'Guarda el RUC y la razón social en Configurar SUNAT antes de probar.' })
+    }
+    const pedido = req.body?.orderId === undefined ? undefined : await pedidoParaBeta(String(req.body.orderId))
+    const prueba = await probarSunat(tipo, pedido, emisor)
+    await putConfig(`sunat_beta_${tipo}`, prueba)
+    res.json(prueba)
   } catch (error) {
-    res.status(502).json({ error: (error as Error).message || 'SUNAT Beta no respondió.' })
+    const err = error as Error & { status?: number }
+    res.status(err.status || 502).json({ error: err.message || 'SUNAT Beta no respondió.' })
   }
 })
 
@@ -241,8 +247,7 @@ configRouter.put('/invoices', authRequired, requireRoles('admin', 'cajero'), asy
   }
 })
 
-/** Consulta DNI o RUC en Factiliza. El token no sale del servidor. */
-configRouter.get('/factiliza/:kind/:numero', authRequired, requireRoles('admin', 'cajero', 'mozo'), async (req, res) => {
+configRouter.get(['/documentos/:kind/:numero', '/factiliza/:kind/:numero'], authRequired, requireRoles('admin', 'cajero', 'mozo'), async (req, res) => {
   const kind = req.params.kind === 'ruc' ? 'ruc' : req.params.kind === 'dni' ? 'dni' : ''
   const numero = String(req.params.numero || '').replace(/\D/g, '')
   if (!kind) return res.status(400).json({ error: 'Consulta inválida' })
@@ -253,7 +258,7 @@ configRouter.get('/factiliza/:kind/:numero', authRequired, requireRoles('admin',
     res.json(data)
   } catch (e) {
     const status = (e as Error & { status?: number }).status || 502
-    res.status(status).json({ error: (e as Error).message })
+    res.status(status).json({ error: 'No se pudo consultar el documento. Puedes ingresar los datos manualmente.' })
   }
 })
 

@@ -1,35 +1,11 @@
 import { Router } from 'express'
 import { getPool, sql } from '../db.js'
-import { authRequired, type AuthUser } from '../auth.js'
+import { authRequired, requireSystemAdmin } from '../auth.js'
 
 export const systemRouter = Router()
 
 export type PurgeTarget = 'orders' | 'users' | 'customers' | 'products'
 const ALL_TARGETS: PurgeTarget[] = ['orders', 'users', 'customers', 'products']
-
-/** Verifica en BD que el usuario autenticado es admin de sistema (IsSystem=1). */
-async function requireSystemAdmin(req: { user?: AuthUser }, res: import('express').Response, next: import('express').NextFunction) {
-  try {
-    if (!req.user?.id || req.user.accountType === 'customer' || req.user.accountType === 'driver') {
-      return res.status(403).json({ error: 'Solo administrador de sistema' })
-    }
-    const pool = await getPool()
-    const r = await pool
-      .request()
-      .input('id', sql.UniqueIdentifier, req.user.id)
-      .query(`
-        SELECT TOP 1 ISNULL(IsSystem, 0) AS IsSystem, Role, Active
-        FROM dbo.Users WHERE Id = @id
-      `)
-    const row = r.recordset[0]
-    if (!row || !row.Active || Number(row.IsSystem) !== 1 || String(row.Role) !== 'admin') {
-      return res.status(403).json({ error: 'Solo administrador de sistema' })
-    }
-    next()
-  } catch (e) {
-    res.status(500).json({ error: (e as Error).message })
-  }
-}
 
 /**
  * Limpia datos de la BD. Solo IsSystem=1.

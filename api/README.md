@@ -132,8 +132,8 @@ Usuarios seed: `admin@lopez.pe` / `admin123` (y roles del README del front). Al 
 
 ### Emisión desde el POS
 
-En **Facturación → Configurar SUNAT**, el canal **SUNAT directo** usa el SEE del Contribuyente. **Probar factura** y **Probar boleta** envían datos ficticios a Beta y no consumen correlativos del POS. Para Producción, el RUC debe estar habilitado, el certificado debe estar registrado en SOL y el usuario secundario debe tener permiso de emisión.
+El POS emite mediante el SEE del Contribuyente. En **Facturación → Configurar SUNAT**, **Probar factura** y **Probar boleta** envían datos ficticios a Beta y no consumen correlativos del POS. Para emitir comprobantes reales, el RUC debe estar habilitado, el certificado debe estar registrado en SOL y el usuario secundario debe tener permiso de envío.
 
-Completa la dirección fiscal, el código de establecimiento y las series. Usa series disponibles para ese RUC si anteriormente emitiste con otro sistema. Carga el `.p12` o `.pfx` y habilita la emisión directa en Producción. Mantén persistentes `CERTIFICADO_DIR` y `COMPROBANTES_DIR` en el servidor.
+Completa los datos del emisor y los accesos SOL. Usa series disponibles para ese RUC si anteriormente emitiste con otro sistema. Carga el `.p12` o `.pfx` e ingresa la licencia al guardar para habilitar la emisión. Mantén persistentes `CERTIFICADO_DIR` y `COMPROBANTES_DIR` en el servidor.
 
 El POS guarda el XML, el PDF y la constancia de recepción. Si queda pendiente, **Reintentar envío** reutiliza la serie, el número y el XML firmado. El canal directo permite descargar los archivos para entregarlos al cliente.

@@ -700,10 +700,16 @@ export async function apiGetSunatConfig() {
   return apiFetch<{ config: unknown }>('/api/config/sunat')
 }
 
-export async function apiSaveSunatConfig(config: unknown) {
-  return apiFetch('/api/config/sunat', {
+export function apiGetClaveSol(signal: AbortSignal) {
+  return apiFetch<{ clave: string }>('/api/config/sunat/clave-sol', { cache: 'no-store', signal })
+}
+
+export type EstadoEmision = { activa: boolean; configurada?: boolean; disponible?: boolean; cupoSinLicencia?: number }
+
+export async function apiSaveSunatConfig(config: unknown, licencia: string) {
+  return apiFetch<{ config: unknown; estado: EstadoEmision }>('/api/config/sunat', {
     method: 'PUT',
-    body: JSON.stringify({ config }),
+    body: JSON.stringify({ config, licencia }),
   })
 }
 
@@ -729,15 +735,15 @@ export async function apiSaveInvoices(invoices: unknown[]) {
 }
 
 export async function apiLookupDoc(kind: 'dni' | 'ruc', numero: string) {
-  return apiFetch<{ nombre: string; direccion: string }>(`/api/config/factiliza/${kind}/${numero}`)
+  return apiFetch<{ nombre: string; direccion: string }>(`/api/config/documentos/${kind}/${numero}`)
 }
 
 export async function apiEmisionEstado() {
-  return apiFetch<{ activa: boolean; directa?: boolean; disponible?: boolean }>('/api/config/emision')
+  return apiFetch<EstadoEmision>('/api/config/emision')
 }
 
 export async function apiActivarEmision(clave: string) {
-  return apiFetch<{ activa: boolean; disponible?: boolean }>('/api/config/emision/activar', {
+  return apiFetch<EstadoEmision>('/api/config/emision/activar', {
     method: 'POST',
     body: JSON.stringify({ clave }),
   })
@@ -771,10 +777,28 @@ export async function apiReintentarComprobante(orderId: string) {
   return apiFetch<EmissionResponse>(`/api/config/comprobantes/${encodeURIComponent(orderId)}/reintentar`, { method: 'POST' })
 }
 
-export async function apiProbarSunat(tipo: 'boleta' | 'factura') {
-  return apiFetch<{ codigo: string; mensaje: string }>('/api/config/sunat/prueba', {
+export type PruebaSunat = {
+  tipo: 'boleta' | 'factura'
+  nombre: string
+  referencia: string
+  fecha: string
+  pedidoNumero?: number
+  total?: number
+  codigo: string | null
+  mensaje: string
+  pdf: string
+  xml: string
+  cdr?: string
+}
+
+export function apiGetPruebasSunat() {
+  return apiFetch<{ pruebas: PruebaSunat[] }>('/api/config/sunat/prueba')
+}
+
+export async function apiProbarSunat(tipo: PruebaSunat['tipo'], orderId?: string) {
+  return apiFetch<PruebaSunat>('/api/config/sunat/prueba', {
     method: 'POST',
-    body: JSON.stringify({ tipo }),
+    body: JSON.stringify({ tipo, orderId }),
   })
 }
 

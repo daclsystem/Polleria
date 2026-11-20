@@ -2,7 +2,7 @@ import { getPool, sql } from '../db.js'
 
 const FACTILIZA = 'https://api.factiliza.com/v1'
 
-export async function factilizaToken() {
+async function factilizaToken() {
   const fromEnv = String(process.env.FACTILIZA_TOKEN || '').trim()
   try {
     const pool = await getPool()
@@ -25,7 +25,7 @@ export async function factilizaToken() {
 export async function lookupFactiliza(kind: 'dni' | 'ruc', numero: string) {
   const token = await factilizaToken()
   if (!token) {
-    const err = new Error('Falta el token de Factiliza en la configuración')
+    const err = new Error('La consulta de documentos no está disponible.')
     ;(err as Error & { status?: number }).status = 400
     throw err
   }
@@ -34,7 +34,6 @@ export async function lookupFactiliza(kind: 'dni' | 'ruc', numero: string) {
   })
   const body = (await res.json().catch(() => null)) as {
     success?: boolean
-    message?: string
     data?: {
       nombre_completo?: string
       nombres?: string
@@ -46,7 +45,7 @@ export async function lookupFactiliza(kind: 'dni' | 'ruc', numero: string) {
     }
   } | null
   if (!res.ok || body?.success === false) {
-    throw new Error(body?.message || `Factiliza respondió ${res.status}`)
+    throw new Error('La consulta de documentos no pudo completarse.')
   }
   const data = body?.data
   const nombre = kind === 'ruc'

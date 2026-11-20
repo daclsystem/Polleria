@@ -2,7 +2,7 @@ import { jsPDF } from 'jspdf'
 import QRCode from 'qrcode'
 import type { SunatDocument } from './sunat.js'
 
-export async function comprobantePdf(data: SunatDocument, resumen: string) {
+export async function comprobantePdf(data: SunatDocument, resumen: string, beta?: { pedidoNumero?: number }) {
   const pdf = new jsPDF({ format: 'a4', compress: true })
   const left = 16
   const right = 194
@@ -30,6 +30,10 @@ export async function comprobantePdf(data: SunatDocument, resumen: string) {
 
   pdf.setFont('helvetica', 'bold').setFontSize(19).text(title, left, 21)
   pdf.setFontSize(13).text(reference, right, 21, { align: 'right' })
+  if (beta) {
+    const origen = beta.pedidoNumero ? ` · PEDIDO #${beta.pedidoNumero}` : ''
+    pdf.setFontSize(9).text(`SUNAT BETA · SIN VALIDEZ TRIBUTARIA${origen}`, left, 28)
+  }
   const emisor = pdf.splitTextToSize(data.razonSocial, right - left) as string[]
   pdf.setFontSize(11).text(emisor, left, 34)
   let y = 35 + emisor.length * 5

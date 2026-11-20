@@ -63,6 +63,26 @@ export function requireRoles(...roles: AuthUser['role'][]) {
   }
 }
 
+export async function requireSystemAdmin(req: Request, res: Response, next: NextFunction) {
+  if (!req.user?.id || req.user.accountType === 'customer' || req.user.accountType === 'driver') {
+    return res.status(403).json({ error: 'Solo administrador de sistema' })
+  }
+  try {
+    const pool = await getPool()
+    const result = await pool
+      .request()
+      .input('id', sql.UniqueIdentifier, req.user.id)
+      .query(`SELECT TOP 1 ISNULL(IsSystem, 0) AS IsSystem, Role, Active FROM dbo.Users WHERE Id=@id`)
+    const row = result.recordset[0]
+    if (!row || !row.Active || Number(row.IsSystem) !== 1 || row.Role !== 'admin') {
+      return res.status(403).json({ error: 'Solo administrador de sistema' })
+    }
+    next()
+  } catch (error) {
+    res.status(500).json({ error: (error as Error).message })
+  }
+}
+
 export const authRouter = Router()
 
 authRouter.post('/login', async (req, res) => {

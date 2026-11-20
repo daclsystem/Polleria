@@ -1,8 +1,7 @@
-import { createHash, timingSafeEqual } from 'crypto'
+import { createHash, randomInt, timingSafeEqual } from 'crypto'
 import fs from 'node:fs/promises'
 import forge from 'node-forge'
 import { getPool, sql } from '../db.js'
-import { factilizaToken } from './factiliza.js'
 import { certificadoInfo, leerCertificado } from './certificado.js'
 import { comprobanteFilePath, saveComprobanteFile } from './comprobantes.js'
 import { loadIgvRate, round2 } from './money.js'
@@ -12,29 +11,20 @@ import { comprobantePdf } from './sunatPdf.js'
 /** SHA-256 de la clave de activación. La clave en claro no está en el código. */
 const EMISION_KEY_SHA256 = 'e634ecdde274b2d72c43d43346242ced712d4e03edfdcb54e2e2b2d127eced18'
 
-type SunatConfig = {
-  ruc?: string
-  razonSocial?: string
-  direccionFiscal?: string
-  establecimiento?: string
-  usuario?: string
-  clave?: string
-  proveedor?: 'sunat' | 'factiliza'
-  ambiente?: 'beta' | 'produccion'
-  serieboleta?: string
-  seriefactura?: string
-  apiUrl?: string
-  enabled?: boolean
-}
+const CAMPOS_SUNAT = [
+  'ruc', 'razonSocial', 'direccionFiscal', 'establecimiento', 'usuario', 'serieboleta', 'seriefactura',
+] as const
+
+type SunatConfig = Partial<Record<(typeof CAMPOS_SUNAT)[number] | 'clave', string>>
 
 type EmitLine = { descripcion: string; cantidad: number; precio: number }
+type PedidoBeta = { numero: number; total: number; tasa: number }
+export type EmisorBeta = Pick<SunatConfig, 'ruc' | 'razonSocial' | 'direccionFiscal' | 'establecimiento' | 'serieboleta' | 'seriefactura'>
+const PEDIDO_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 export type EmitInput = {
   orderId: string
   tipo: 'boleta' | 'factura'
-  email?: string
-  incluyeIgv?: boolean
-  igvRate?: number
   cliente: { tipDoc: string; num: string; nombre: string; direccion?: string }
   lines: EmitLine[]
 }
@@ -69,6 +59,7 @@ async function readConfig<T>(key: string, tx?: sql.Transaction): Promise<T | nul
     return JSON.parse(String(raw)) as T
   } catch {
     if (key === 'invoices') throw new Error('No se pudo leer el registro de comprobantes.')
+    if (key === 'emision_sin_licencia') throw new Error('No se pudo verificar el cupo de emisión sin licencia.')
     return null
   }
 }
@@ -125,31 +116,65 @@ export async function guardarComprobantes(incoming: Invoice[]) {
   })
 }
 
-export async function emisionActiva() {
-  const data = await readConfig<{ activa?: boolean }>('emision_activa')
+async function emisionActiva(tx?: sql.Transaction) {
+  const data = await readConfig<{ activa?: boolean }>('emision_activa', tx)
   return Boolean(data?.activa)
 }
 
-export async function estadoEmision() {
-  const [activa, config] = await Promise.all([emisionActiva(), readConfig<SunatConfig>('sunat')])
-  const directa = config?.proveedor === 'sunat'
-  if (!directa) return { activa, directa, disponible: activa }
-  const datosCompletos = Boolean(config.usuario && config.clave && config.direccionFiscal && config.ruc && config.razonSocial)
-  const certificado = await certificadoInfo()
-  const disponible = activa && config.enabled === true && config.ambiente === 'produccion' && datosCompletos && certificado.cargado && certificado.tieneClave
-  return { activa, directa, disponible }
+function usoSinLicencia(tx?: sql.Transaction) {
+  return readConfig<{ orderId: string }>('emision_sin_licencia', tx)
 }
 
-/** La primera clave correcta activa para siempre. Una clave distinta no cambia nada. */
-export async function activarEmision(clave: string) {
-  if (await emisionActiva()) return { activa: true }
-  if (!claveValida(clave)) {
-    const err = new Error('La clave no es correcta')
-    ;(err as Error & { status?: number }).status = 400
-    throw err
+export async function estadoEmision() {
+  const [activa, config, uso] = await Promise.all([emisionActiva(), readConfig<SunatConfig>('sunat'), usoSinLicencia()])
+  const certificado = await certificadoInfo()
+  const configurada = Boolean(config && datosEmisorCompletos(config) && certificado.cargado && certificado.tieneClave)
+  const cupoSinLicencia = uso ? 0 : 1
+  return { activa, directa: true, configurada, cupoSinLicencia, disponible: configurada && (activa || cupoSinLicencia === 1) }
+}
+
+export async function configuracionSunat() {
+  const [saved, cert] = await Promise.all([readConfig<SunatConfig>('sunat'), certificadoInfo()])
+  const config = Object.fromEntries(CAMPOS_SUNAT.map((field) => [field, saved?.[field] ?? '']))
+  return {
+    ...config,
+    claveSolGuardada: Boolean(saved?.clave),
+    certificadoCargado: cert.cargado,
+    certificadoNombre: cert.nombre,
   }
-  await writeConfig('emision_activa', { activa: true, activadaAt: new Date().toISOString() })
-  return { activa: true }
+}
+
+async function validarActivacion(licencia: string, config: SunatConfig) {
+  if (!claveValida(licencia)) throw Object.assign(new Error('La licencia de facturación no es válida.'), { status: 400 })
+  if (!datosEmisorCompletos(config)) {
+    throw Object.assign(new Error('Completa los datos del emisor, las series y el usuario y la clave SOL para activar.'), { status: 400 })
+  }
+  const { archivo, clave } = await leerCertificado()
+  pkcs12SigningKeys(archivo, clave)
+}
+
+export async function guardarConfiguracionSunat(incoming: Record<string, unknown>, licencia: string) {
+  return withInvoiceLock(async (tx) => {
+    // Los ajustes existentes y las credenciales de consultas se conservan al guardar los datos de emisión.
+    const config = { ...await readConfig<SunatConfig>('sunat', tx) }
+    for (const field of CAMPOS_SUNAT) {
+      const value = incoming[field]
+      if (typeof value === 'string') config[field] = value.trim()
+    }
+    if (typeof incoming.clave === 'string' && incoming.clave.trim()) config.clave = incoming.clave.trim()
+    const activar = Boolean(licencia.trim()) && !(await emisionActiva(tx))
+    if (activar) await validarActivacion(licencia, config)
+    await writeConfig('sunat', config, tx)
+    if (activar) await writeConfig('emision_activa', { activa: true, activadaAt: new Date().toISOString() }, tx)
+  })
+}
+
+export async function activarEmision(licencia: string) {
+  await withInvoiceLock(async (tx) => {
+    if (await emisionActiva(tx)) return
+    await validarActivacion(licencia, (await readConfig<SunatConfig>('sunat', tx)) || {})
+    await writeConfig('emision_activa', { activa: true, activadaAt: new Date().toISOString() }, tx)
+  })
 }
 
 function fechaLima(date = new Date()) {
@@ -200,15 +225,20 @@ function solesEnLetras(total: number) {
   return `SON ${texto} CON ${cents}/100 SOLES`
 }
 
-function invoiceBase(config: SunatConfig) {
-  const url = String(config.apiUrl || '').trim().replace(/\/$/, '')
-  if (/factiliza\.com\/api\/v1/i.test(url)) return url.replace(/\/invoice\/.*$/, '')
-  return config.ambiente === 'beta' ? 'https://apife-qa.factiliza.com/api/v1' : 'https://api.factiliza.com/api/v1'
-}
-
 function siguienteNumero(invoices: Invoice[], serie: string) {
   const usados = invoices.filter((inv) => inv?.serie?.toUpperCase() === serie.toUpperCase()).map((inv) => Number(inv.numero) || 0)
   return (usados.length ? Math.max(...usados) : 0) + 1
+}
+
+function datosEmisorCompletos(config: SunatConfig) {
+  return /^\d{11}$/.test(String(config.ruc || '').trim()) &&
+    String(config.razonSocial || '').trim().length >= 2 &&
+    String(config.direccionFiscal || '').trim().length >= 5 &&
+    /^\d{4}$/.test(String(config.establecimiento || '0000').trim()) &&
+    /^B[A-Z0-9]{3}$/i.test(String(config.serieboleta || 'B001').trim()) &&
+    /^F[A-Z0-9]{3}$/i.test(String(config.seriefactura || 'F001').trim()) &&
+    /^[a-z0-9_.@-]{1,60}$/i.test(String(config.usuario || '').trim()) &&
+    Boolean(String(config.clave || '').trim())
 }
 
 function datosSunat(tipo: EmitInput['tipo'], config: SunatConfig, total: number, cliente: EmitInput['cliente'], lines: EmitLine[], rate: number) {
@@ -305,8 +335,8 @@ async function recibirSunat(orderId: string, config: SunatConfig) {
 }
 
 async function emitirDirecto(input: EmitInput, config: SunatConfig, tipo: EmitInput['tipo'], lines: EmitLine[], cliente: EmitInput['cliente']) {
-  if (config.ambiente !== 'produccion' || config.enabled !== true) {
-    throw Object.assign(new Error('Habilita la emisión directa en Producción desde Configurar SUNAT.'), { status: 400 })
+  if (!datosEmisorCompletos(config)) {
+    throw Object.assign(new Error('Completa los datos de emisión en Configurar SUNAT.'), { status: 400 })
   }
   const orderId = input.orderId.toLowerCase()
   const ruc = String(config.ruc || '').trim()
@@ -316,6 +346,10 @@ async function emitirDirecto(input: EmitInput, config: SunatConfig, tipo: EmitIn
     const invoices = await readInvoices(tx)
     const existing = invoices.find((item) => item?.orderId?.toLowerCase() === orderId)
     if (existing) return existing
+    const activa = await emisionActiva(tx)
+    if (!activa && await usoSinLicencia(tx)) {
+      throw Object.assign(new Error('Ya se usó la emisión sin licencia. Activa la licencia para emitir otro comprobante.'), { status: 403 })
+    }
     const result = await new sql.Request(tx).input('id', sql.UniqueIdentifier, orderId).query(`
       SELECT Paid, Status, Total FROM dbo.Orders WITH (UPDLOCK, ROWLOCK) WHERE Id = @id
     `)
@@ -339,24 +373,29 @@ async function emitirDirecto(input: EmitInput, config: SunatConfig, tipo: EmitIn
       mensaje: 'En espera de la constancia de SUNAT.',
     }
     await writeConfig('invoices', [reserved, ...invoices], tx)
+    if (!activa) await writeConfig('emision_sin_licencia', { orderId, fecha: reserved.fechaEmision }, tx)
     return reserved
   })
   if (invoice.canal === 'sunat' && invoice.status === 'pendiente' && invoice.rucEmisor !== ruc) {
     throw Object.assign(new Error('El envío pendiente corresponde a otro RUC. Revisa la configuración antes de reenviar.'), { status: 409 })
   }
-  return invoice.canal === 'sunat' && invoice.status === 'pendiente' ? recibirSunat(orderId, config) : invoice
+  return invoice.canal === 'sunat' && invoice.status === 'pendiente' ? reintentarSunat(orderId) : invoice
 }
 
 let claveBeta: { privateKey: string; publicCert: string } | undefined
 
-export function comprobantePrueba(tipo: EmitInput['tipo']) {
-  const emisor = { ruc: '20100066603', razonSocial: 'EMISOR DE PRUEBA', direccionFiscal: 'LIMA, PERÚ' }
+export function comprobantePrueba(tipo: EmitInput['tipo'], pedido?: PedidoBeta, emisorGuardado?: EmisorBeta) {
+  const emisor = emisorGuardado
+    ? { ...emisorGuardado, direccionFiscal: emisorGuardado.direccionFiscal?.trim() || 'DOMICILIO FISCAL PENDIENTE' }
+    : { ruc: '20100066603', razonSocial: 'EMISOR DE PRUEBA', direccionFiscal: 'LIMA, PERÚ' }
   const cliente = tipo === 'factura'
     ? { tipDoc: '6', num: '20600000005', nombre: 'CLIENTE DE PRUEBA' }
     : { tipDoc: '0', num: '', nombre: '' }
-  const detalle = [{ descripcion: 'Consumo de prueba', cantidad: 2, precio: 10 }]
-  const data = datosSunat(tipo, emisor, 20, cliente, detalle, 0.18)
-  const document = { ...data, numero: 1, fecha: fechaLima() }
+  const detalle = pedido
+    ? [{ descripcion: 'Consumo de prueba', cantidad: 1, precio: pedido.total }]
+    : [{ descripcion: 'Consumo de prueba', cantidad: 2, precio: 10 }]
+  const data = datosSunat(tipo, emisor, pedido?.total ?? 20, cliente, detalle, pedido?.tasa ?? 0.18)
+  const document = { ...data, numero: pedido || emisorGuardado ? randomInt(10_000_000, 100_000_000) : 1, fecha: fechaLima() }
   if (!claveBeta) {
     const keys = forge.pki.rsa.generateKeyPair(2048)
     const certificate = forge.pki.createCertificate()
@@ -372,32 +411,54 @@ export function comprobantePrueba(tipo: EmitInput['tipo']) {
   return { document, ...signedInvoice(document, claveBeta) }
 }
 
-export async function probarSunat(tipo: EmitInput['tipo']) {
-  const { document, xml } = comprobantePrueba(tipo)
+export async function pedidoParaBeta(orderId: string): Promise<PedidoBeta> {
+  if (!PEDIDO_ID.test(orderId)) throw Object.assign(new Error('Pedido inválido.'), { status: 400 })
+  const pool = await getPool()
+  const result = await pool.request().input('id', sql.UniqueIdentifier, orderId).query(`
+    SELECT [Number], Paid, Status, Total FROM dbo.Orders WHERE Id = @id
+  `)
+  const order = result.recordset[0]
+  if (!order?.Paid || /^(cancelad[oa]|eliminad[oa]|anulad[oa])$/i.test(order.Status) || !(Number(order.Total) > 0)) {
+    throw Object.assign(new Error('Selecciona un pedido pagado y vigente para la prueba.'), { status: 400 })
+  }
+  return { numero: Number(order.Number), total: Number(order.Total), tasa: await loadIgvRate() }
+}
+
+export async function probarSunat(tipo: EmitInput['tipo'], pedido?: PedidoBeta, emisor?: EmisorBeta) {
+  const { document, xml, digest } = comprobantePrueba(tipo, pedido, emisor)
   const nombre = [document.ruc, document.tipo, document.serie, document.numero].join('-')
-  const { code, message } = await sendBill('beta', { ruc: document.ruc, usuario: 'MODDATOS', clave: 'moddatos' }, nombre, xml)
-  return { codigo: code, mensaje: message }
+  const pdf = await comprobantePdf(document, digest, { pedidoNumero: pedido?.numero })
+  const prueba = {
+    tipo, nombre, referencia: `${document.serie}-${document.numero}`, fecha: new Date().toISOString(),
+    pedidoNumero: pedido?.numero, total: document.total,
+    pdf: pdf.toString('base64'), xml: xml.toString('base64'),
+  }
+  try {
+    const { code, message, zip } = await sendBill('beta', { ruc: document.ruc, usuario: 'MODDATOS', clave: 'moddatos' }, nombre, xml)
+    return { ...prueba, codigo: code, mensaje: message, cdr: zip.toString('base64') }
+  } catch (error) {
+    return { ...prueba, codigo: null, mensaje: (error as Error).message }
+  }
 }
 
 export async function reintentarSunat(orderId: string) {
-  const [activa, config] = await Promise.all([emisionActiva(), readConfig<SunatConfig>('sunat')])
-  if (!activa || config?.proveedor !== 'sunat' || config.ambiente !== 'produccion' || config.enabled !== true) {
-    throw Object.assign(new Error('Activa y habilita SUNAT directo en Producción para continuar el envío.'), { status: 400 })
-  }
-  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(orderId)) {
+  if (!PEDIDO_ID.test(orderId)) {
     throw Object.assign(new Error('Pedido inválido.'), { status: 400 })
   }
-  return recibirSunat(orderId.toLowerCase(), config)
+  const id = orderId.toLowerCase()
+  const [activa, uso, config] = await Promise.all([emisionActiva(), usoSinLicencia(), readConfig<SunatConfig>('sunat')])
+  if (!config || !datosEmisorCompletos(config)) {
+    throw Object.assign(new Error('Completa Configurar SUNAT para continuar el envío.'), { status: 400 })
+  }
+  if (!activa && uso?.orderId !== id) {
+    throw Object.assign(new Error('Activa la licencia para reenviar este comprobante.'), { status: 403 })
+  }
+  return recibirSunat(id, config)
 }
 
 export async function emitirComprobante(input: EmitInput) {
-  if (!(await emisionActiva())) {
-    const err = new Error('La emisión no está activada')
-    ;(err as Error & { status?: number }).status = 403
-    throw err
-  }
   const orderId = String(input.orderId || '')
-  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(orderId)) {
+  if (!PEDIDO_ID.test(orderId)) {
     throw Object.assign(new Error('Pedido inválido'), { status: 400 })
   }
   const tipo = input.tipo === 'factura' ? 'factura' : 'boleta'
@@ -408,148 +469,5 @@ export async function emitirComprobante(input: EmitInput) {
     throw Object.assign(new Error('La factura exige RUC y razón social'), { status: 400 })
   }
   const config = (await readConfig<SunatConfig>('sunat')) || {}
-  const ruc = String(config.ruc || '').replace(/\D/g, '')
-  if (ruc.length !== 11) throw Object.assign(new Error('Falta el RUC del emisor en la configuración'), { status: 400 })
-  if (config.proveedor === 'sunat') return { invoice: await emitirDirecto(input, config, tipo, lines, cliente) }
-  return withInvoiceLock((tx) => emitirFactiliza(tx, input, config, orderId, tipo, lines, cliente, ruc))
-}
-
-async function emitirFactiliza(
-  tx: sql.Transaction,
-  input: EmitInput,
-  config: SunatConfig,
-  orderId: string,
-  tipo: EmitInput['tipo'],
-  lines: EmitLine[],
-  cliente: EmitInput['cliente'],
-  ruc: string,
-) {
-  const invoices = await readInvoices(tx)
-  const directo = invoices.find((item) => item?.canal === 'sunat' && item.orderId.toLowerCase() === orderId.toLowerCase())
-  if (directo) {
-    if (directo.status !== 'pendiente') return { invoice: directo }
-    throw Object.assign(new Error('Ya hay un comprobante SUNAT pendiente para este pedido.'), { status: 409 })
-  }
-  const token = await factilizaToken()
-  if (!token) throw Object.assign(new Error('Falta el token de Factiliza'), { status: 400 })
-
-  const rate = input.igvRate && input.igvRate > 0 ? input.igvRate : 0.18
-  const pct = round2(rate * 100)
-  const detalle = lines.map((line, index) => {
-    const cantidad = Number(line.cantidad)
-    const precio = round2(Number(line.precio))
-    const bruto = round2(cantidad * precio)
-    const base = round2(bruto / (1 + rate))
-    const igv = round2(bruto - base)
-    const valorUnit = round2(base / cantidad)
-    return {
-      unidad: 'NIU',
-      cantidad,
-      cod_Producto: `P${index + 1}`,
-      descripcion: line.descripcion.trim().slice(0, 500),
-      monto_Valor_Unitario: valorUnit,
-      monto_Base_Igv: base,
-      porcentaje_Igv: pct,
-      igv,
-      tip_Afe_Igv: '10',
-      total_Impuestos: igv,
-      monto_Precio_Unitario: precio,
-      monto_Valor_Venta: base,
-      factor_Icbper: 0,
-    }
-  })
-  const gravada = round2(detalle.reduce((sum, line) => sum + line.monto_Base_Igv, 0))
-  const igv = round2(detalle.reduce((sum, line) => sum + line.igv, 0))
-  const total = round2(gravada + igv)
-  const serie = (tipo === 'factura' ? config.seriefactura : config.serieboleta || 'B001') || (tipo === 'factura' ? 'F001' : 'B001')
-  const numero = siguienteNumero(invoices, serie)
-  const fecha = fechaLima()
-  const payload = {
-    tipo_Operacion: '0101',
-    tipo_Doc: tipo === 'factura' ? '01' : '03',
-    serie,
-    correlativo: String(numero),
-    tipo_Moneda: 'PEN',
-    fecha_Emision: fecha,
-    empresa_Ruc: ruc,
-    cliente_Tipo_Doc: tipo === 'factura' ? '6' : '0',
-    cliente_Num_Doc: tipo === 'factura' ? cliente.num : '00000000',
-    cliente_Razon_Social: tipo === 'factura' ? cliente.nombre.trim() : 'CLIENTES VARIOS',
-    cliente_Direccion: (cliente.direccion || '-').trim() || '-',
-    monto_Oper_Gravadas: gravada,
-    monto_Oper_Exoneradas: 0,
-    monto_Igv: igv,
-    total_Impuestos: igv,
-    valor_Venta: gravada,
-    sub_Total: total,
-    monto_Imp_Venta: total,
-    estado_Documento: '0',
-    manual: false,
-    id_Base_Dato: orderId,
-    detalle,
-    forma_pago: [{ tipo: 'Contado', monto: total, cuota: 0, fecha_Pago: fecha }],
-    legend: [{ legend_Code: '1000', legend_Value: solesEnLetras(total) }],
-  }
-
-  const base = invoiceBase(config)
-  const res = await fetch(`${base}/invoice/send`, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${token}`, Accept: 'application/json', 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-    signal: AbortSignal.timeout(60000),
-  })
-  const body = (await res.json().catch(() => null)) as {
-    success?: boolean
-    message?: string
-    data?: { hash?: string; sunatResponse?: { success?: boolean; cdrZip?: string; cdrResponse?: { code?: string; description?: string } } }
-  } | null
-  if (!res.ok || body?.success === false) {
-    throw Object.assign(new Error(body?.message || `Factiliza respondió ${res.status}`), { status: 502 })
-  }
-  const code = String(body?.data?.sunatResponse?.cdrResponse?.code ?? '')
-  const aceptada = body?.data?.sunatResponse?.success !== false && (code === '' || code === '0')
-  const invoice: Invoice = {
-    orderId,
-    tipo,
-    serie,
-    numero,
-    status: aceptada ? 'aceptada' : 'rechazada',
-    fechaEmision: new Date().toISOString(),
-    hashCdr: body?.data?.hash,
-    mensaje: body?.data?.sunatResponse?.cdrResponse?.description || body?.message,
-    clienteDoc: payload.cliente_Num_Doc,
-    clienteNombre: payload.cliente_Razon_Social,
-  }
-  await writeConfig('invoices', [invoice, ...invoices], tx)
-  const zip = body?.data?.sunatResponse?.cdrZip
-  if (zip) {
-    try {
-      await saveComprobanteFile(orderId, 'cdr', Buffer.from(zip, 'base64'))
-    } catch {
-      /* el CDR igual se puede volver a pedir */
-    }
-  }
-  const fileBody = { empresa_Ruc: ruc, tipo_Doc: payload.tipo_Doc, serie, correlativo: String(numero) }
-  for (const kind of ['pdf', 'xml', 'cdr'] as const) {
-    try {
-      const fileRes = await fetch(`${base}/invoice/${kind}`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${token}`, Accept: '*/*', 'Content-Type': 'application/json' },
-        body: JSON.stringify(fileBody),
-        signal: AbortSignal.timeout(60000),
-      })
-      if (!fileRes.ok) continue
-      const buf = Buffer.from(await fileRes.arrayBuffer())
-      const contentType = fileRes.headers.get('content-type') || ''
-      if (contentType.includes('json')) {
-        const json = JSON.parse(buf.toString()) as { data?: string }
-        if (typeof json.data === 'string' && json.data) await saveComprobanteFile(orderId, kind, Buffer.from(json.data, 'base64'))
-      } else if (buf.length) {
-        await saveComprobanteFile(orderId, kind, buf)
-      }
-    } catch {
-      /* la lista igual muestra el comprobante y el archivo se reintenta al descargar */
-    }
-  }
-  return { invoice }
+  return { invoice: await emitirDirecto(input, config, tipo, lines, cliente) }
 }

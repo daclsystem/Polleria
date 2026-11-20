@@ -67,7 +67,7 @@ export function CajaCobro({
     }
     let cancel = false
     const timer = setTimeout(() => {
-      setLookupNote('Consultando Factiliza…')
+      setLookupNote('Consultando documento…')
       void apiLookupDoc(kind, digits)
         .then((data) => {
           if (cancel) return

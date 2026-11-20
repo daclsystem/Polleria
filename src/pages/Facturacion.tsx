@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react'
-import { AlertCircle, CheckCircle2, FileText, Key, Plus, RefreshCw, Send, Settings2, Trash2 } from 'lucide-react'
+import { useEffect, useId, useRef, useState } from 'react'
+import { AlertCircle, CheckCircle2, Eye, EyeOff, FileText, Key, Plus, RefreshCw, Send, Settings2, Trash2 } from 'lucide-react'
 import { useStore } from '../store/StoreContext'
 import { useAuth } from '../auth/AuthContext'
 import { formatDateTime, padOrder, round2, soles } from '../lib/format'
@@ -11,12 +11,16 @@ import {
   apiDownloadComprobante,
   apiEmitComprobante,
   apiEmisionEstado,
+  apiGetClaveSol,
   apiGetInvoices,
+  apiGetPruebasSunat,
   apiGetSunatConfig,
   apiProbarSunat,
   apiReintentarComprobante,
   apiSaveSunatConfig,
   apiUploadCertificado,
+  type EstadoEmision,
+  type PruebaSunat,
 } from '../lib/apiClient'
 
 interface SunatConfig {
@@ -24,20 +28,13 @@ interface SunatConfig {
   razonSocial: string
   usuario: string
   clave: string
-  proveedor: 'factiliza' | 'sunat'
   direccionFiscal: string
   establecimiento: string
-  ambiente: 'beta' | 'produccion'
   serieboleta: string
   seriefactura: string
-  apiUrl: string
-  factilizaToken: string
-  enabled: boolean
   certificadoCargado?: boolean
   certificadoNombre?: string
-  certificadoClave?: boolean
   claveSolGuardada?: boolean
-  factilizaTokenGuardado?: boolean
 }
 
 const DEFAULT_SUNAT: SunatConfig = {
@@ -45,15 +42,10 @@ const DEFAULT_SUNAT: SunatConfig = {
   razonSocial: '',
   usuario: '',
   clave: '',
-  proveedor: 'factiliza',
   direccionFiscal: '',
   establecimiento: '0000',
-  ambiente: 'beta',
   serieboleta: 'B001',
   seriefactura: 'F001',
-  apiUrl: 'https://api.factiliza.com/v1',
-  factilizaToken: '',
-  enabled: false,
 }
 
 type InvoiceStatus = 'pendiente' | 'enviada' | 'aceptada' | 'rechazada'
@@ -73,11 +65,27 @@ interface Invoice {
 }
 
 const CLIENTE_GENERICO = { tipDoc: '0', num: '00000000', nombre: 'CLIENTES VARIOS' }
-const CORREO_LOCAL = 'comprobante@chifapollerialopez.com'
+function configuracionGuardada(value: unknown): SunatConfig {
+  if (!value || typeof value !== 'object') return DEFAULT_SUNAT
+  const config = value as Partial<SunatConfig>
+  return {
+    ruc: config.ruc ?? '',
+    razonSocial: config.razonSocial ?? '',
+    usuario: config.usuario ?? '',
+    clave: '',
+    direccionFiscal: config.direccionFiscal ?? '',
+    establecimiento: config.establecimiento || DEFAULT_SUNAT.establecimiento,
+    serieboleta: config.serieboleta || DEFAULT_SUNAT.serieboleta,
+    seriefactura: config.seriefactura || DEFAULT_SUNAT.seriefactura,
+    certificadoCargado: config.certificadoCargado,
+    certificadoNombre: config.certificadoNombre,
+    claveSolGuardada: config.claveSolGuardada,
+  }
+}
 
 type DetalleLine = { descripcion: string; cantidad: number; precio: number }
 
-function clienteComprobante(order: Order, tipo: 'boleta' | 'factura', directa = false) {
+function clienteComprobante(order: Order, tipo: 'boleta' | 'factura') {
   if (tipo === 'factura') {
     const num = (order.docNumero || '').replace(/\D/g, '')
     const nombre = (order.docNombre || '').trim()
@@ -85,25 +93,24 @@ function clienteComprobante(order: Order, tipo: 'boleta' | 'factura', directa = 
       tipDoc: '6',
       num,
       nombre,
-      email: order.docEmail,
       ok: num.length === 11 && nombre.length >= 2,
     }
   }
-  if (directa && order.docTipo === 'boleta_dni') {
+  if (order.docTipo === 'boleta_dni') {
     const num = (order.docNumero || '').replace(/\D/g, '')
     const nombre = (order.docNombre || order.customerName || '').trim()
-    return { tipDoc: '1', num, nombre, email: order.docEmail, ok: num.length === 8 && nombre.length >= 2 }
+    return { tipDoc: '1', num, nombre, ok: num.length === 8 && nombre.length >= 2 }
   }
-  return { ...CLIENTE_GENERICO, email: order.docEmail, ok: !directa || order.total <= 700 }
+  return { ...CLIENTE_GENERICO, ok: order.total <= 700 }
 }
 
-function detalleDe(order: Order, directa: boolean): DetalleLine[] {
+function detalleDe(order: Order): DetalleLine[] {
   const lines = order.items
     .filter((item) => item.qty > 0)
     .map((item) => ({ descripcion: item.name, cantidad: item.qty, precio: item.price }))
   if (!lines.length) return [{ descripcion: 'Consumo', cantidad: 1, precio: order.total }]
   const bruto = totalDetalle(lines)
-  if (!directa || !order.discount || bruto <= 0 || round2(bruto - order.discount) !== order.total) return lines
+  if (!order.discount || bruto <= 0 || round2(bruto - order.discount) !== order.total) return lines
   let remaining = order.total
   return lines.map((line, index) => {
     const importe = index === lines.length - 1
@@ -124,6 +131,108 @@ function separarIgv(total: number, rate: number) {
   return { base, igv: round2(total - base), total: round2(total) }
 }
 
+function CampoClaveSol({ clave, guardada, puedeVerGuardada, onChange }: {
+  clave: string
+  guardada: boolean
+  puedeVerGuardada: boolean
+  onChange: (clave: string) => void
+}) {
+  const id = useId()
+  const solicitud = useRef<AbortController | null>(null)
+  const [visible, setVisible] = useState(false)
+  const [claveGuardada, setClaveGuardada] = useState<string | null>(null)
+  const [consultando, setConsultando] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const puedeMostrar = Boolean(clave) || (guardada && puedeVerGuardada)
+  const mostrarGuardada = puedeVerGuardada && claveGuardada !== null
+  const mostrar = visible && (Boolean(clave) || mostrarGuardada)
+
+  useEffect(() => () => solicitud.current?.abort(), [])
+
+  async function alternarVisibilidad() {
+    setError(null)
+    if (mostrar) {
+      setVisible(false)
+      setClaveGuardada(null)
+      return
+    }
+    if (clave) {
+      setVisible(true)
+      return
+    }
+    if (!puedeMostrar || consultando) return
+
+    const controller = new AbortController()
+    solicitud.current = controller
+    setConsultando(true)
+    try {
+      const response = await apiGetClaveSol(controller.signal)
+      if (controller.signal.aborted) return
+      setClaveGuardada(response.clave)
+      setVisible(true)
+    } catch (e) {
+      if (!controller.signal.aborted) setError((e as Error).message)
+    } finally {
+      if (!controller.signal.aborted) setConsultando(false)
+    }
+  }
+
+  const accion = consultando ? 'Consultando clave SOL' : mostrar ? 'Ocultar clave SOL' : 'Mostrar clave SOL'
+  return (
+    <div className="min-w-0 space-y-1.5">
+      <label htmlFor={id} className="block text-[11px] font-bold tracking-[0.14em] text-ink/40 uppercase">Clave SOL</label>
+      <div className="relative">
+        <input id={id} className={`${inputClass} placeholder:text-ink/60 ${puedeMostrar ? 'pr-14' : ''}`}
+          type={mostrar ? 'text' : 'password'} value={mostrarGuardada ? claveGuardada : clave} readOnly={consultando || mostrarGuardada}
+          autoComplete="new-password" autoCapitalize="none" spellCheck={false}
+          placeholder={guardada ? '••••••••' : undefined} aria-describedby={error ? `${id}-error` : undefined}
+          onChange={(event) => {
+            onChange(event.target.value)
+            setError(null)
+            if (!event.target.value) setVisible(false)
+          }} />
+        {puedeMostrar ? (
+          <button type="button" aria-controls={id} aria-label={accion} title={accion} disabled={consultando}
+            onClick={() => void alternarVisibilidad()}
+            className="absolute inset-y-0 right-0.5 my-auto grid size-11 place-items-center rounded-xl text-ink/65 hover:bg-ink/8 hover:text-ink focus-visible:outline-2 focus-visible:outline-gold disabled:opacity-60">
+            {consultando ? <RefreshCw size={17} className="motion-safe:animate-spin" aria-hidden /> : mostrar ? <EyeOff size={17} aria-hidden /> : <Eye size={17} aria-hidden />}
+          </button>
+        ) : null}
+      </div>
+      {error ? <p id={`${id}-error`} role="status" className="text-xs text-ink/80">{error}</p> : null}
+    </div>
+  )
+}
+
+function ArchivosPruebaSunat({ prueba }: { prueba: PruebaSunat }) {
+  const archivos = [
+    { label: 'PDF', nombre: `beta-${prueba.nombre}.pdf`, mime: 'application/pdf', datos: prueba.pdf },
+    { label: 'XML', nombre: `beta-${prueba.nombre}.xml`, mime: 'application/xml', datos: prueba.xml },
+    { label: 'CDR', nombre: `beta-R-${prueba.nombre}.zip`, mime: 'application/zip', datos: prueba.cdr },
+  ]
+  return (
+    <li className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 px-3 py-2.5">
+      <div className="min-w-0 flex-1 basis-48">
+        <p className="text-sm font-semibold"><span className="capitalize">{prueba.tipo}</span> {prueba.referencia}</p>
+        <p className="text-xs break-words text-ink/75">
+          {prueba.pedidoNumero ? `${padOrder(prueba.pedidoNumero)} · ${soles(prueba.total ?? 0)} · ` : ''}
+          {formatDateTime(prueba.fecha)} · {prueba.codigo === '0' ? 'Aceptada en Beta' : prueba.codigo ? `Código ${prueba.codigo}` : 'Sin constancia de Beta'}
+        </p>
+        {prueba.mensaje ? <p className="mt-1 text-xs break-words text-ink/75">{prueba.mensaje}</p> : null}
+      </div>
+      <div className="flex flex-wrap gap-1.5">
+        {archivos.map(({ label, nombre, mime, datos }) => datos ? (
+          <a key={label} href={`data:${mime};base64,${datos}`} download={nombre}
+            aria-label={`Descargar ${label} de ${prueba.tipo} Beta`}
+            className="inline-flex min-h-11 items-center rounded-lg border border-ink/15 px-3 text-xs font-semibold hover:bg-ink/8 focus-visible:outline-2 focus-visible:outline-gold">
+            {label}
+          </a>
+        ) : null)}
+      </div>
+    </li>
+  )
+}
+
 export function Facturacion() {
   const { state } = useStore()
   const { user } = useAuth()
@@ -137,14 +246,14 @@ export function Facturacion() {
   const [queueAt, setQueueAt] = useState(0)
   const [picked, setPicked] = useState<string[]>([])
   const [emitType, setEmitType] = useState<'boleta' | 'factura'>('boleta')
-  const [incluyeIgv, setIncluyeIgv] = useState(false)
-  const [email, setEmail] = useState('')
   const [lines, setLines] = useState<DetalleLine[]>([])
   const [sending, setSending] = useState(false)
   const [lastResult, setLastResult] = useState<string | null>(null)
   const [configResult, setConfigResult] = useState<string | null>(null)
   const [savingConfig, setSavingConfig] = useState(false)
   const [testing, setTesting] = useState<'boleta' | 'factura' | null>(null)
+  const [betaDisponible, setBetaDisponible] = useState(false)
+  const [pruebas, setPruebas] = useState<Partial<Record<PruebaSunat['tipo'], PruebaSunat>>>({})
   const [retrying, setRetrying] = useState<string | null>(null)
   const [files, setFiles] = useState<Record<string, { pdf: boolean; xml: boolean; cdr: boolean }>>({})
   const [vista, setVista] = useState<'pendientes' | 'emitidos'>('pendientes')
@@ -155,18 +264,22 @@ export function Facturacion() {
   const [certClave, setCertClave] = useState('')
   const [certMsg, setCertMsg] = useState<string | null>(null)
   const [certSending, setCertSending] = useState(false)
-  const [emisionActiva, setEmisionActiva] = useState<boolean | null>(null)
-  const [disponible, setDisponible] = useState(false)
-  const [directa, setDirecta] = useState(false)
-  const [canalDirectoDisponible, setCanalDirectoDisponible] = useState(false)
-  const [clave, setClave] = useState('')
-  const [claveError, setClaveError] = useState<string | null>(null)
-  const [activando, setActivando] = useState(false)
+  const [emision, setEmision] = useState<EstadoEmision | null>(null)
+  const [licencia, setLicencia] = useState('')
+  const compatible = typeof emision?.configurada === 'boolean'
+  const disponible = compatible && emision?.disponible === true
+  const primeraEmision = disponible && !emision?.activa && emision?.cupoSinLicencia === 1
+  const emisionMasiva = disponible && emision?.activa === true
+  const faltaLicencia = compatible && !emision?.activa && emision?.cupoSinLicencia === 0
 
   useEffect(() => {
     if (admin) void apiGetSunatConfig()
-      .then((r) => {
-        if (r.config && typeof r.config === 'object') setSavedConfig({ ...DEFAULT_SUNAT, ...(r.config as SunatConfig), clave: '', factilizaToken: '' })
+      .then((r) => setSavedConfig(configuracionGuardada(r.config)))
+      .catch(() => undefined)
+    if (admin) void apiGetPruebasSunat()
+      .then(({ pruebas }) => {
+        setPruebas((prev) => ({ ...Object.fromEntries(pruebas.map((prueba) => [prueba.tipo, prueba])), ...prev }))
+        setBetaDisponible(true)
       })
       .catch(() => undefined)
     void apiGetInvoices()
@@ -176,13 +289,8 @@ export function Facturacion() {
       .then((r) => setFiles(r.files || {}))
       .catch(() => undefined)
     void apiEmisionEstado()
-      .then((r) => {
-        setEmisionActiva(Boolean(r.activa))
-        setDirecta(Boolean(r.directa))
-        setCanalDirectoDisponible(typeof r.directa === 'boolean')
-        setDisponible(r.disponible ?? Boolean(r.activa))
-      })
-      .catch(() => setEmisionActiva(null))
+      .then(setEmision)
+      .catch(() => setEmision(null))
   }, [admin])
 
   const paidOrders = state.orders.filter((o) => o.paid && !isVoidOrder(o.status))
@@ -202,10 +310,9 @@ export function Facturacion() {
   }
 
   const abrirConfig = () => {
-    setConfig({ ...savedConfig, clave: '', factilizaToken: '' })
+    setConfig({ ...savedConfig, clave: '' })
     setConfigResult(null)
-    setClaveError(null)
-    setClave('')
+    setLicencia('')
     setCertFile(null)
     setCertClave('')
     setCertMsg(null)
@@ -213,23 +320,22 @@ export function Facturacion() {
   }
 
   const handleSaveConfig = async () => {
-    if (config.proveedor === 'sunat' && !canalDirectoDisponible) return
+    if (!compatible || (!admin && !licencia.trim())) return
     setSavingConfig(true)
     setConfigResult(null)
     try {
-      await apiSaveSunatConfig(config)
-      setSavedConfig({
-        ...config, clave: '', factilizaToken: '',
-        claveSolGuardada: config.claveSolGuardada || Boolean(config.clave.trim()),
-        factilizaTokenGuardado: config.factilizaTokenGuardado || Boolean(config.factilizaToken.trim()),
-      })
-      const status = await apiEmisionEstado()
-      setEmisionActiva(Boolean(status.activa))
-      setDirecta(Boolean(status.directa))
-      setCanalDirectoDisponible(typeof status.directa === 'boolean')
-      setDisponible(status.disponible ?? Boolean(status.activa))
+      let resultado: EstadoEmision
+      if (admin) {
+        const response = await apiSaveSunatConfig(config, licencia.trim())
+        setSavedConfig(configuracionGuardada(response.config))
+        resultado = response.estado
+      } else {
+        resultado = await apiActivarEmision(licencia.trim())
+      }
+      setEmision(resultado)
+      setLicencia('')
       setConfigOpen(false)
-      setLastResult('Configuración SUNAT guardada.')
+      setLastResult(licencia.trim() && resultado.disponible ? 'Emisión activada.' : 'Configuración SUNAT guardada.')
     } catch (e) {
       setConfigResult((e as Error).message)
     } finally {
@@ -237,14 +343,16 @@ export function Facturacion() {
     }
   }
 
-  const probar = async (tipo: 'boleta' | 'factura') => {
+  const probar = async (tipo: 'boleta' | 'factura', orderId?: string) => {
     setTesting(tipo)
     setConfigResult(null)
+    if (orderId) setLastResult(null)
     try {
-      const test = await apiProbarSunat(tipo)
-      setConfigResult(`SUNAT Beta · ${tipo} · código ${test.codigo}${test.mensaje ? ' · ' + test.mensaje : ''}`)
+      const test = await apiProbarSunat(tipo, orderId)
+      setPruebas((prev) => ({ ...prev, [tipo]: test }))
     } catch (e) {
-      setConfigResult((e as Error).message)
+      if (orderId) setLastResult((e as Error).message)
+      else setConfigResult((e as Error).message)
     } finally {
       setTesting(null)
     }
@@ -267,9 +375,9 @@ export function Facturacion() {
         ...prev,
         certificadoCargado: info.cargado,
         certificadoNombre: info.nombre,
-        certificadoClave: info.tieneClave,
       }))
-      setSavedConfig((prev) => ({ ...prev, certificadoCargado: info.cargado, certificadoNombre: info.nombre, certificadoClave: info.tieneClave }))
+      setSavedConfig((prev) => ({ ...prev, certificadoCargado: info.cargado, certificadoNombre: info.nombre }))
+      void apiEmisionEstado().then(setEmision).catch(() => undefined)
       setCertFile(null)
       setCertClave('')
       setCertMsg(`Certificado guardado: ${info.nombre}`)
@@ -286,14 +394,12 @@ export function Facturacion() {
   const cargarPedido = (order: Order) => {
     const tipo = order.docTipo === 'factura' ? 'factura' : 'boleta'
     setEmitType(tipo)
-    setIncluyeIgv(directa || tipo === 'factura')
-    setEmail(order.docEmail || '')
-    setLines(detalleDe(order, directa))
+    setLines(detalleDe(order))
   }
 
   const abrirCola = (orders: Order[]) => {
     if (!orders.length) return
-    setQueue(orders)
+    setQueue(emisionMasiva ? orders : orders.slice(0, 1))
     setQueueAt(0)
     cargarPedido(orders[0])
     setEmitOpen(true)
@@ -306,14 +412,9 @@ export function Facturacion() {
     cargarPedido(order)
   }
 
-  const elegirTipo = (tipo: 'boleta' | 'factura') => {
-    setEmitType(tipo)
-    setIncluyeIgv(directa || tipo === 'factura')
-  }
-
   const handleEmit = async () => {
     if (!selectedOrder) return
-    const cliente = clienteComprobante(selectedOrder, emitType, directa)
+    const cliente = clienteComprobante(selectedOrder, emitType)
     if (!cliente.ok) {
       setLastResult('Completa el documento y el nombre del cliente en el pedido.')
       return
@@ -332,9 +433,6 @@ export function Facturacion() {
       const result = await apiEmitComprobante({
         orderId: selectedOrder.id,
         tipo: emitType,
-        email: email.trim(),
-        incluyeIgv,
-        igvRate,
         cliente: {
           tipDoc: cliente.tipDoc,
           num: cliente.num,
@@ -350,7 +448,7 @@ export function Facturacion() {
       void apiComprobanteFiles().then((r) => setFiles(r.files || {})).catch(() => undefined)
       const numero = String(result.invoice.numero).padStart(8, '0')
       setLastResult(`${result.invoice.tipo} ${result.invoice.serie}-${numero} · ${result.invoice.status}${result.invoice.mensaje ? ' · ' + result.invoice.mensaje : ''}`)
-      if (result.invoice.status === 'aceptada' && queueAt < queue.length - 1) irA(queueAt + 1)
+      if (!primeraEmision && result.invoice.status === 'aceptada' && queueAt < queue.length - 1) irA(queueAt + 1)
       else {
         setEmitOpen(false)
         setVista('emitidos')
@@ -359,6 +457,7 @@ export function Facturacion() {
       setLastResult((e as Error).message || 'No se pudo emitir')
     } finally {
       setSending(false)
+      void apiEmisionEstado().then(setEmision).catch(() => undefined)
     }
   }
 
@@ -377,37 +476,13 @@ export function Facturacion() {
     }
   }
 
-  const activar = async () => {
-    if (!clave.trim()) {
-      setClaveError('Escribe la clave')
-      return
-    }
-    setActivando(true)
-    setClaveError(null)
-    try {
-      const r = await apiActivarEmision(clave)
-      if (!r.activa) {
-        setClaveError('La clave no es correcta')
-        return
-      }
-      setEmisionActiva(true)
-      setDisponible(r.disponible ?? true)
-      setClave('')
-      setLastResult('Emisión activada.')
-    } catch (e) {
-      setClaveError((e as Error).message || 'La clave no es correcta')
-    } finally {
-      setActivando(false)
-    }
-  }
-
   const statusIcon = (s: InvoiceStatus) => {
     if (s === 'aceptada') return <CheckCircle2 size={14} className="text-green-600" />
     if (s === 'rechazada') return <AlertCircle size={14} className="text-red-600" />
     return <RefreshCw size={14} className="text-amber-600" />
   }
 
-  const estado = emisionActiva === null ? 'Estado sin confirmar' : disponible ? 'Emisión activa' : 'Emisión inactiva'
+  const estado = !compatible ? 'Estado sin confirmar' : primeraEmision ? '1 comprobante disponible' : disponible ? 'Emisión activa' : faltaLicencia ? 'Primera emisión utilizada' : 'Configuración pendiente'
   const metrics = [
     { label: 'Por facturar', value: pendingOrders.length, action: () => setVista('pendientes'), selected: vista === 'pendientes' },
     { label: 'Boletas', value: invoices.filter((i) => i.tipo === 'boleta').length, action: () => verEmitidos('boleta'), selected: vista === 'emitidos' && filtroTipo === 'boleta' },
@@ -427,7 +502,7 @@ export function Facturacion() {
             </span>
             {admin && savedConfig.ruc ? (
               <>
-                <span>{directa ? 'SUNAT directo' : 'Factiliza'} · {savedConfig.ambiente === 'produccion' ? 'Producción' : 'Beta'}</span>
+                <span>SUNAT directo</span>
                 <span className="tabular-nums">RUC {savedConfig.ruc}</span>
               </>
             ) : null}
@@ -484,11 +559,11 @@ export function Facturacion() {
             <h2 className="text-sm font-semibold text-ink/75">Pedidos pagados sin comprobante</h2>
             <button
               type="button"
-              disabled={!picked.length}
+              disabled={!emisionMasiva || !picked.length}
               onClick={() => abrirCola(pendingOrders.filter((o) => picked.includes(o.id)))}
               className="flex min-h-9 items-center gap-1 rounded-xl bg-ember px-3 text-xs font-semibold text-white disabled:opacity-40"
             >
-              <Send size={12} /> Revisar {picked.length || ''} seleccionados
+              <Send size={12} /> {emisionMasiva ? `Revisar ${picked.length || ''} seleccionados` : 'Emisión masiva con licencia'}
             </button>
           </div>
           {pendingOrders.length === 0 ? (
@@ -501,6 +576,7 @@ export function Facturacion() {
                     <input
                       type="checkbox"
                       className="h-4 w-4 rounded"
+                      disabled={!emisionMasiva}
                       checked={picked.includes(o.id)}
                       onChange={(e) => setPicked((prev) => e.target.checked ? [...prev, o.id] : prev.filter((id) => id !== o.id))}
                     />
@@ -508,7 +584,7 @@ export function Facturacion() {
                     <div className="min-w-0">
                       <p className="truncate text-sm font-semibold">{padOrder(o.number)} · {o.customerName}</p>
                       <p className="text-xs leading-relaxed text-ink/70">
-                        {formatDateTime(o.createdAt)} · {o.paymentMethod} · {o.docTipo === 'factura' ? 'Factura' : o.docTipo === 'boleta_dni' && directa ? 'Boleta con DNI' : 'Boleta'}
+                        {formatDateTime(o.createdAt)} · {o.paymentMethod} · {o.docTipo === 'factura' ? 'Factura' : o.docTipo === 'boleta_dni' ? 'Boleta con DNI' : 'Boleta'}
                       </p>
                     </div>
                   </label>
@@ -554,6 +630,10 @@ export function Facturacion() {
             <div className="mt-3 divide-y divide-ink/10 overflow-hidden rounded-xl border border-ink/12 bg-surface">
               {emitidos.map((inv) => {
                 const order = state.orders.find((o) => o.id === inv.orderId)
+                const prueba = order && pruebas[inv.tipo]?.pedidoNumero === order.number ? pruebas[inv.tipo] : undefined
+                const motivo = inv.mensaje?.trim() === 'Failed to fetch'
+                  ? 'El envío anterior falló por un error de conexión.'
+                  : inv.mensaje?.replace(/https?:\/\/\S+|\bfactiliza\b/gi, 'servicio anterior')
                 return (
                   <div key={`${inv.orderId}-${inv.serie}-${inv.numero}`} className="flex flex-wrap items-center justify-between gap-3 px-3 py-3 sm:px-4">
                     <div className="min-w-0">
@@ -564,18 +644,27 @@ export function Facturacion() {
                         {order ? `${padOrder(order.number)} · ${order.customerName} · ${soles(order.total)}` : inv.clienteNombre || 'Pedido'}
                         {' · '}{formatDateTime(inv.fechaEmision)}
                       </p>
-                      {inv.canal === 'sunat' && inv.mensaje ? (
-                        <p className="mt-1 max-w-2xl text-xs text-ink/70">{inv.mensaje}</p>
+                      {motivo ? (
+                        <p className="mt-1 max-w-2xl text-xs text-ink/70">{motivo}</p>
+                      ) : null}
+                      {inv.status === 'rechazada' && !files[inv.orderId]?.cdr ? (
+                        <p className="mt-1 text-xs text-ink/70">Constancia de rechazo no disponible.</p>
                       ) : null}
                     </div>
-                    <div className="flex items-center gap-3">
+                    <div className="flex flex-wrap items-center gap-3">
                       <span className="inline-flex items-center gap-1 text-xs capitalize">
                         {statusIcon(inv.status)} {inv.status}
                       </span>
                       {inv.canal === 'sunat' && inv.status === 'pendiente' ? (
-                        <button type="button" disabled={!disponible || !directa || retrying !== null} onClick={() => void reintentar(inv.orderId)}
+                        <button type="button" disabled={!emision?.configurada || retrying !== null} onClick={() => void reintentar(inv.orderId)}
                           className="min-h-10 rounded-lg border border-ink/12 px-2.5 text-xs font-semibold text-ember hover:bg-ember/10 disabled:opacity-50">
                           {retrying === inv.orderId ? 'Enviando…' : 'Reintentar envío'}
+                        </button>
+                      ) : null}
+                      {admin && betaDisponible && order?.paid && inv.status === 'rechazada' ? (
+                        <button type="button" disabled={testing !== null} onClick={() => void probar(inv.tipo, order.id)}
+                          className="min-h-10 rounded-lg border border-ink/12 px-2.5 text-xs font-semibold hover:bg-ink/8 disabled:opacity-50">
+                          {testing === inv.tipo ? 'Validando en Beta…' : prueba ? 'Volver a probar en Beta' : 'Generar evidencia Beta'}
                         </button>
                       ) : null}
                       {(['pdf', 'xml', 'cdr'] as const).map((kind) => (
@@ -590,6 +679,11 @@ export function Facturacion() {
                         </button>
                       ))}
                     </div>
+                    {prueba ? (
+                      <ul aria-label="Evidencia SUNAT Beta" aria-live="polite" className="w-full rounded-lg border border-ink/12">
+                        <ArchivosPruebaSunat prueba={prueba} />
+                      </ul>
+                    ) : null}
                   </div>
                 )
               })}
@@ -601,19 +695,19 @@ export function Facturacion() {
       {/* Emit Modal */}
       <Modal open={emitOpen} title={queue.length > 1 ? `Preparar ${queueAt + 1} de ${queue.length}` : 'Preparar comprobante'} onClose={() => setEmitOpen(false)} wide>
         {selectedOrder && (() => {
-          const cliente = clienteComprobante(selectedOrder, emitType, directa)
+          const cliente = clienteComprobante(selectedOrder, emitType)
           const total = totalDetalle(lines)
-          const dinero = incluyeIgv ? separarIgv(total, igvRate) : null
+          const dinero = separarIgv(total, igvRate)
           return (
             <div className="space-y-4">
               <p className="text-sm text-ink/60">
                 Pedido <strong>{padOrder(selectedOrder.number)}</strong> · {selectedOrder.customerName} · <strong>{soles(selectedOrder.total)}</strong>
               </p>
               <div className="flex gap-2">
-                <button type="button" onClick={() => elegirTipo('boleta')} className={`flex-1 rounded-xl py-3 text-sm font-bold ${emitType === 'boleta' ? 'bg-ink text-cream' : 'bg-cream'}`}>
-                  {directa ? 'Boleta' : 'Boleta general'}
+                <button type="button" onClick={() => setEmitType('boleta')} className={`flex-1 rounded-xl py-3 text-sm font-bold ${emitType === 'boleta' ? 'bg-ink text-cream' : 'bg-cream'}`}>
+                  Boleta
                 </button>
-                <button type="button" onClick={() => elegirTipo('factura')} className={`flex-1 rounded-xl py-3 text-sm font-bold ${emitType === 'factura' ? 'bg-ink text-cream' : 'bg-cream'}`}>
+                <button type="button" onClick={() => setEmitType('factura')} className={`flex-1 rounded-xl py-3 text-sm font-bold ${emitType === 'factura' ? 'bg-ink text-cream' : 'bg-cream'}`}>
                   Factura
                 </button>
               </div>
@@ -631,18 +725,6 @@ export function Facturacion() {
                   </>
                 )}
               </div>
-              {!directa ? <Field label="Correo del cliente">
-                <input className={inputClass} type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder={`Vacío: se envía a ${CORREO_LOCAL}`} />
-              </Field> : null}
-              {!directa ? <label className="flex items-center gap-2 text-sm">
-                <input
-                  type="checkbox"
-                  className="h-4 w-4 rounded"
-                  checked={incluyeIgv}
-                  onChange={(e) => setIncluyeIgv(e.target.checked)}
-                />
-                El monto incluye IGV {emitType === 'factura' ? '(activo en factura)' : ''}
-              </label> : null}
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
                   <p className="text-sm font-semibold">Detalle</p>
@@ -680,13 +762,9 @@ export function Facturacion() {
                   </div>
                 ))}
               </div>
-              {dinero ? (
-                <p className="text-sm text-ink/70">
-                  Total {soles(dinero.total)} · base {soles(dinero.base)} · IGV {soles(dinero.igv)}
-                </p>
-              ) : (
-                <p className="text-sm text-ink/70">Total {soles(total)}</p>
-              )}
+              <p className="text-sm text-ink/70">
+                Total {soles(dinero.total)} · base {soles(dinero.base)} · IGV {soles(dinero.igv)}
+              </p>
               <div className="flex gap-2">
                 {queue.length > 1 ? (
                   <button type="button" disabled={queueAt === 0} onClick={() => irA(queueAt - 1)} className="min-h-11 rounded-xl border border-ink/12 px-3 text-sm font-bold disabled:opacity-40">
@@ -696,7 +774,7 @@ export function Facturacion() {
                 <button
                   type="button"
                   onClick={() => void handleEmit()}
-                  disabled={sending || !disponible || !cliente.ok || (directa && total !== selectedOrder.total)}
+                  disabled={sending || !disponible || !cliente.ok || total !== selectedOrder.total}
                   className="min-h-11 flex-1 rounded-xl bg-ember font-semibold text-white disabled:opacity-50"
                 >
                   {sending ? 'Revisando…' : 'Emitir'}
@@ -707,8 +785,9 @@ export function Facturacion() {
                   </button>
                 ) : null}
               </div>
-              {!disponible ? <p className="text-sm text-ink/70">La emisión se habilita en Configurar SUNAT.</p> : null}
-              {directa && total !== selectedOrder.total ? (
+              {primeraEmision ? <p className="text-sm text-ink/70">Este envío usará la única emisión disponible antes de activar la licencia.</p> : null}
+              {!disponible ? <p className="text-sm text-ink/70">{faltaLicencia ? 'Activa la licencia para emitir otro comprobante.' : 'Completa Configurar SUNAT para habilitar la emisión.'}</p> : null}
+              {total !== selectedOrder.total ? (
                 <p className="text-sm text-amber-800 dark:text-amber-300">El detalle debe sumar el importe pagado de {soles(selectedOrder.total)}.</p>
               ) : null}
             </div>
@@ -716,155 +795,122 @@ export function Facturacion() {
         })()}
       </Modal>
 
-      <Modal open={configOpen} title="Configurar SUNAT" onClose={() => setConfigOpen(false)} closeDisabled={savingConfig || activando || certSending || testing !== null} wide>
-        <div className="space-y-5">
-          <section aria-labelledby="activar-emision" className="rounded-xl border border-ink/12 bg-cream px-4 py-3.5">
+      <Modal open={configOpen} title="Configurar SUNAT" onClose={() => setConfigOpen(false)} closeDisabled={savingConfig || certSending || testing !== null} wide>
+        <form className="space-y-5" onSubmit={(event) => { event.preventDefault(); void handleSaveConfig() }}>
+          <section aria-labelledby="licencia-facturacion" className="rounded-xl border border-ink/12 bg-cream px-4 py-3.5">
             <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1.5">
-              <h3 id="activar-emision" className="inline-flex items-center gap-2 text-sm font-bold"><Key size={15} aria-hidden /> Activar emisión</h3>
-              <span className={`text-xs font-semibold ${emisionActiva ? 'text-ember' : 'text-ink/70'}`}>
-                {emisionActiva === null ? 'Estado sin confirmar' : emisionActiva ? 'Activada' : 'Pendiente de activación'}
+              <h3 id="licencia-facturacion" className="inline-flex items-center gap-2 text-sm font-bold"><Key size={15} aria-hidden /> Licencia de facturación</h3>
+              <span className={`text-xs font-semibold ${emision?.activa ? 'text-ember' : 'text-ink/70'}`}>
+                {!compatible ? 'Estado sin confirmar' : emision?.activa ? 'Activada' : 'Pendiente'}
               </span>
             </div>
-            {emisionActiva === false ? (
-              <form className="mt-3 flex flex-wrap items-end gap-2.5" onSubmit={(event) => { event.preventDefault(); void activar() }}>
-                <div className="min-w-36 flex-1">
-                  <Field label="Clave de activación">
-                    <input className={inputClass} type="password" value={clave} autoComplete="off"
-                      aria-invalid={Boolean(claveError)} aria-describedby={claveError ? 'activacion-error' : undefined}
-                      onChange={(e) => setClave(e.target.value)} />
-                  </Field>
-                </div>
-                <button type="submit" disabled={activando} className="min-h-12 rounded-xl bg-ember px-4 text-sm font-semibold text-white disabled:opacity-50 dark:text-cream">
-                  {activando ? 'Activando…' : 'Activar'}
-                </button>
-                {claveError ? <p id="activacion-error" role="alert" className="w-full text-xs font-medium text-amber-800 dark:text-amber-300">{claveError}</p> : null}
-              </form>
+            {compatible && !emision?.activa ? (
+              <div className="mt-3">
+                <Field label="Licencia">
+                  <input className={inputClass} type="password" value={licencia} autoComplete="off"
+                    onChange={(e) => setLicencia(e.target.value)} />
+                </Field>
+                <p className="mt-2 text-xs text-ink/70">
+                  {faltaLicencia ? 'El comprobante sin licencia ya se usó. Activa la licencia para continuar.' : 'Con los datos SUNAT completos, puedes emitir un comprobante antes de activar la licencia.'}
+                </p>
+              </div>
             ) : null}
           </section>
 
           {admin ? (
             <>
-              <section aria-label="Canal y datos del emisor" className="grid gap-3 sm:grid-cols-2">
-                <Field label="Canal de emisión">
-                  <select className={inputClass} value={config.proveedor} onChange={(event) => {
-                    const proveedor = event.target.value as SunatConfig['proveedor']
-                    setConfig((prev) => proveedor === 'sunat'
-                      ? { ...prev, proveedor, ambiente: 'beta', enabled: false }
-                      : { ...prev, proveedor })
-                  }}>
-                    <option value="factiliza">Factiliza</option>
-                    <option value="sunat">SUNAT directo</option>
-                  </select>
-                </Field>
-                <Field label="Ambiente">
-                  <select className={inputClass} value={config.ambiente} onChange={(e) => setConfig({ ...config, ambiente: e.target.value as SunatConfig['ambiente'] })}>
-                    <option value="beta">Beta (pruebas)</option>
-                    <option value="produccion">Producción</option>
-                  </select>
-                </Field>
-                <Field label="RUC">
-                  <input className={inputClass} value={config.ruc} inputMode="numeric" maxLength={11} onChange={(e) => setConfig({ ...config, ruc: e.target.value })} placeholder="20XXXXXXXXX" />
-                </Field>
-                <Field label="Razón social">
-                  <input className={inputClass} value={config.razonSocial} onChange={(e) => setConfig({ ...config, razonSocial: e.target.value })} />
-                </Field>
-                <Field label="Serie de boleta">
-                  <input className={inputClass} value={config.serieboleta} onChange={(e) => setConfig({ ...config, serieboleta: e.target.value })} placeholder="B001" />
-                </Field>
-                <Field label="Serie de factura">
-                  <input className={inputClass} value={config.seriefactura} onChange={(e) => setConfig({ ...config, seriefactura: e.target.value })} placeholder="F001" />
-                </Field>
+              <section aria-labelledby="datos-emisor" className="space-y-3">
+                <h3 id="datos-emisor" className="text-sm font-bold">Datos del emisor</h3>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <Field label="RUC">                  <input className={inputClass} value={config.ruc} inputMode="numeric" maxLength={11} onChange={(e) => setConfig({ ...config, ruc: e.target.value })} placeholder="20XXXXXXXXX" />
+                  </Field>
+                  <Field label="Razón social">
+                    <input className={inputClass} value={config.razonSocial} onChange={(e) => setConfig({ ...config, razonSocial: e.target.value })} />
+                  </Field>
+                  <Field label="Serie de boleta">
+                    <input className={inputClass} value={config.serieboleta} onChange={(e) => setConfig({ ...config, serieboleta: e.target.value })} placeholder="B001" />
+                  </Field>
+                  <Field label="Serie de factura">
+                    <input className={inputClass} value={config.seriefactura} onChange={(e) => setConfig({ ...config, seriefactura: e.target.value })} placeholder="F001" />
+                  </Field>
+                </div>
               </section>
 
-              {config.proveedor === 'sunat' ? (
-                <>
-                  <section aria-labelledby="acceso-sol" className="space-y-3 border-t border-ink/12 pt-4">
-                    <h3 id="acceso-sol" className="text-sm font-bold">Acceso SUNAT</h3>
-                    <div className="grid gap-3 sm:grid-cols-2">
-                      <Field label="Usuario SOL secundario">
-                        <input className={inputClass} value={config.usuario} autoComplete="off" onChange={(e) => setConfig({ ...config, usuario: e.target.value })} />
-                      </Field>
-                      <Field label="Clave SOL">
-                        <input className={inputClass} type="password" value={config.clave} autoComplete="new-password"
-                          onChange={(e) => setConfig({ ...config, clave: e.target.value })}
-                          placeholder={config.claveSolGuardada ? 'Clave guardada' : undefined} />
-                      </Field>
-                      <Field label="Dirección fiscal">
-                        <input className={inputClass} value={config.direccionFiscal} onChange={(e) => setConfig({ ...config, direccionFiscal: e.target.value })} />
-                      </Field>
-                      <Field label="Código de establecimiento">
-                        <input className={inputClass} value={config.establecimiento} inputMode="numeric" maxLength={4}
-                          onChange={(e) => setConfig({ ...config, establecimiento: e.target.value })} placeholder="0000" />
-                      </Field>
-                    </div>
-                  </section>
-
-                  <section aria-labelledby="certificado-sunat" className="space-y-3 border-t border-ink/12 pt-4">
-                    <div>
-                      <h3 id="certificado-sunat" className="text-sm font-bold">Certificado digital</h3>
-                      <p className="mt-1 break-all text-xs text-ink/70">{config.certificadoCargado ? config.certificadoNombre || 'Certificado guardado' : 'Carga tu certificado .p12 o .pfx.'}</p>
-                    </div>
-                    <div className="grid items-end gap-3 sm:grid-cols-2">
-                      <Field label="Archivo del certificado">
-                        <input type="file" accept=".pfx,.p12,application/x-pkcs12" className="block min-h-12 w-full min-w-0 rounded-xl border border-ink/12 p-2 text-sm file:mr-2 file:rounded-md file:border-0 file:bg-ink/8 file:px-2 file:py-1.5"
-                          onChange={(e) => setCertFile(e.target.files?.[0] ?? null)} />
-                      </Field>
-                      <Field label="Clave del archivo">
-                        <input className={inputClass} type="password" value={certClave} autoComplete="new-password" onChange={(e) => setCertClave(e.target.value)} />
-                      </Field>
-                    </div>
-                    <button type="button" disabled={certSending || !certFile} onClick={() => void subirCertificado()}
-                      className="min-h-11 rounded-xl border border-ink/15 px-4 text-sm font-semibold hover:bg-ink/8 disabled:opacity-50">
-                      {certSending ? 'Subiendo…' : 'Subir certificado'}
-                    </button>
-                    {certMsg ? <p role="status" className="text-xs text-ink/80">{certMsg}</p> : null}
-                  </section>
-
-                  <section aria-labelledby="pruebas-sunat" className="flex flex-wrap items-center justify-between gap-3 border-t border-ink/12 pt-4">
-                    <div>
-                      <h3 id="pruebas-sunat" className="text-sm font-bold">Validación en SUNAT Beta</h3>
-                      <p className="mt-1 text-xs text-ink/70">Envía un comprobante ficticio.</p>
-                    </div>
-                    <div className="flex flex-wrap gap-2">
-                      {(['factura', 'boleta'] as const).map((tipo) => (
-                        <button key={tipo} type="button" disabled={!canalDirectoDisponible || testing !== null} onClick={() => void probar(tipo)}
-                          className="min-h-11 rounded-xl border border-ink/15 px-3 text-xs font-semibold hover:bg-ink/8 disabled:opacity-50">
-                          {testing === tipo ? 'Validando…' : `Probar ${tipo}`}
-                        </button>
-                      ))}
-                    </div>
-                  </section>
-                </>
-              ) : (
-                <section aria-label="Acceso Factiliza" className="grid gap-3 border-t border-ink/12 pt-4 sm:grid-cols-2">
-                  <Field label="URL de facturación">
-                    <input className={inputClass} value={config.apiUrl} onChange={(e) => setConfig({ ...config, apiUrl: e.target.value })} />
+              <section aria-labelledby="acceso-sol" className="space-y-3 border-t border-ink/12 pt-4">
+                <h3 id="acceso-sol" className="text-sm font-bold">Acceso SUNAT</h3>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <Field label="Usuario SOL secundario">
+                    <input className={inputClass} value={config.usuario} autoComplete="off" onChange={(e) => setConfig({ ...config, usuario: e.target.value })} />
                   </Field>
-                  <Field label="Token Factiliza">
-                    <input className={inputClass} type="password" value={config.factilizaToken} autoComplete="new-password"
-                      onChange={(e) => setConfig({ ...config, factilizaToken: e.target.value })}
-                      placeholder={config.factilizaTokenGuardado ? 'Token guardado' : undefined} />
+                  <CampoClaveSol key={user?.id} clave={config.clave} guardada={Boolean(config.claveSolGuardada)}
+                    puedeVerGuardada={user?.isSystem === true}
+                    onChange={(clave) => setConfig((prev) => ({ ...prev, clave }))} />
+                  <Field label="Dirección fiscal">
+                    <input className={inputClass} value={config.direccionFiscal} onChange={(e) => setConfig({ ...config, direccionFiscal: e.target.value })} />
                   </Field>
-                </section>
-              )}
+                  <Field label="Código de establecimiento">
+                    <input className={inputClass} value={config.establecimiento} inputMode="numeric" maxLength={4}
+                      onChange={(e) => setConfig({ ...config, establecimiento: e.target.value })} placeholder="0000" />
+                  </Field>
+                </div>
+              </section>
 
-              {configResult ? <p role="status" className="rounded-xl border border-ink/12 bg-cream px-3 py-2.5 text-sm text-ink/85">{configResult}</p> : null}
-              {config.proveedor === 'sunat' && !canalDirectoDisponible ? (
-                <p className="text-sm text-ink/75">Actualiza el backend del POS para habilitar SUNAT directo.</p>
-              ) : null}
-              <div className="flex flex-wrap items-center justify-between gap-3 border-t border-ink/12 pt-4">
-                <label className="inline-flex min-h-11 items-center gap-2 text-sm font-semibold">
-                  <input type="checkbox" checked={config.enabled} onChange={(e) => setConfig({ ...config, enabled: e.target.checked })} className="h-4 w-4 rounded accent-ember" />
-                  {config.proveedor === 'sunat' ? 'Habilitar emisión directa' : 'Habilitado'}
-                </label>
-                <button type="button" onClick={() => void handleSaveConfig()} disabled={savingConfig || (config.proveedor === 'sunat' && !canalDirectoDisponible)}
-                  className="min-h-11 rounded-xl bg-ember px-4 text-sm font-semibold text-white disabled:opacity-50 dark:text-cream">
-                  {savingConfig ? 'Guardando…' : 'Guardar configuración'}
+              <section aria-labelledby="certificado-sunat" className="space-y-3 border-t border-ink/12 pt-4">
+                <div>
+                  <h3 id="certificado-sunat" className="text-sm font-bold">Certificado digital</h3>
+                  <p className="mt-1 break-all text-xs text-ink/70">{config.certificadoCargado ? config.certificadoNombre || 'Certificado guardado' : 'Carga tu certificado .p12 o .pfx.'}</p>
+                </div>
+                <div className="grid items-end gap-3 sm:grid-cols-2">
+                  <Field label="Archivo del certificado">
+                    <input type="file" accept=".pfx,.p12,application/x-pkcs12" className="block min-h-12 w-full min-w-0 rounded-xl border border-ink/12 p-2 text-sm file:mr-2 file:rounded-md file:border-0 file:bg-ink/8 file:px-2 file:py-1.5"
+                      onChange={(e) => setCertFile(e.target.files?.[0] ?? null)} />
+                  </Field>
+                  <Field label="Clave del archivo">
+                    <input className={inputClass} type="password" value={certClave} autoComplete="new-password" onChange={(e) => setCertClave(e.target.value)} />
+                  </Field>
+                </div>
+                <button type="button" disabled={certSending || !certFile} onClick={() => void subirCertificado()}
+                  className="min-h-11 rounded-xl border border-ink/15 px-4 text-sm font-semibold hover:bg-ink/8 disabled:opacity-50">
+                  {certSending ? 'Subiendo…' : 'Subir certificado'}
                 </button>
-              </div>
+                {certMsg ? <p role="status" className="text-xs text-ink/80">{certMsg}</p> : null}
+              </section>
+
+              <section aria-labelledby="pruebas-sunat" className="flex flex-wrap items-center justify-between gap-3 border-t border-ink/12 pt-4">
+                <div>
+                  <h3 id="pruebas-sunat" className="text-sm font-bold">Validación en SUNAT Beta</h3>
+                  <p className="mt-1 text-xs text-ink/70">Comprobantes ficticios sin validez tributaria.</p>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {(['factura', 'boleta'] as const).map((tipo) => (
+                    <button key={tipo} type="button" disabled={!betaDisponible || testing !== null} onClick={() => void probar(tipo)}
+                      className="min-h-11 rounded-xl border border-ink/15 px-3 text-xs font-semibold hover:bg-ink/8 disabled:opacity-50">
+                      {testing === tipo ? 'Validando…' : `Probar ${tipo}`}
+                    </button>
+                  ))}
+                </div>
+                {Object.values(pruebas).some(Boolean) ? (
+                  <ul aria-label="Resultados de SUNAT Beta" aria-live="polite" className="w-full divide-y divide-ink/12 rounded-xl border border-ink/12">
+                    {(['factura', 'boleta'] as const).map((tipo) => pruebas[tipo] ? <ArchivosPruebaSunat key={tipo} prueba={pruebas[tipo]} /> : null)}
+                  </ul>
+                ) : null}
+              </section>
             </>
           ) : null}
-        </div>
+
+          {configResult ? <p role="status" className="rounded-xl border border-ink/12 bg-cream px-3 py-2.5 text-sm text-ink/85">{configResult}</p> : null}
+          {!compatible ? (
+            <p className="text-sm text-ink/75">{emision ? 'Actualiza el backend del POS para habilitar la emisión con licencia.' : 'No se pudo verificar el estado de emisión.'}</p>
+          ) : null}
+          {admin || (compatible && !emision?.activa) ? (
+            <div className="flex justify-end border-t border-ink/12 pt-4">
+              <button type="submit" disabled={savingConfig || !compatible || Boolean(certFile) || (!admin && !licencia.trim())}
+                className="min-h-11 rounded-xl bg-ember px-4 text-sm font-semibold text-white disabled:opacity-50 dark:text-cream">
+                {savingConfig ? 'Guardando…' : admin ? licencia.trim() ? 'Guardar y activar' : 'Guardar configuración' : 'Activar emisión'}
+              </button>
+            </div>
+          ) : null}
+        </form>
       </Modal>
     </section>
   )
