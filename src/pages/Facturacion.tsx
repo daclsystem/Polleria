@@ -398,7 +398,7 @@ export function Facturacion() {
   }
 
   const abrirCola = (orders: Order[]) => {
-    if (!orders.length) return
+    if (!orders.length || !disponible || (primeraEmision && orders[0].docTipo === 'factura')) return
     setQueue(emisionMasiva ? orders : orders.slice(0, 1))
     setQueueAt(0)
     cargarPedido(orders[0])
@@ -414,6 +414,7 @@ export function Facturacion() {
 
   const handleEmit = async () => {
     if (!selectedOrder) return
+    if (primeraEmision && emitType !== 'boleta') return
     const cliente = clienteComprobante(selectedOrder, emitType)
     if (!cliente.ok) {
       setLastResult('Completa el documento y el nombre del cliente en el pedido.')
@@ -482,7 +483,7 @@ export function Facturacion() {
     return <RefreshCw size={14} className="text-amber-600" />
   }
 
-  const estado = !compatible ? 'Estado sin confirmar' : primeraEmision ? '1 comprobante disponible' : disponible ? 'Emisión activa' : faltaLicencia ? 'Primera emisión utilizada' : 'Configuración pendiente'
+  const estado = !compatible ? 'Estado sin confirmar' : primeraEmision ? '1 boleta disponible' : disponible ? 'Emisión activa' : faltaLicencia ? 'Boleta sin licencia utilizada' : 'Configuración pendiente'
   const metrics = [
     { label: 'Por facturar', value: pendingOrders.length, action: () => setVista('pendientes'), selected: vista === 'pendientes' },
     { label: 'Boletas', value: invoices.filter((i) => i.tipo === 'boleta').length, action: () => verEmitidos('boleta'), selected: vista === 'emitidos' && filtroTipo === 'boleta' },
@@ -592,8 +593,9 @@ export function Facturacion() {
                     <span className="whitespace-nowrap text-sm font-bold tabular-nums">{soles(o.total)}</span>
                     <button
                       type="button"
+                      disabled={!disponible || (primeraEmision && o.docTipo === 'factura')}
                       onClick={() => abrirCola([o])}
-                      className="inline-flex min-h-11 items-center gap-1.5 rounded-lg border border-ink/12 px-3 text-xs font-semibold hover:bg-ink/8 focus-visible:outline-2 focus-visible:outline-ember"
+                      className="inline-flex min-h-11 items-center gap-1.5 rounded-lg border border-ink/12 px-3 text-xs font-semibold enabled:hover:bg-ink/8 focus-visible:outline-2 focus-visible:outline-ember disabled:opacity-45"
                     >
                       <Send size={13} aria-hidden /> Preparar
                     </button>
@@ -707,9 +709,11 @@ export function Facturacion() {
                 <button type="button" onClick={() => setEmitType('boleta')} className={`flex-1 rounded-xl py-3 text-sm font-bold ${emitType === 'boleta' ? 'bg-ink text-cream' : 'bg-cream'}`}>
                   Boleta
                 </button>
-                <button type="button" onClick={() => setEmitType('factura')} className={`flex-1 rounded-xl py-3 text-sm font-bold ${emitType === 'factura' ? 'bg-ink text-cream' : 'bg-cream'}`}>
-                  Factura
-                </button>
+                {emision?.activa ? (
+                  <button type="button" onClick={() => setEmitType('factura')} className={`flex-1 rounded-xl py-3 text-sm font-bold ${emitType === 'factura' ? 'bg-ink text-cream' : 'bg-cream'}`}>
+                    Factura
+                  </button>
+                ) : null}
               </div>
               <div className="rounded-xl bg-cream px-3 py-2 text-xs text-ink/70">
                 {emitType === 'boleta' && cliente.tipDoc === '0' ? (
@@ -774,7 +778,7 @@ export function Facturacion() {
                 <button
                   type="button"
                   onClick={() => void handleEmit()}
-                  disabled={sending || !disponible || !cliente.ok || total !== selectedOrder.total}
+                  disabled={sending || !disponible || (primeraEmision && emitType !== 'boleta') || !cliente.ok || total !== selectedOrder.total}
                   className="min-h-11 flex-1 rounded-xl bg-ember font-semibold text-white disabled:opacity-50"
                 >
                   {sending ? 'Revisando…' : 'Emitir'}
@@ -785,7 +789,7 @@ export function Facturacion() {
                   </button>
                 ) : null}
               </div>
-              {primeraEmision ? <p className="text-sm text-ink/70">Este envío usará la única emisión disponible antes de activar la licencia.</p> : null}
+              {primeraEmision ? <p className="text-sm text-ink/70">Este envío usará la única boleta disponible antes de activar la licencia.</p> : null}
               {!disponible ? <p className="text-sm text-ink/70">{faltaLicencia ? 'Activa la licencia para emitir otro comprobante.' : 'Completa Configurar SUNAT para habilitar la emisión.'}</p> : null}
               {total !== selectedOrder.total ? (
                 <p className="text-sm text-amber-800 dark:text-amber-300">El detalle debe sumar el importe pagado de {soles(selectedOrder.total)}.</p>
@@ -811,7 +815,7 @@ export function Facturacion() {
                     onChange={(e) => setLicencia(e.target.value)} />
                 </Field>
                 <p className="mt-2 text-xs text-ink/70">
-                  {faltaLicencia ? 'El comprobante sin licencia ya se usó. Activa la licencia para continuar.' : 'Con los datos SUNAT completos, puedes emitir un comprobante antes de activar la licencia.'}
+                  {faltaLicencia ? 'La boleta sin licencia ya se usó. Activa la licencia para continuar.' : 'Con los datos SUNAT completos, puedes emitir una boleta antes de activar la licencia.'}
                 </p>
               </div>
             ) : null}

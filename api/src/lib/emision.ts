@@ -392,14 +392,20 @@ async function emitirDirecto(input: EmitInput, config: SunatConfig, tipo: EmitIn
     if (existing) return existing
     const activa = await emisionActiva(tx)
     if (!activa && await usoSinLicencia(tx)) {
-      throw Object.assign(new Error('Ya se usó la emisión sin licencia. Activa la licencia para emitir otro comprobante.'), { status: 403 })
+      throw Object.assign(new Error('Ya se usó la boleta sin licencia. Activa la licencia para emitir otro comprobante.'), { status: 403 })
+    }
+    if (!activa && tipo !== 'boleta') {
+      throw Object.assign(new Error('Activa la licencia de facturación para emitir facturas.'), { status: 403 })
     }
     const result = await new sql.Request(tx).input('id', sql.UniqueIdentifier, orderId).query(`
-      SELECT Paid, Status, Total FROM dbo.Orders WITH (UPDLOCK, ROWLOCK) WHERE Id = @id
+      SELECT Paid, Status, Total, DocTipo FROM dbo.Orders WITH (UPDLOCK, ROWLOCK) WHERE Id = @id
     `)
     const order = result.recordset[0]
     if (!order?.Paid || /^(cancelad[oa]|eliminad[oa]|anulad[oa])$/i.test(order.Status) || !(Number(order.Total) > 0)) {
       throw Object.assign(new Error('El comprobante requiere un pedido pagado y vigente.'), { status: 400 })
+    }
+    if (!activa && String(order.DocTipo || '').toLowerCase() === 'factura') {
+      throw Object.assign(new Error('El pedido requiere una factura. Activa la licencia de facturación para emitirla.'), { status: 403 })
     }
     const data = datosSunat(tipo, config, Number(order.Total), cliente, lines, await loadIgvRate(tx))
     const numero = siguienteNumero(invoices, data.serie)

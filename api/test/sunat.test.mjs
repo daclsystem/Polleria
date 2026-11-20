@@ -113,7 +113,7 @@ test('la prueba usa el encabezado configurado y envía una boleta ficticia solo 
   assert.equal(fake.mock.callCount(), 1)
 })
 
-test('reserva un solo comprobante sin licencia, conserva su XML al reintentar y desbloquea al activar', async (t) => {
+test('reserva solo una boleta sin licencia, conserva su XML al reintentar y desbloquea facturas al activar', async (t) => {
   const dir = await mkdtemp(join(tmpdir(), 'polleria-emision-'))
   const prevCert = process.env.CERTIFICADO_DIR
   const prevInvoices = process.env.COMPROBANTES_DIR
@@ -138,6 +138,7 @@ test('reserva un solo comprobante sin licencia, conserva su XML al reintentar y 
     }],
     ['invoices', [{ orderId: 'pedido-previo', serie: 'B003', numero: 6, status: 'aceptada' }]],
   ])
+  const pedidoFacturaId = '452b5e9e-441d-45ba-b946-26c4c3ef02d7'
   t.mock.method(sql.ConnectionPool.prototype, 'connect', async () => ({ connected: true, request: () => new sql.Request() }))
   for (const method of ['begin', 'commit', 'rollback']) t.mock.method(sql.Transaction.prototype, method, async () => {})
   t.mock.method(sql.Request.prototype, 'query', async function (query) {
@@ -150,7 +151,9 @@ test('reserva un solo comprobante sin licencia, conserva su XML al reintentar y 
       storage.set(this.parameters.key.value, JSON.parse(this.parameters.value.value))
       return { recordset: [] }
     }
-    if (query.includes('FROM dbo.Orders')) return { recordset: [{ Paid: true, Status: 'entregado', Total: 20 }] }
+    if (query.includes('FROM dbo.Orders')) {
+      return { recordset: [{ Paid: true, Status: 'entregado', Total: 20, DocTipo: this.parameters.id.value === pedidoFacturaId ? 'factura' : 'boleta' }] }
+    }
     if (query.includes('FROM dbo.Settings')) return { recordset: [{ IgvRate: 0.18 }] }
     assert.fail('Consulta inesperada: ' + query)
   })
@@ -190,6 +193,10 @@ test('reserva un solo comprobante sin licencia, conserva su XML al reintentar y 
     tipo: 'boleta', cliente: { tipDoc: '0', num: '00000000', nombre: 'CLIENTES VARIOS' },
     lines: [{ descripcion: 'Consumo ficticio', cantidad: 2, precio: 10 }],
   }
+  const secondInput = {
+    ...input, orderId: pedidoFacturaId, tipo: 'factura',
+    cliente: { tipDoc: '6', num: '20600000005', nombre: 'CLIENTE FICTICIO' },
+  }
   assert.equal((await estadoEmision()).disponible, true)
   assert.equal((await estadoEmision()).cupoSinLicencia, 1)
   await assert.rejects(
@@ -204,6 +211,8 @@ test('reserva un solo comprobante sin licencia, conserva su XML al reintentar y 
   assert.equal(configPublica.claveSolGuardada, true)
   assert.equal(Object.hasOwn(configPublica, 'clave'), false)
   assert.equal(Object.hasOwn(configPublica, 'factilizaToken'), false)
+  await assert.rejects(emitirComprobante(secondInput), /licencia de facturación para emitir facturas/)
+  await assert.rejects(emitirComprobante({ ...input, orderId: pedidoFacturaId }), /El pedido requiere una factura/)
   await assert.rejects(emitirComprobante({ ...input, lines: [{ ...input.lines[0], precio: 11 }] }), /importe pagado/)
   assert.equal(storage.get('invoices').length, 1)
   assert.equal((await estadoEmision()).cupoSinLicencia, 1)
@@ -212,11 +221,8 @@ test('reserva un solo comprobante sin licencia, conserva su XML al reintentar y 
   assert.equal(pending.numero, 7)
   assert.equal((await estadoEmision()).disponible, false)
   assert.equal((await estadoEmision()).cupoSinLicencia, 0)
-  const secondInput = {
-    ...input, orderId: '452b5e9e-441d-45ba-b946-26c4c3ef02d7', tipo: 'factura',
-    cliente: { tipDoc: '6', num: '20600000005', nombre: 'CLIENTE FICTICIO' },
-  }
-  await assert.rejects(emitirComprobante(secondInput), /Ya se usó la emisión sin licencia/)
+  await assert.rejects(emitirComprobante({ ...input, orderId: '166cdd99-1b1c-45d2-8a51-49573cc3d12e' }), /Ya se usó la boleta sin licencia/)
+  await assert.rejects(emitirComprobante(secondInput), /Ya se usó la boleta sin licencia/)
   assert.equal(fetchMock.mock.callCount(), 1)
   const sentSummary = await reintentarSunat(input.orderId)
   assert.equal(sentSummary.status, 'pendiente')
