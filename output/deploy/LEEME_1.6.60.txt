@@ -1,0 +1,59 @@
+POLLERÍA - VERSIÓN 1.6.60 - COMPILADO PARA SUBIR
+Fecha: 21 de noviembre de 2026. Build: 2026.11.21b.
+
+CAMBIOS DE PANTALLA
+- Se distingue API pendiente de actualizar, error de consulta y configuración pendiente.
+- Se muestra Certificado guardado en el servidor con su nombre.
+- El selector de archivo aparece al elegir Cambiar certificado.
+- Volver a comprobar consulta el estado actualizado.
+
+CAMBIO PRINCIPAL
+La facturación se habilita con los datos SUNAT completos y un certificado válido.
+Ya no solicita key de activación ni limita la emisión a una boleta.
+Se conservan permisos y validaciones de pedido, importes, XML firmado y CDR.
+
+IMPORTANTE: ACTUALIZAR API Y SYSTEM
+Subir solo frontend/system no elimina el bloqueo del backend anterior.
+Publica primero la API compilada y luego System. No hay migración SQL nueva.
+
+1. API
+- Copia el contenido de api/dist a la carpeta dist del backend instalado.
+- Actualiza package.json y package-lock.json con los incluidos en api/.
+- Conserva .env, base de datos y directorios persistentes de certificados y comprobantes.
+- Dentro de la carpeta del backend ejecuta: npm ci --omit=dev
+- Reinicia el proceso Node. Si utilizas el proceso PM2 documentado:
+  pm2 restart polleria-api --update-env
+- Comprueba /health y el acceso de un administrador al módulo Facturación.
+
+2. SYSTEM
+- Copia el CONTENIDO de frontend/system/ a la carpeta pública /system/ del dominio.
+- Incluye .htaccess si el hosting usa Apache.
+- No copies una carpeta system dentro de otra system.
+- Confirma que /system/version.json devuelve 1.6.60 y build 2026.11.21b.
+
+3. OTRAS INTERFACES COMPILADAS (MISMA VERSIÓN)
+- frontend/web/       -> raíz del dominio público
+- frontend/cliente/   -> /cliente/
+- frontend/driver/    -> /driver/
+Si el hosting usa Nginx, conserva su configuración de rutas SPA.
+
+4. FACTURACIÓN
+- En Configurar SUNAT, revisa emisor, series, usuario/clave SOL y certificado.
+- Una configuración incompleta o un certificado inválido mantienen la emisión bloqueada.
+- No se incluye certificado, claves, .env ni datos privados en este paquete.
+- Las seis pruebas SUNAT utilizan servicios simulados; no se emitieron comprobantes reales.
+- La respuesta de salud del servidor confirmó API y base de datos conectadas.
+- No se ha desplegado automáticamente esta compilación.
+
+5. WHATSAPP
+Requiere mantener activo el servicio/gateway configurado y su sesión conectada.
+La contratación, soporte y renovación futura se presupuestan según proveedor y acuerdo.
+
+VALIDACIÓN
+Consulta VERIFICACION.json. SHA256SUMS.json relaciona los archivos compilados incluidos.
+
+DIAGNÓSTICO DE LA CAPTURA
+Se comprobó por SSH en modo lectura que la API del servidor todavía conserva el bloqueo anterior.
+System publicado está en 1.6.59; los archivos del certificado y su contraseña existen y no se modificaron.
+Para resolverlo es necesario subir la API nueva y reiniciar su servicio, además del frontend System 1.6.60.
+La carpeta de certificado no debe sustituirse por una carpeta vacía al publicar.

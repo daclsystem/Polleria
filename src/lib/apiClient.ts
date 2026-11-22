@@ -697,19 +697,19 @@ export async function apiSendWhatsapp(phone: string, text: string) {
 }
 
 export async function apiGetSunatConfig() {
-  return apiFetch<{ config: unknown }>('/api/config/sunat')
+  return apiFetch<{ config: unknown }>('/api/config/sunat', { cache: 'no-store' })
 }
 
 export function apiGetClaveSol(signal: AbortSignal) {
   return apiFetch<{ clave: string }>('/api/config/sunat/clave-sol', { cache: 'no-store', signal })
 }
 
-export type EstadoEmision = { activa: boolean; configurada?: boolean; disponible?: boolean; cupoSinLicencia?: number }
+export type EstadoEmision = { activa: boolean; configurada?: boolean; disponible?: boolean; requiereLicencia?: boolean; motivo?: string }
 
-export async function apiSaveSunatConfig(config: unknown, licencia: string) {
+export async function apiSaveSunatConfig(config: unknown) {
   return apiFetch<{ config: unknown; estado: EstadoEmision }>('/api/config/sunat', {
     method: 'PUT',
-    body: JSON.stringify({ config, licencia }),
+    body: JSON.stringify({ config }),
   })
 }
 
@@ -739,14 +739,7 @@ export async function apiLookupDoc(kind: 'dni' | 'ruc', numero: string, signal?:
 }
 
 export async function apiEmisionEstado() {
-  return apiFetch<EstadoEmision>('/api/config/emision')
-}
-
-export async function apiActivarEmision(clave: string) {
-  return apiFetch<EstadoEmision>('/api/config/emision/activar', {
-    method: 'POST',
-    body: JSON.stringify({ clave }),
-  })
+  return apiFetch<EstadoEmision>('/api/config/emision', { cache: 'no-store' })
 }
 
 type EmissionResponse = {

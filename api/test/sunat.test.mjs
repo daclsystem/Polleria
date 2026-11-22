@@ -1,7 +1,5 @@
 import assert from 'node:assert/strict'
-import crypto from 'node:crypto'
-import { mkdtemp, readFile, rm } from 'node:fs/promises'
-import { syncBuiltinESMExports } from 'node:module'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
@@ -11,7 +9,7 @@ import { SignedXml } from 'xml-crypto'
 import { sql } from '../dist/db.js'
 import { saveCertificado } from '../dist/lib/certificado.js'
 import {
-  comprobantePrueba, configuracionSunat, emitirComprobante, estadoEmision,
+  activarEmision, comprobantePrueba, configuracionSunat, emitirComprobante, estadoEmision,
   guardarConfiguracionSunat, probarSunat, reintentarSunat,
 } from '../dist/lib/emision.js'
 import { parseCdr, parseXml, pkcs12SigningKeys, signedInvoice } from '../dist/lib/sunat.js'
@@ -88,6 +86,7 @@ test('la prueba usa el encabezado configurado y envía una boleta ficticia solo 
   const fake = t.mock.method(globalThis, 'fetch', async (url, options) => {
     assert.equal(url, 'https://e-beta.sunat.gob.pe/ol-ti-itcpfegem-beta/billService')
     assert.equal(options.redirect, 'error')
+    assert.equal(options.headers.SOAPAction, 'urn:sendBill')
     const request = parseXml(options.body)
     const name = request.getElementsByTagName('fileName').item(0).textContent
     assert.match(name, /^20100066603-03-B555-\d{8}\.zip$/)
@@ -113,7 +112,7 @@ test('la prueba usa el encabezado configurado y envía una boleta ficticia solo 
   assert.equal(fake.mock.callCount(), 1)
 })
 
-test('reserva solo una boleta sin licencia, conserva su XML al reintentar y desbloquea facturas al activar', async (t) => {
+test('habilita boletas y facturas sin key, conserva reintentos y valida pedido, importe y certificado', async (t) => {
   const dir = await mkdtemp(join(tmpdir(), 'polleria-emision-'))
   const prevCert = process.env.CERTIFICADO_DIR
   const prevInvoices = process.env.COMPROBANTES_DIR
@@ -130,6 +129,7 @@ test('reserva solo una boleta sin licencia, conserva su XML al reintentar y desb
   await saveCertificado(certificadoFicticio(password), 'ficticio.p12', password)
   const storage = new Map([
     ['emision_activa', { activa: false }],
+    ['emision_sin_licencia', { orderId: 'cupo-ya-utilizado' }],
     ['sunat', {
       ruc: '20100066603',
       razonSocial: 'LOCAL DE PRUEBA', direccionFiscal: 'LIMA, PERÚ', usuario: 'FICTICIO', clave: 'clave-ficticia',
@@ -139,6 +139,7 @@ test('reserva solo una boleta sin licencia, conserva su XML al reintentar y desb
     ['invoices', [{ orderId: 'pedido-previo', serie: 'B003', numero: 6, status: 'aceptada' }]],
   ])
   const pedidoFacturaId = '452b5e9e-441d-45ba-b946-26c4c3ef02d7'
+  let orderOverride = {}
   t.mock.method(sql.ConnectionPool.prototype, 'connect', async () => ({ connected: true, request: () => new sql.Request() }))
   for (const method of ['begin', 'commit', 'rollback']) t.mock.method(sql.Transaction.prototype, method, async () => {})
   t.mock.method(sql.Request.prototype, 'query', async function (query) {
@@ -152,7 +153,7 @@ test('reserva solo una boleta sin licencia, conserva su XML al reintentar y desb
       return { recordset: [] }
     }
     if (query.includes('FROM dbo.Orders')) {
-      return { recordset: [{ Paid: true, Status: 'entregado', Total: 20, DocTipo: this.parameters.id.value === pedidoFacturaId ? 'factura' : 'boleta' }] }
+      return { recordset: [{ Paid: true, Status: 'entregado', Total: 20, DocTipo: this.parameters.id.value === pedidoFacturaId ? 'factura' : 'boleta', ...orderOverride }] }
     }
     if (query.includes('FROM dbo.Settings')) return { recordset: [{ IgvRate: 0.18 }] }
     assert.fail('Consulta inesperada: ' + query)
@@ -166,6 +167,7 @@ test('reserva solo una boleta sin licencia, conserva su XML al reintentar y desb
     assert.equal(storage.get('invoices')[0].status, 'pendiente')
     const request = parseXml(options.body)
     if (request.getElementsByTagNameNS(SERVICE, 'getStatus').length) {
+      assert.equal(options.headers.SOAPAction, 'urn:getStatus')
       assert.equal(request.getElementsByTagName('ticket').item(0).textContent, '123456')
       const filename = storage.get('invoices')[0].resumen.nombre
       const cdr = cdrZip(filename, filename.slice(12), '0')
@@ -177,13 +179,15 @@ test('reserva solo una boleta sin licencia, conserva su XML al reintentar y desb
     const xml = Buffer.from(zip[`${filename}.xml`])
     payloads.push(xml)
     if (request.getElementsByTagNameNS(SERVICE, 'sendSummary').length) {
-      assert.match(filename, /^20100066603-RC-\d{8}-1$/)
+      assert.equal(options.headers.SOAPAction, 'urn:sendSummary')
+      assert.match(filename, /^20100066603-RC-\d{8}-\d+$/)
       assert.deepEqual(Object.keys(zip), [`${filename}.xml`])
-      assert.match(xml.toString(), /<cbc:ID>B003-7<\/cbc:ID>/)
+      assert.match(xml.toString(), new RegExp(`<cbc:ID>B003-${storage.get('invoices')[0].numero}</cbc:ID>`))
       assert.match(xml.toString(), /<cbc:Percent>18\.00<\/cbc:Percent>/)
       if (payloads.length === 1) throw new Error('Corte ficticio después de la reserva')
       return resultXml('<ser:sendSummaryResponse><ticket>123456</ticket></ser:sendSummaryResponse>')
     }
+    assert.equal(options.headers.SOAPAction, 'urn:sendBill')
     const cdr = cdrZip(filename, filename.split('-').slice(2).join('-'), '0')
     return resultXml(`<ser:sendBillResponse><applicationResponse>${cdr.toString('base64')}</applicationResponse></ser:sendBillResponse>`)
   })
@@ -198,31 +202,28 @@ test('reserva solo una boleta sin licencia, conserva su XML al reintentar y desb
     cliente: { tipDoc: '6', num: '20600000005', nombre: 'CLIENTE FICTICIO' },
   }
   assert.equal((await estadoEmision()).disponible, true)
-  assert.equal((await estadoEmision()).cupoSinLicencia, 1)
-  await assert.rejects(
-    guardarConfiguracionSunat({ razonSocial: 'OTRO NOMBRE' }, 'licencia-invalida'),
-    /licencia .* no es válida/i,
-  )
-  assert.equal(storage.get('sunat').razonSocial, 'LOCAL DE PRUEBA')
-  await guardarConfiguracionSunat({ razonSocial: 'LOCAL DE PRUEBA ACTUALIZADO', clave: '', factilizaToken: 'otro valor' }, '')
+  assert.equal((await estadoEmision()).activa, true)
+  assert.equal((await estadoEmision()).requiereLicencia, false)
+  await activarEmision()
+  await guardarConfiguracionSunat({ razonSocial: 'LOCAL DE PRUEBA ACTUALIZADO', clave: '', factilizaToken: 'otro valor' })
   assert.equal(storage.get('sunat').clave, 'clave-ficticia')
   assert.equal(storage.get('sunat').factilizaToken, 'token-ficticio')
   const configPublica = await configuracionSunat()
   assert.equal(configPublica.claveSolGuardada, true)
   assert.equal(Object.hasOwn(configPublica, 'clave'), false)
   assert.equal(Object.hasOwn(configPublica, 'factilizaToken'), false)
-  await assert.rejects(emitirComprobante(secondInput), /licencia de facturación para emitir facturas/)
   await assert.rejects(emitirComprobante({ ...input, orderId: pedidoFacturaId }), /El pedido requiere una factura/)
   await assert.rejects(emitirComprobante({ ...input, lines: [{ ...input.lines[0], precio: 11 }] }), /importe pagado/)
+  for (const override of [{ Paid: false }, { Status: 'cancelado' }, { Status: 'eliminado' }]) {
+    orderOverride = override
+    await assert.rejects(emitirComprobante(input), /pedido pagado y vigente/)
+  }
+  orderOverride = {}
   assert.equal(storage.get('invoices').length, 1)
-  assert.equal((await estadoEmision()).cupoSinLicencia, 1)
   const { invoice: pending } = await emitirComprobante(input)
   assert.equal(pending.status, 'pendiente')
   assert.equal(pending.numero, 7)
-  assert.equal((await estadoEmision()).disponible, false)
-  assert.equal((await estadoEmision()).cupoSinLicencia, 0)
-  await assert.rejects(emitirComprobante({ ...input, orderId: '166cdd99-1b1c-45d2-8a51-49573cc3d12e' }), /Ya se usó la boleta sin licencia/)
-  await assert.rejects(emitirComprobante(secondInput), /Ya se usó la boleta sin licencia/)
+  assert.equal((await estadoEmision()).disponible, true)
   assert.equal(fetchMock.mock.callCount(), 1)
   const sentSummary = await reintentarSunat(input.orderId)
   assert.equal(sentSummary.status, 'pendiente')
@@ -236,19 +237,32 @@ test('reserva solo una boleta sin licencia, conserva su XML al reintentar y desb
   assert.equal((await emitirComprobante(input)).invoice.status, 'aceptada')
   assert.equal(fetchMock.mock.callCount(), 3)
 
-  const licenciaDePrueba = t.mock.method(crypto, 'timingSafeEqual', () => true)
-  syncBuiltinESMExports()
-  try {
-    await assert.rejects(guardarConfiguracionSunat({ ruc: '' }, 'licencia-ficticia'), /Completa los datos/)
-    assert.equal((await estadoEmision()).activa, false)
-    await guardarConfiguracionSunat({}, 'licencia-ficticia')
-  } finally {
-    licenciaDePrueba.mock.restore()
-    syncBuiltinESMExports()
-  }
-  assert.equal((await estadoEmision()).disponible, true)
+  // No se realiza ninguna activación ni se modifica el estado heredado de licencia.
   const { invoice: second } = await emitirComprobante(secondInput)
   assert.equal(second.status, 'aceptada')
   assert.equal(second.tipo, 'factura')
   assert.equal(fetchMock.mock.callCount(), 4)
+  const thirdInput = { ...input, orderId: '166cdd99-1b1c-45d2-8a51-49573cc3d12e' }
+  const { invoice: third } = await emitirComprobante(thirdInput)
+  assert.equal(third.numero, 8)
+  assert.equal(third.status, 'pendiente')
+  assert.equal((await reintentarSunat(thirdInput.orderId)).status, 'aceptada')
+  assert.equal(fetchMock.mock.callCount(), 6)
+  assert.deepEqual(storage.get('emision_activa'), { activa: false })
+  assert.deepEqual(storage.get('emision_sin_licencia'), { orderId: 'cupo-ya-utilizado' })
+
+  await guardarConfiguracionSunat({ ruc: '' })
+  assert.equal((await estadoEmision()).disponible, false)
+  await assert.rejects(activarEmision(), /Completa los datos/)
+  await assert.rejects(emitirComprobante(input), /Completa los datos de emisión/)
+  await guardarConfiguracionSunat({ ruc: '20100066603' })
+  const passFile = join(dir, 'certificado', 'certificado.pass')
+  await writeFile(passFile, 'incorrecta')
+  assert.equal((await estadoEmision()).disponible, false)
+  assert.match((await estadoEmision()).motivo, /Revisa el archivo y su clave/)
+  await assert.rejects(activarEmision(), /Revisa el archivo y su clave/)
+  await writeFile(passFile, password)
+  assert.equal((await estadoEmision()).disponible, true)
+  await rm(passFile)
+  assert.equal((await estadoEmision()).disponible, false)
 })

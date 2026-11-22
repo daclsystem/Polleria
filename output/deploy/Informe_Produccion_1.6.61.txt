@@ -1,0 +1,71 @@
+INFORME INTERNO DE PRODUCCIÓN - CHIFA POLLERÍA LOPEZ
+Revisión: 21 de noviembre de 2026, hora de Lima.
+
+RESULTADO
+La API fue actualizada en /opt/polleria/api y está en línea. Se inició sesión con el acceso facilitado por el propietario y se confirmó visualmente en System: “Emisión activa” y “Certificado guardado en el servidor: certificado.p12”. El aviso “API pendiente de actualizar” ya no aparece. La configuración y el certificado permiten habilitar la emisión sin key. La base de datos y el certificado original se conservaron. Esto no acredita todavía la aceptación de un comprobante tributario real ni significa que toda la seguridad de producción esté cerrada.
+
+CAMBIOS Y COMPROBACIONES REALIZADAS
+- Se actualizó la API compilada junto con su fuente y dependencias, con respaldo previo y reversión prevista durante el despliegue.
+- La emisión ya no depende de una key ni del antiguo cupo de una boleta. Conserva validación de pedido pagado, importe, configuración, certificado y reintentos.
+- Se corrigió SOAPAction por operación (urn:sendBill, urn:sendSummary, urn:getStatus), conforme al WSDL publicado de SUNAT.
+- Certificado existente reconocido: certificado.p12. Clave válida, firma y vigencia comprobadas; vence el 19/11/2029 a las 14:34:50 UTC.
+- Los hashes de .env y de los tres archivos persistentes del certificado coinciden antes y después de la intervención. No se reemplazaron con archivos locales.
+- Diez archivos clave desplegados, incluidos fuente, compilación y pruebas, coinciden con los hashes de la entrega local.
+- API /health: HTTP 200, base de datos conectada. Ruta de emisión sin autenticación: HTTP 401, según lo esperado. CORS permite al dominio del negocio. Handshake de tiempo real y una consulta de ruta geográfica responden.
+- Se ejecutaron 14 pruebas automatizadas de firma, PDF, CDR, emisión sin licencia, reintentos, importes y estados de WhatsApp: todas pasan en local y en el servidor.
+- Boleta y factura ficticias fueron aceptadas por SUNAT Beta con código 0, XML, PDF y CDR. La factura tuvo inicialmente un HTTP 401 y fue aceptada al repetirla por separado. Las pruebas usan numeración independiente y no consumen correlativos reales.
+- La consulta getStatus en producción con un ticket ficticio devolvió HTTP 200 sin cuerpo, incluso con SOAPAction correcto y una variante WS-Security. No se diagnosticó por ello una contraseña incorrecta ni se certificaron permisos SOL: la respuesta no es concluyente.
+- No se emitieron comprobantes tributarios reales ni se reenviaron en lote los pedidos históricos. No se modificó el estado de los comprobantes anteriores.
+- WhatsApp permanece inactivo por indicación del propietario. La sesión consultada devolvió 404. La API y los archivos de frontend entregados solo intentan enviar si la sesión reporta WORKING. Una sesión desconectada no se reporta como envío pendiente. No se creó una cola para remitir mensajes al reconectar.
+- No se enviaron mensajes reales de prueba. La comprobación posterior de inicio de sesión utilizó únicamente el acceso facilitado por el propietario.
+- Se habilitó pm2-root.service para el arranque automático y se guardó la lista PM2. Se verificó enabled; no se reinició el servidor para probar un arranque completo.
+
+RESPALDOS
+Código anterior y configuración privada:
+/opt/polleria/backups/api-before-1.6.60-20261121-215217/
+La configuración y certificado se guardaron dentro del subdirectorio privado con permisos restrictivos.
+
+Respaldo SQL COPY_ONLY con CHECKSUM, verificado mediante RESTORE VERIFYONLY (sin restaurar ni sobrescribir la base activa):
+/opt/polleria/backups/api-before-1.6.60-20261121-215217/Polleria_20261122T030146Z.bak
+Tamaño: 173.662.208 bytes.
+También persiste en el volumen SQL, en /var/opt/mssql/backup/.
+No se configuró aún una política automática de respaldos ni copia fuera del servidor. El respaldo de código no sustituye el respaldo de la base.
+
+FRONTENDS PARA SUBIR POR EL PROPIETARIO
+Entrega 1.6.61 en cuatro carpetas independientes: web, system, cliente, driver.
+- web: subir el contenido a la raíz del dominio.
+- system: subir el contenido a /system/.
+- cliente: subir el contenido a /cliente/.
+- driver: subir el contenido a /driver/.
+Incluir .htaccess y limpiar caché del hosting/CDN. System incluye regla de no caché para version.json e index.html. Las reglas Apache pueden requerir su equivalente en el panel del hosting si hay otra capa que las sobreescriba.
+
+El dominio público está en 5.75.184.209; la API está en 116.203.70.104. No se usaron las credenciales de un servidor contra el otro. Al revisar el sitio, System mostraba 1.6.60, web 1.6.30 y cliente/driver 1.6.35. La entrega 1.6.61 todavía debe subirla el propietario; no se declara publicada en ese hosting.
+version.json se servía con max-age=315360000 (diez años): corregir esa cabecera y purgar caché. Una recarga normal puede conservar versiones antiguas si hay una caché intermedia.
+
+PENDIENTES PRIORITARIOS PARA CERRAR PRODUCCIÓN
+P0 - Acceso: el código existente acepta un respaldo universal y lo expone en respuestas de acceso. Sustituirlo por un flujo seguro y un canal alternativo verificado. No se deshabilitó silenciosamente mientras WhatsApp está inactivo porque bloquearía el acceso actual. Antes de captar clientes digitales, preparar y verificar la transición.
+P0 - Tiempo real: la implementación permite unirse a salas por nombre sin verificar identidad ni permisos. Incorporar autenticación, autorización por sala, límites y cierre por sesión; probar cocina, caja y seguimiento.
+P0 - SQL: el puerto 1433 es alcanzable desde fuera, comprobado con conexión TCP al servidor. Restringirlo a loopback/red privada o a IP administrativas expresamente necesarias y comprobar API y administración después. El firewall UFW activo no evitó esa exposición de Docker. No se modificaron reglas que pudieran cortar un acceso administrativo no inventariado.
+P0 - Dependencias: npm audit --omit=dev informó 12 paquetes afectados (1 crítico, 8 altos, 2 moderados, 1 bajo). Es un reporte de dependencias, no evidencia de explotación. Actualizar en una entrega de seguridad, revisar compatibilidad de MinIO y volver a validar acceso, archivos, SQL y tiempo real; no aplicar un downgrade mayor automático a producción.
+P1 - SUNAT real: confirmar en SOL permisos del usuario secundario y registro del certificado; comprobar una venta real identificada y revisar su CDR de aceptación, manteniendo el correlativo y la evidencia. Beta valida estructura y no acredita esos permisos de producción.
+P1 - Continuidad: automatizar respaldos SQL completos y de log acordes con recuperación FULL, copia cifrada externa, alertas y prueba de restauración en un entorno independiente. Hoy existe el respaldo puntual verificado de esta intervención.
+P1 - Hosting: publicar 1.6.61 de las cuatro aplicaciones y corregir caché. Comprobar versiones, inicio de sesión y acceso desde móvil tras subir.
+P1 - Operación: revisar individualmente pedidos activos antiguos y la boleta rechazada existente. No emitir masivamente los históricos ni cancelar estados por antigüedad sin revisión.
+P2 - Rendimiento: los builds avisan de algunos bloques JavaScript mayores de 500 kB. Medir carga móvil y dividir módulos según uso; no se hizo prueba de carga concurrente en la base activa.
+
+RECURSOS Y TLS AL MOMENTO DE LA REVISIÓN
+Servidor API: 2 CPU, memoria total aproximada 3,7 GiB; disponible 1,2 GiB; sin swap; carga baja en la muestra. Disco: alrededor de 19 GiB libres antes del respaldo. No se justifica comprar otro servidor solo por esta muestra.
+SQL Express: archivos de datos 200 MB y log 72 MB al consultar. Base ONLINE, recuperación FULL.
+HTTPS validado. Certificado TLS API vence 21/01/2027; web 26/01/2027. Revisar renovación y alertas antes de esas fechas.
+Los demás servicios y contenedores del servidor no se actualizaron ni reiniciaron.
+
+FUENTES TÉCNICAS
+SUNAT, servicios oficiales: https://orientacion.sunat.gob.pe/guias-manuales-y-servicios-web
+SUNAT, pautas Beta: https://orientacion.sunat.gob.pe/12-pautas-servicio-beta
+SUNAT, WSDL producción: https://e-factura.sunat.gob.pe/ol-ti-itcpfegem/billService?wsdl
+OWASP, seguridad de WebSocket: https://cheatsheetseries.owasp.org/cheatsheets/WebSocket_Security_Cheat_Sheet.html
+OWASP, autenticación: https://cheatsheetseries.owasp.org/cheatsheets/Authentication_Cheat_Sheet.html
+Además: código local, lecturas autorizadas del servidor, consultas SQL agregadas y comprobaciones HTTP/TCP. El diagnóstico no sustituye una auditoría de seguridad completa.
+Captura de la verificación: output/previews/SUNAT_Produccion_Emision_Activa.jpg
+
+DOCUMENTO INTERNO. No subir este informe, los PDFs ni los respaldos a una carpeta pública del sitio.

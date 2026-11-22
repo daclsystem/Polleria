@@ -1,0 +1,1 @@
+function e(e,t){if(e&&!(e.isSystem||t===`admin`))return e.branchId}function t(t,n,r){let i=e(n,r);return i?t.filter(e=>!e.branchId||e.branchId===i):t}function n(e,t){return t&&e.find(e=>e.id===t)?.name||``}export{t as n,n as t};

@@ -285,7 +285,7 @@ async function callBillService(environment: SunatEnvironment, auth: SunatAuth, a
 </soap:Envelope>`
   const response = await fetch(environment === 'beta' ? SUNAT_BETA : SUNAT_PRODUCTION, {
     method: 'POST',
-    headers: { 'Content-Type': 'text/xml; charset=utf-8', SOAPAction: '' },
+    headers: { 'Content-Type': 'text/xml; charset=utf-8', SOAPAction: `urn:${action}` },
     redirect: 'error',
     signal: AbortSignal.timeout(20_000),
     body: envelope,

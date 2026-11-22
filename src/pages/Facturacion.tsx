@@ -1,12 +1,11 @@
-import { useEffect, useId, useRef, useState } from 'react'
-import { AlertCircle, CheckCircle2, Eye, EyeOff, FileText, Key, Plus, RefreshCw, Send, Settings2, Trash2 } from 'lucide-react'
+import { useCallback, useEffect, useId, useRef, useState } from 'react'
+import { AlertCircle, CheckCircle2, Eye, EyeOff, FileText, Plus, RefreshCw, Send, Settings2, Trash2 } from 'lucide-react'
 import { useStore } from '../store/StoreContext'
 import { useAuth } from '../auth/AuthContext'
 import { formatDateTime, padOrder, round2, soles } from '../lib/format'
 import { isVoidOrder, type Order } from '../types'
 import { Field, Modal, PageTitle, inputClass } from '../components/ui'
 import {
-  apiActivarEmision,
   apiComprobanteFiles,
   apiDownloadComprobante,
   apiEmitComprobante,
@@ -365,13 +364,30 @@ export function Facturacion() {
   const [certClave, setCertClave] = useState('')
   const [certMsg, setCertMsg] = useState<string | null>(null)
   const [certSending, setCertSending] = useState(false)
+  const [reemplazarCertificado, setReemplazarCertificado] = useState(false)
   const [emision, setEmision] = useState<EstadoEmision | null>(null)
-  const [licencia, setLicencia] = useState('')
-  const compatible = typeof emision?.configurada === 'boolean'
-  const disponible = compatible && emision?.disponible === true
-  const primeraEmision = disponible && !emision?.activa && emision?.cupoSinLicencia === 1
-  const emisionMasiva = disponible && emision?.activa === true
-  const faltaLicencia = compatible && !emision?.activa && emision?.cupoSinLicencia === 0
+  const [consultandoEmision, setConsultandoEmision] = useState(true)
+  const [errorEmision, setErrorEmision] = useState(false)
+  const consultaEmisionId = useRef(0)
+  const compatible = typeof emision?.configurada === 'boolean' && emision.requiereLicencia === false
+  const disponible = !consultandoEmision && compatible && emision?.disponible === true
+
+  const consultarEmision = useCallback(async () => {
+    const solicitud = ++consultaEmisionId.current
+    setConsultandoEmision(true)
+    setErrorEmision(false)
+    try {
+      const resultado = await apiEmisionEstado()
+      if (solicitud === consultaEmisionId.current) setEmision(resultado)
+    } catch {
+      if (solicitud === consultaEmisionId.current) {
+        setEmision(null)
+        setErrorEmision(true)
+      }
+    } finally {
+      if (solicitud === consultaEmisionId.current) setConsultandoEmision(false)
+    }
+  }, [])
 
   useEffect(() => {
     if (admin) void apiGetSunatConfig()
@@ -389,10 +405,9 @@ export function Facturacion() {
     void apiComprobanteFiles()
       .then((r) => setFiles(r.files || {}))
       .catch(() => undefined)
-    void apiEmisionEstado()
-      .then(setEmision)
-      .catch(() => setEmision(null))
-  }, [admin])
+    void consultarEmision()
+    return () => { consultaEmisionId.current += 1 }
+  }, [admin, consultarEmision])
 
   const paidOrders = state.orders.filter((o) => o.paid && !isVoidOrder(o.status))
   const invoicedIds = new Set(invoices.map((i) => i.orderId))
@@ -413,30 +428,27 @@ export function Facturacion() {
   const abrirConfig = () => {
     setConfig({ ...savedConfig, clave: '' })
     setConfigResult(null)
-    setLicencia('')
     setCertFile(null)
     setCertClave('')
     setCertMsg(null)
+    setReemplazarCertificado(false)
     setConfigOpen(true)
+    void consultarEmision()
   }
 
   const handleSaveConfig = async () => {
-    if (!compatible || (!admin && !licencia.trim())) return
+    if (!compatible || !admin) return
     setSavingConfig(true)
     setConfigResult(null)
     try {
-      let resultado: EstadoEmision
-      if (admin) {
-        const response = await apiSaveSunatConfig(config, licencia.trim())
-        setSavedConfig(configuracionGuardada(response.config))
-        resultado = response.estado
-      } else {
-        resultado = await apiActivarEmision(licencia.trim())
-      }
-      setEmision(resultado)
-      setLicencia('')
+      const response = await apiSaveSunatConfig(config)
+      setSavedConfig(configuracionGuardada(response.config))
+      consultaEmisionId.current += 1
+      setConsultandoEmision(false)
+      setErrorEmision(false)
+      setEmision(response.estado)
       setConfigOpen(false)
-      setLastResult(licencia.trim() && resultado.disponible ? 'Emisión activada.' : 'Configuración SUNAT guardada.')
+      setLastResult(response.estado.disponible ? 'Configuración guardada. Emisión habilitada.' : `Configuración guardada. ${response.estado.motivo || 'Completa los datos SUNAT y el certificado para emitir.'}`)
     } catch (e) {
       setConfigResult((e as Error).message)
     } finally {
@@ -478,9 +490,10 @@ export function Facturacion() {
         certificadoNombre: info.nombre,
       }))
       setSavedConfig((prev) => ({ ...prev, certificadoCargado: info.cargado, certificadoNombre: info.nombre }))
-      void apiEmisionEstado().then(setEmision).catch(() => undefined)
+      void consultarEmision()
       setCertFile(null)
       setCertClave('')
+      setReemplazarCertificado(false)
       setCertMsg(`Certificado guardado: ${info.nombre}`)
     } catch (e) {
       setCertMsg((e as Error).message)
@@ -502,9 +515,9 @@ export function Facturacion() {
   }
 
   const abrirCola = (orders: Order[]) => {
-    if (!orders.length || !disponible || (primeraEmision && orders[0].docTipo === 'factura')) return
+    if (!orders.length || !disponible) return
     setDatosClientes({})
-    setQueue(emisionMasiva ? orders : orders.slice(0, 1))
+    setQueue(orders)
     setQueueAt(0)
     cargarPedido(orders[0])
     setEmitOpen(true)
@@ -524,7 +537,6 @@ export function Facturacion() {
 
   const handleEmit = async () => {
     if (!selectedOrder || !cliente) return
-    if (primeraEmision && emitType !== 'boleta') return
     if (clienteError) {
       setLastResult(clienteError)
       return
@@ -553,7 +565,7 @@ export function Facturacion() {
       void apiComprobanteFiles().then((r) => setFiles(r.files || {})).catch(() => undefined)
       const numero = String(result.invoice.numero).padStart(8, '0')
       setLastResult(`${result.invoice.tipo} ${result.invoice.serie}-${numero} · ${result.invoice.status}${result.invoice.mensaje ? ' · ' + result.invoice.mensaje : ''}`)
-      if (!primeraEmision && result.invoice.status === 'aceptada' && queueAt < queue.length - 1) irA(queueAt + 1)
+      if (result.invoice.status === 'aceptada' && queueAt < queue.length - 1) irA(queueAt + 1)
       else {
         cerrarEmision()
         setVista('emitidos')
@@ -587,7 +599,14 @@ export function Facturacion() {
     return <RefreshCw size={14} className="text-amber-600" />
   }
 
-  const estado = !compatible ? 'Estado sin confirmar' : primeraEmision ? '1 boleta disponible' : disponible ? 'Emisión activa' : faltaLicencia ? 'Boleta sin licencia utilizada' : 'Configuración pendiente'
+  const estado = consultandoEmision ? 'Consultando emisión…'
+    : errorEmision ? 'No se pudo consultar'
+      : !compatible ? 'API pendiente de actualizar'
+        : disponible ? 'Emisión activa' : 'Configuración pendiente'
+  const detalleEstado = consultandoEmision ? 'Consultando el estado de facturación en el servidor.'
+    : errorEmision ? 'No se pudo consultar la facturación. Vuelve a comprobar el estado; si el problema continúa, revisa la conexión con el servidor.'
+      : !compatible ? 'La API de facturación del servidor aún debe actualizarse. Sube la API compilada y reinicia su servicio para habilitar esta versión. Conserva el certificado y la configuración guardados.'
+        : emision?.motivo || 'La emisión se habilita al completar los datos SUNAT y cargar un certificado válido.'
   const metrics = [
     { label: 'Por facturar', value: pendingOrders.length, action: () => setVista('pendientes'), selected: vista === 'pendientes' },
     { label: 'Boletas', value: invoices.filter((i) => i.tipo === 'boleta').length, action: () => verEmitidos('boleta'), selected: vista === 'emitidos' && filtroTipo === 'boleta' },
@@ -664,11 +683,11 @@ export function Facturacion() {
             <h2 className="text-sm font-semibold text-ink/75">Pedidos pagados sin comprobante</h2>
             <button
               type="button"
-              disabled={!emisionMasiva || !picked.length}
+              disabled={!disponible || !picked.length}
               onClick={() => abrirCola(pendingOrders.filter((o) => picked.includes(o.id)))}
               className="flex min-h-9 items-center gap-1 rounded-xl bg-ember px-3 text-xs font-semibold text-white disabled:opacity-40"
             >
-              <Send size={12} /> {emisionMasiva ? `Revisar ${picked.length || ''} seleccionados` : 'Emisión masiva con licencia'}
+              <Send size={12} /> Revisar {picked.length || ''} seleccionados
             </button>
           </div>
           {pendingOrders.length === 0 ? (
@@ -681,7 +700,7 @@ export function Facturacion() {
                     <input
                       type="checkbox"
                       className="h-4 w-4 rounded"
-                      disabled={!emisionMasiva}
+                      disabled={!disponible}
                       checked={picked.includes(o.id)}
                       onChange={(e) => setPicked((prev) => e.target.checked ? [...prev, o.id] : prev.filter((id) => id !== o.id))}
                     />
@@ -697,7 +716,7 @@ export function Facturacion() {
                     <span className="whitespace-nowrap text-sm font-bold tabular-nums">{soles(o.total)}</span>
                     <button
                       type="button"
-                      disabled={!disponible || (primeraEmision && o.docTipo === 'factura')}
+                      disabled={!disponible}
                       onClick={() => abrirCola([o])}
                       className="inline-flex min-h-11 items-center gap-1.5 rounded-lg border border-ink/12 px-3 text-xs font-semibold enabled:hover:bg-ink/8 focus-visible:outline-2 focus-visible:outline-ember disabled:opacity-45"
                     >
@@ -869,7 +888,7 @@ export function Facturacion() {
                 <button
                   type="button"
                   onClick={() => void handleEmit()}
-                  disabled={sending || !disponible || (primeraEmision && emitType !== 'boleta') || Boolean(clienteError) || total !== selectedOrder.total}
+                  disabled={sending || !disponible || Boolean(clienteError) || total !== selectedOrder.total}
                   className="min-h-11 flex-1 rounded-xl bg-ember font-semibold text-white disabled:opacity-50"
                 >
                   {sending ? 'Revisando…' : 'Emitir'}
@@ -880,8 +899,7 @@ export function Facturacion() {
                   </button>
                 ) : null}
               </div>
-              {primeraEmision ? <p className="text-sm text-ink/70">Este envío usará la única boleta disponible antes de activar la licencia.</p> : null}
-              {!disponible ? <p className="text-sm text-ink/70">{faltaLicencia ? 'Activa la licencia para emitir otro comprobante.' : 'Completa Configurar SUNAT para habilitar la emisión.'}</p> : null}
+              {!disponible ? <p className="text-sm text-ink/70">{emision?.motivo || 'Completa Configurar SUNAT para habilitar la emisión.'}</p> : null}
               {total !== selectedOrder.total ? (
                 <p className="text-sm text-amber-800 dark:text-amber-300">El detalle debe sumar el importe pagado de {soles(selectedOrder.total)}.</p>
               ) : null}
@@ -892,23 +910,20 @@ export function Facturacion() {
 
       <Modal open={configOpen} title="Configurar SUNAT" onClose={() => setConfigOpen(false)} closeDisabled={savingConfig || certSending || testing !== null} wide>
         <form className="space-y-5" onSubmit={(event) => { event.preventDefault(); void handleSaveConfig() }}>
-          <section aria-labelledby="licencia-facturacion" className="rounded-xl border border-ink/12 bg-cream px-4 py-3.5">
+          <section aria-labelledby="estado-facturacion" className="rounded-xl border border-ink/12 bg-cream px-4 py-3.5">
             <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1.5">
-              <h3 id="licencia-facturacion" className="inline-flex items-center gap-2 text-sm font-bold"><Key size={15} aria-hidden /> Licencia de facturación</h3>
-              <span className={`text-xs font-semibold ${emision?.activa ? 'text-ember' : 'text-ink/70'}`}>
-                {!compatible ? 'Estado sin confirmar' : emision?.activa ? 'Activada' : 'Pendiente'}
+              <h3 id="estado-facturacion" className="text-sm font-bold">Emisión automática</h3>
+              <span className={`text-xs font-semibold ${disponible ? 'text-ember' : 'text-ink/70'}`}>
+                {estado}
               </span>
             </div>
-            {compatible && !emision?.activa ? (
-              <div className="mt-3">
-                <Field label="Licencia">
-                  <input className={inputClass} type="password" value={licencia} autoComplete="off"
-                    onChange={(e) => setLicencia(e.target.value)} />
-                </Field>
-                <p className="mt-2 text-xs text-ink/70">
-                  {faltaLicencia ? 'La boleta sin licencia ya se usó. Activa la licencia para continuar.' : 'Con los datos SUNAT completos, puedes emitir una boleta antes de activar la licencia.'}
-                </p>
-              </div>
+            <p role="status" aria-live="polite" className="mt-2 text-sm leading-relaxed text-ink/80">{detalleEstado}</p>
+            {!disponible ? (
+              <button type="button" disabled={consultandoEmision} onClick={() => void consultarEmision()}
+                className="mt-3 inline-flex min-h-11 items-center gap-2 rounded-lg border border-ink/15 px-3 text-sm font-semibold hover:bg-ink/8 disabled:opacity-50">
+                <RefreshCw size={14} aria-hidden className={consultandoEmision ? 'motion-safe:animate-spin' : undefined} />
+                {consultandoEmision ? 'Consultando…' : 'Volver a comprobar'}
+              </button>
             ) : null}
           </section>
 
@@ -951,23 +966,44 @@ export function Facturacion() {
               </section>
 
               <section aria-labelledby="certificado-sunat" className="space-y-3 border-t border-ink/12 pt-4">
-                <div>
-                  <h3 id="certificado-sunat" className="text-sm font-bold">Certificado digital</h3>
-                  <p className="mt-1 break-all text-xs text-ink/70">{config.certificadoCargado ? config.certificadoNombre || 'Certificado guardado' : 'Carga tu certificado .p12 o .pfx.'}</p>
-                </div>
-                <div className="grid items-end gap-3 sm:grid-cols-2">
-                  <Field label="Archivo del certificado">
-                    <input type="file" accept=".pfx,.p12,application/x-pkcs12" className="block min-h-12 w-full min-w-0 rounded-xl border border-ink/12 p-2 text-sm file:mr-2 file:rounded-md file:border-0 file:bg-ink/8 file:px-2 file:py-1.5"
-                      onChange={(e) => setCertFile(e.target.files?.[0] ?? null)} />
-                  </Field>
-                  <Field label="Clave del archivo">
-                    <input className={inputClass} type="password" value={certClave} autoComplete="new-password" onChange={(e) => setCertClave(e.target.value)} />
-                  </Field>
-                </div>
-                <button type="button" disabled={certSending || !certFile} onClick={() => void subirCertificado()}
-                  className="min-h-11 rounded-xl border border-ink/15 px-4 text-sm font-semibold hover:bg-ink/8 disabled:opacity-50">
-                  {certSending ? 'Subiendo…' : 'Subir certificado'}
-                </button>
+                <h3 id="certificado-sunat" className="text-sm font-bold">Certificado digital</h3>
+                {config.certificadoCargado ? (
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div className="min-w-0 flex-1 basis-56">
+                      <p className="inline-flex items-center gap-2 text-sm font-semibold"><CheckCircle2 size={16} aria-hidden /> Certificado guardado en el servidor</p>
+                      <p className="mt-1 break-all text-sm text-ink/85">{config.certificadoNombre || 'Certificado digital'}</p>
+                      <p className="mt-1 text-xs leading-relaxed text-ink/75">El sistema utilizará este archivo. No necesitas volver a seleccionarlo ni ingresar su contraseña.</p>
+                    </div>
+                    {!reemplazarCertificado ? (
+                      <button type="button" onClick={() => { setReemplazarCertificado(true); setCertMsg(null) }}
+                        className="min-h-11 rounded-lg border border-ink/15 px-3 text-sm font-semibold hover:bg-ink/8">Cambiar certificado</button>
+                    ) : null}
+                  </div>
+                ) : <p className="text-sm text-ink/75">Carga el archivo .p12 o .pfx y su contraseña para guardarlo en el servidor.</p>}
+                {!config.certificadoCargado || reemplazarCertificado ? (
+                  <>
+                    <div className="grid items-end gap-3 sm:grid-cols-2">
+                      <Field label={config.certificadoCargado ? 'Nuevo archivo del certificado' : 'Archivo del certificado'}>
+                        <input type="file" accept=".pfx,.p12,application/x-pkcs12" disabled={certSending}
+                          className="block min-h-12 w-full min-w-0 rounded-xl border border-ink/12 p-2 text-sm file:mr-2 file:rounded-md file:border-0 file:bg-ink/8 file:px-2 file:py-1.5"
+                          onChange={(e) => setCertFile(e.target.files?.[0] ?? null)} />
+                      </Field>
+                      <Field label={config.certificadoCargado ? 'Contraseña del nuevo certificado' : 'Contraseña del certificado'}>
+                        <input className={inputClass} type="password" value={certClave} disabled={certSending} autoComplete="new-password" onChange={(e) => setCertClave(e.target.value)} />
+                      </Field>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      <button type="button" disabled={certSending || !certFile} onClick={() => void subirCertificado()}
+                        className="min-h-11 rounded-lg border border-ink/15 px-4 text-sm font-semibold hover:bg-ink/8 disabled:opacity-50">
+                        {certSending ? 'Guardando…' : config.certificadoCargado ? 'Reemplazar certificado' : 'Guardar certificado'}
+                      </button>
+                      {config.certificadoCargado ? (
+                        <button type="button" disabled={certSending} onClick={() => { setReemplazarCertificado(false); setCertFile(null); setCertClave(''); setCertMsg(null) }}
+                          className="min-h-11 rounded-lg px-3 text-sm font-semibold hover:bg-ink/8 disabled:opacity-50">Conservar certificado actual</button>
+                      ) : null}
+                    </div>
+                  </>
+                ) : null}
                 {certMsg ? <p role="status" className="text-xs text-ink/80">{certMsg}</p> : null}
               </section>
 
@@ -994,14 +1030,11 @@ export function Facturacion() {
           ) : null}
 
           {configResult ? <p role="status" className="rounded-xl border border-ink/12 bg-cream px-3 py-2.5 text-sm text-ink/85">{configResult}</p> : null}
-          {!compatible ? (
-            <p className="text-sm text-ink/75">{emision ? 'Actualiza el backend del POS para habilitar la emisión con licencia.' : 'No se pudo verificar el estado de emisión.'}</p>
-          ) : null}
-          {admin || (compatible && !emision?.activa) ? (
+          {admin ? (
             <div className="flex justify-end border-t border-ink/12 pt-4">
-              <button type="submit" disabled={savingConfig || !compatible || Boolean(certFile) || (!admin && !licencia.trim())}
+              <button type="submit" disabled={savingConfig || !compatible || Boolean(certFile)}
                 className="min-h-11 rounded-xl bg-ember px-4 text-sm font-semibold text-white disabled:opacity-50 dark:text-cream">
-                {savingConfig ? 'Guardando…' : admin ? licencia.trim() ? 'Guardar y activar' : 'Guardar configuración' : 'Activar emisión'}
+                {savingConfig ? 'Guardando…' : 'Guardar configuración'}
               </button>
             </div>
           ) : null}

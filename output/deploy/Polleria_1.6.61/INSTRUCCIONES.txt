@@ -1,0 +1,28 @@
+ENTREGA 1.6.61 - CHIFA POLLERÍA LOPEZ
+
+La API ya se actualizó por SSH en /opt/polleria/api. No necesita subirla desde este paquete.
+Estas cuatro carpetas son independientes y contienen los archivos públicos compilados.
+
+CARPETA     DESTINO EN EL HOSTING DE chifapollerialopez.com
+web/        Raíz del dominio (subir SU CONTENIDO, no crear una carpeta /web)
+system/     /system/ (sistema administrativo)
+cliente/    /cliente/ (app de clientes)
+driver/     /driver/ (app de repartidores)
+
+PASOS
+1. Guarde una copia de los archivos actuales del hosting.
+2. Suba el contenido de cada carpeta al destino indicado, incluyendo .htaccess.
+3. En web/ conserve las carpetas system, cliente y driver del hosting; cada una se actualiza con su carpeta correspondiente. No borre archivos de otros proyectos.
+4. Limpie la caché del hosting/CDN y recargue el navegador. En la revisión pública, version.json tenía caché de diez años. Ese archivo e index.html deben servirse con Cache-Control: no-cache, no-store, must-revalidate. El paquete incluye reglas Apache; si el hosting usa otro servidor o sobreescribe cabeceras, aplique la regla también en su panel.
+5. Abra /version.json, /system/version.json, /cliente/version.json y /driver/version.json. Los cuatro deben indicar 1.6.61.
+6. Entre en System, abra Facturación > Configurar SUNAT y pulse Reintentar consulta si conserva el aviso anterior. El certificado guardado se conserva en el servidor; un selector de archivo vacío no implica que se haya perdido.
+
+FACTURACIÓN
+No requiere key de activación. La API valida configuración y certificado para habilitar la emisión. Boleta y factura de prueba fueron aceptadas en SUNAT Beta. No se emitieron comprobantes tributarios reales durante esta intervención. La consulta de producción a un ticket ficticio devolvió HTTP 200 sin cuerpo; no acredita por sí sola los permisos SOL ni la aceptación de una venta real.
+
+WHATSAPP
+Permanece inactivo por decisión del propietario. La API solo intenta enviar cuando la sesión del proveedor está WORKING; no crea una cola de mensajes para enviarlos automáticamente al reconectar. No se enviaron mensajes reales de prueba.
+
+Importante: esta entrega son aplicaciones web compiladas. No son paquetes AAB/APK ni IPA para las tiendas. La publicación Android/iOS requiere su proceso y las cuentas correspondientes.
+
+El plan de crecimiento y el informe técnico se entregan por separado. No publique esos documentos en la carpeta pública del sitio: contienen información interna del negocio.

@@ -137,6 +137,15 @@ export async function sendWhatsAppText(
   const ctrl = new AbortController()
   const timer = window.setTimeout(() => ctrl.abort(), 8000)
   try {
+    const session = await fetch(`${base}/api/sessions/${encodeURIComponent(config.session)}`, {
+      headers: { Accept: 'application/json', 'X-Api-Key': config.apiKey },
+      signal: ctrl.signal,
+    })
+    if (!session.ok) return { ok: false, error: 'WhatsApp no conectado' }
+    const state = await session.json() as { status?: string }
+    if (String(state.status || '').toUpperCase() !== 'WORKING') {
+      return { ok: false, error: 'WhatsApp no conectado' }
+    }
     const res = await fetch(`${base}/api/sendText`, {
       method: 'POST',
       headers: {

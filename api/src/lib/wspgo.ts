@@ -34,6 +34,12 @@ export async function isWhatsAppReady(): Promise<boolean> {
   return up
 }
 
+async function requireConnectedSession() {
+  if (!(await isWhatsAppReady())) {
+    throw new Error('WhatsApp no conectado. Conecta la sesión para enviar mensajes.')
+  }
+}
+
 export function normalizePhone(phone: string) {
   let digits = phone.replace(/\D/g, '')
   if (digits.length === 9 && digits.startsWith('9')) digits = `51${digits}`
@@ -46,6 +52,7 @@ export function toChatId(phone: string) {
 }
 
 export async function sendWhatsAppText(phone: string, text: string): Promise<void> {
+  await requireConnectedSession()
   const ctrl = new AbortController()
   const timer = setTimeout(() => ctrl.abort(), HARD_MS)
   try {
@@ -77,6 +84,8 @@ export async function sendWhatsAppSoon(
   text: string,
   waitMs = QUICK_MS,
 ): Promise<{ ok: true; pending: boolean }> {
+  // La espera breve solo cubre el envío; una sesión desconectada nunca cuenta como envío pendiente.
+  await requireConnectedSession()
   const p = sendWhatsAppText(phone, text)
   const winner = await Promise.race([
     p.then(() => 'ok' as const),

@@ -55,10 +55,8 @@ npm run dev:cliente   # :5177
 
 Celular + código WhatsApp (respaldo `123456` si WhatsApp falla).
 
-## Clave de emisión
+## Facturación sin key de activación
 
-En Facturación se pide una sola vez. Si no es esta, la emisión no se activa.
+La emisión se habilita automáticamente al guardar los datos completos de SUNAT y cargar un certificado válido con su contraseña. Boletas, facturas, lotes y reintentos no requieren una key de licencia ni tienen el límite anterior de una boleta.
 
-```
-C867-ZZ9W-QK9Y-FUMS
-```
+Para publicar esta versión es necesario actualizar tanto `dist/system/` como la API compilada de `api/dist/`. Conserva las variables de entorno, la base de datos y los directorios persistentes de certificado y comprobantes del servidor.

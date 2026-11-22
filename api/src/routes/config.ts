@@ -172,7 +172,7 @@ configRouter.get('/sunat/clave-sol', authRequired, requireSystemAdmin, async (_r
 
 configRouter.put('/sunat', authRequired, requireRoles('admin'), async (req, res) => {
   try {
-    await guardarConfiguracionSunat(req.body?.config ?? req.body ?? {}, String(req.body?.licencia || ''))
+    await guardarConfiguracionSunat(req.body?.config ?? req.body ?? {})
     res.json({ ok: true, config: await configuracionSunat(), estado: await estadoEmision() })
   } catch (e) {
     const error = e as Error & { status?: number }
@@ -270,9 +270,9 @@ configRouter.get('/emision', authRequired, requireRoles('admin', 'cajero'), asyn
   }
 })
 
-configRouter.post('/emision/activar', authRequired, requireRoles('admin', 'cajero'), async (req, res) => {
+configRouter.post('/emision/activar', authRequired, requireRoles('admin', 'cajero'), async (_req, res) => {
   try {
-    await activarEmision(String(req.body?.clave || ''))
+    await activarEmision()
     res.json(await estadoEmision())
   } catch (e) {
     const status = (e as Error & { status?: number }).status || 500

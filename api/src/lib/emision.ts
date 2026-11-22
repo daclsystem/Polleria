@@ -1,4 +1,4 @@
-import { createHash, randomInt, timingSafeEqual } from 'crypto'
+import { randomInt } from 'crypto'
 import fs from 'node:fs/promises'
 import forge from 'node-forge'
 import { getPool, sql } from '../db.js'
@@ -10,9 +10,6 @@ import {
   signedBoletaSummary, signedInvoice, type SunatDocument,
 } from './sunat.js'
 import { comprobantePdf } from './sunatPdf.js'
-
-/** SHA-256 de la clave de activación. La clave en claro no está en el código. */
-const EMISION_KEY_SHA256 = 'e634ecdde274b2d72c43d43346242ced712d4e03edfdcb54e2e2b2d127eced18'
 
 const CAMPOS_SUNAT = [
   'ruc', 'razonSocial', 'direccionFiscal', 'establecimiento', 'usuario', 'serieboleta', 'seriefactura',
@@ -48,12 +45,6 @@ type Invoice = {
   resumen?: { nombre: string; ticket?: string }
 }
 
-function claveValida(clave: string) {
-  const got = createHash('sha256').update(clave.trim().toUpperCase()).digest()
-  const want = Buffer.from(EMISION_KEY_SHA256, 'hex')
-  return got.length === want.length && timingSafeEqual(got, want)
-}
-
 async function readConfig<T>(key: string, tx?: sql.Transaction): Promise<T | null> {
   const request = tx ? new sql.Request(tx) : (await getPool()).request()
   const r = await request.input('key', sql.NVarChar, key).query(`SELECT ConfigValue FROM dbo.AppConfig WHERE ConfigKey=@key`)
@@ -63,7 +54,6 @@ async function readConfig<T>(key: string, tx?: sql.Transaction): Promise<T | nul
     return JSON.parse(String(raw)) as T
   } catch {
     if (key === 'invoices') throw new Error('No se pudo leer el registro de comprobantes.')
-    if (key === 'emision_sin_licencia') throw new Error('No se pudo verificar el cupo de emisión sin licencia.')
     return null
   }
 }
@@ -120,21 +110,21 @@ export async function guardarComprobantes(incoming: Invoice[]) {
   })
 }
 
-async function emisionActiva(tx?: sql.Transaction) {
-  const data = await readConfig<{ activa?: boolean }>('emision_activa', tx)
-  return Boolean(data?.activa)
-}
-
-function usoSinLicencia(tx?: sql.Transaction) {
-  return readConfig<{ orderId: string }>('emision_sin_licencia', tx)
-}
-
 export async function estadoEmision() {
-  const [activa, config, uso] = await Promise.all([emisionActiva(), readConfig<SunatConfig>('sunat'), usoSinLicencia()])
-  const certificado = await certificadoInfo()
-  const configurada = Boolean(config && datosEmisorCompletos(config) && certificado.cargado && certificado.tieneClave)
-  const cupoSinLicencia = uso ? 0 : 1
-  return { activa, directa: true, configurada, cupoSinLicencia, disponible: configurada && (activa || cupoSinLicencia === 1) }
+  const config = await readConfig<SunatConfig>('sunat')
+  let motivo = ''
+  if (!config || !datosEmisorCompletos(config)) {
+    motivo = 'Completa los datos del emisor, las series y el acceso SOL en Configurar SUNAT.'
+  } else {
+    try {
+      const { archivo, clave } = await leerCertificado()
+      pkcs12SigningKeys(archivo, clave)
+    } catch (error) {
+      motivo = (error as Error).message
+    }
+  }
+  const configurada = !motivo
+  return { activa: configurada, directa: true, configurada, disponible: configurada, requiereLicencia: false, motivo }
 }
 
 export async function configuracionSunat() {
@@ -148,16 +138,7 @@ export async function configuracionSunat() {
   }
 }
 
-async function validarActivacion(licencia: string, config: SunatConfig) {
-  if (!claveValida(licencia)) throw Object.assign(new Error('La licencia de facturación no es válida.'), { status: 400 })
-  if (!datosEmisorCompletos(config)) {
-    throw Object.assign(new Error('Completa los datos del emisor, las series y el usuario y la clave SOL para activar.'), { status: 400 })
-  }
-  const { archivo, clave } = await leerCertificado()
-  pkcs12SigningKeys(archivo, clave)
-}
-
-export async function guardarConfiguracionSunat(incoming: Record<string, unknown>, licencia: string) {
+export async function guardarConfiguracionSunat(incoming: Record<string, unknown>) {
   return withInvoiceLock(async (tx) => {
     // Los ajustes existentes y las credenciales de consultas se conservan al guardar los datos de emisión.
     const config = { ...await readConfig<SunatConfig>('sunat', tx) }
@@ -166,19 +147,14 @@ export async function guardarConfiguracionSunat(incoming: Record<string, unknown
       if (typeof value === 'string') config[field] = value.trim()
     }
     if (typeof incoming.clave === 'string' && incoming.clave.trim()) config.clave = incoming.clave.trim()
-    const activar = Boolean(licencia.trim()) && !(await emisionActiva(tx))
-    if (activar) await validarActivacion(licencia, config)
     await writeConfig('sunat', config, tx)
-    if (activar) await writeConfig('emision_activa', { activa: true, activadaAt: new Date().toISOString() }, tx)
   })
 }
 
-export async function activarEmision(licencia: string) {
-  await withInvoiceLock(async (tx) => {
-    if (await emisionActiva(tx)) return
-    await validarActivacion(licencia, (await readConfig<SunatConfig>('sunat', tx)) || {})
-    await writeConfig('emision_activa', { activa: true, activadaAt: new Date().toISOString() }, tx)
-  })
+/** Compatibilidad con clientes anteriores: la configuración válida habilita la emisión sin key. */
+export async function activarEmision() {
+  const estado = await estadoEmision()
+  if (!estado.disponible) throw Object.assign(new Error(estado.motivo), { status: 400 })
 }
 
 function fechaLima(date = new Date()) {
@@ -390,13 +366,6 @@ async function emitirDirecto(input: EmitInput, config: SunatConfig, tipo: EmitIn
     const invoices = await readInvoices(tx)
     const existing = invoices.find((item) => item?.orderId?.toLowerCase() === orderId)
     if (existing) return existing
-    const activa = await emisionActiva(tx)
-    if (!activa && await usoSinLicencia(tx)) {
-      throw Object.assign(new Error('Ya se usó la boleta sin licencia. Activa la licencia para emitir otro comprobante.'), { status: 403 })
-    }
-    if (!activa && tipo !== 'boleta') {
-      throw Object.assign(new Error('Activa la licencia de facturación para emitir facturas.'), { status: 403 })
-    }
     const result = await new sql.Request(tx).input('id', sql.UniqueIdentifier, orderId).query(`
       SELECT Paid, Status, Total, DocTipo FROM dbo.Orders WITH (UPDLOCK, ROWLOCK) WHERE Id = @id
     `)
@@ -404,8 +373,8 @@ async function emitirDirecto(input: EmitInput, config: SunatConfig, tipo: EmitIn
     if (!order?.Paid || /^(cancelad[oa]|eliminad[oa]|anulad[oa])$/i.test(order.Status) || !(Number(order.Total) > 0)) {
       throw Object.assign(new Error('El comprobante requiere un pedido pagado y vigente.'), { status: 400 })
     }
-    if (!activa && String(order.DocTipo || '').toLowerCase() === 'factura') {
-      throw Object.assign(new Error('El pedido requiere una factura. Activa la licencia de facturación para emitirla.'), { status: 403 })
+    if (String(order.DocTipo || '').toLowerCase() === 'factura' && tipo !== 'factura') {
+      throw Object.assign(new Error('El pedido requiere una factura.'), { status: 400 })
     }
     const data = datosSunat(tipo, config, Number(order.Total), cliente, lines, await loadIgvRate(tx))
     const numero = siguienteNumero(invoices, data.serie)
@@ -426,7 +395,6 @@ async function emitirDirecto(input: EmitInput, config: SunatConfig, tipo: EmitIn
       mensaje: 'En espera de la constancia de SUNAT.',
     }
     await writeConfig('invoices', [reserved, ...invoices], tx)
-    if (!activa) await writeConfig('emision_sin_licencia', { orderId, fecha: reserved.fechaEmision }, tx)
     return reserved
   })
   if (invoice.canal === 'sunat' && invoice.status === 'pendiente' && invoice.rucEmisor !== ruc) {
@@ -499,12 +467,9 @@ export async function reintentarSunat(orderId: string) {
     throw Object.assign(new Error('Pedido inválido.'), { status: 400 })
   }
   const id = orderId.toLowerCase()
-  const [activa, uso, config] = await Promise.all([emisionActiva(), usoSinLicencia(), readConfig<SunatConfig>('sunat')])
+  const config = await readConfig<SunatConfig>('sunat')
   if (!config || !datosEmisorCompletos(config)) {
     throw Object.assign(new Error('Completa Configurar SUNAT para continuar el envío.'), { status: 400 })
-  }
-  if (!activa && uso?.orderId !== id) {
-    throw Object.assign(new Error('Activa la licencia para reenviar este comprobante.'), { status: 403 })
   }
   return recibirSunat(id, config)
 }
