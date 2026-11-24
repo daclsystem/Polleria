@@ -2,10 +2,12 @@ import { Smartphone } from 'lucide-react'
 
 export function SessionReplacedDialog({
   open,
+  title = 'Sesión en otro dispositivo',
   message,
   onAck,
 }: {
   open: boolean
+  title?: string
   message?: string
   onAck: () => void
 }) {
@@ -24,7 +26,7 @@ export function SessionReplacedDialog({
             <Smartphone size={30} strokeWidth={2.2} />
           </div>
           <h2 id="session-replaced-title" className="mt-4 text-center font-display text-2xl font-semibold">
-            Sesión en otro dispositivo
+            {title}
           </h2>
         </div>
         <div className="space-y-4 px-6 py-5">

@@ -6,7 +6,7 @@ import { certificadoInfo, leerCertificado } from './certificado.js'
 import { comprobanteFilePath, saveComprobanteFile } from './comprobantes.js'
 import { loadIgvRate, round2 } from './money.js'
 import {
-  getBoletaSummaryStatus, parseCdr, pkcs12SigningKeys, sendBill, sendBoletaSummary,
+  getBoletaSummaryStatus, getFacturaCdr, getFacturaEstado, parseCdr, pkcs12SigningKeys, sendBill, sendBoletaSummary,
   signedBoletaSummary, signedInvoice, type SunatDocument,
 } from './sunat.js'
 import { comprobantePdf } from './sunatPdf.js'
@@ -43,6 +43,19 @@ type Invoice = {
   canal?: 'sunat'
   rucEmisor?: string
   resumen?: { nombre: string; ticket?: string }
+  sunatCode?: string
+  nextRetryAt?: string
+  lastSentAt?: string
+}
+
+const ESPERA_SUNAT_0140 = 15 * 60 * 1000
+
+function mensajeEsperaSunat(nextRetryAt: string, sunatCode?: string) {
+  const hora = new Intl.DateTimeFormat('es-PE', {
+    timeZone: 'America/Lima', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false,
+  }).format(new Date(nextRetryAt))
+  const motivo = sunatCode === '0140' ? 'SUNAT 0140: hay un documento igual en proceso.' : 'El envío anterior todavía no está confirmado.'
+  return `${motivo} Espera hasta ${hora} (hora de Lima) para consultar nuevamente.`
 }
 
 async function readConfig<T>(key: string, tx?: sql.Transaction): Promise<T | null> {
@@ -309,7 +322,15 @@ async function consultarResumen(invoice: Invoice, resumen: NonNullable<Invoice['
   return cdr
 }
 
-async function recibirSunat(orderId: string, config: SunatConfig) {
+async function enviarFacturaReservada(invoice: Invoice, auth: ReturnType<typeof credencialesSunat>, nombre: string) {
+  const xml = await fs.readFile(comprobanteFilePath(invoice.orderId, 'xml'))
+  delete invoice.sunatCode
+  delete invoice.nextRetryAt
+  invoice.lastSentAt = new Date().toISOString()
+  return sendBill('produccion', auth, nombre, xml)
+}
+
+async function recibirSunat(orderId: string, config: SunatConfig, primerEnvio = false) {
   return withInvoiceLock(async (tx) => {
     const invoices = await readInvoices(tx)
     const invoice = invoices.find((item) => item?.orderId === orderId)
@@ -329,17 +350,54 @@ async function recibirSunat(orderId: string, config: SunatConfig) {
         return null
       })
     if (!cdr) {
+      // Los pendientes antiguos solo conservaban el mensaje, sin hora del último intento.
+      if ((invoice.sunatCode === '0140' || /\bSUNAT\s+0140\b/.test(invoice.mensaje || '')) && !invoice.nextRetryAt) {
+        invoice.sunatCode = '0140'
+        invoice.nextRetryAt = new Date(Date.now() + ESPERA_SUNAT_0140).toISOString()
+      }
+      if (invoice.nextRetryAt && Date.parse(invoice.nextRetryAt) > Date.now()) {
+        invoice.mensaje = mensajeEsperaSunat(invoice.nextRetryAt, invoice.sunatCode)
+        await writeConfig('invoices', invoices, tx)
+        return invoice
+      }
       try {
         if (resumen) {
           cdr = await consultarResumen(invoice, resumen, auth)
         } else if (invoice.tipo === 'factura') {
-          const xml = await fs.readFile(comprobanteFilePath(orderId, 'xml'))
-          cdr = await sendBill('produccion', auth, nombre, xml)
+          if (primerEnvio) {
+            cdr = await enviarFacturaReservada(invoice, auth, nombre)
+          } else {
+            const consulta = await getFacturaCdr(auth, nombre)
+            cdr = consulta.cdr
+            if (!cdr) {
+              const estado = await getFacturaEstado(auth, nombre)
+              invoice.mensaje = `Consulta SUNAT ${estado.codigo}: ${estado.mensaje || 'la constancia todavía no está disponible'}. La factura sigue pendiente; no se volvió a enviar.`
+              // Solo la inexistencia confirmada permite recuperar un envío que no llegó.
+              if (estado.codigo === '0011') {
+                delete invoice.sunatCode
+                const anterior = Date.parse(invoice.lastSentAt || invoice.fechaEmision)
+                const siguienteEnvio = (Number.isFinite(anterior) ? anterior : Date.now()) + ESPERA_SUNAT_0140
+                if (siguienteEnvio > Date.now()) {
+                  invoice.nextRetryAt = new Date(siguienteEnvio).toISOString()
+                  invoice.mensaje = mensajeEsperaSunat(invoice.nextRetryAt, invoice.sunatCode)
+                } else {
+                  cdr = await enviarFacturaReservada(invoice, auth, nombre)
+                }
+              }
+            }
+          }
         } else {
           invoice.mensaje = 'Verifica el envío anterior en SUNAT antes de volver a informar la boleta.'
         }
       } catch (error) {
         invoice.mensaje = (error as Error).message || 'SUNAT aún no confirmó el envío.'
+        invoice.sunatCode = (error as Error & { sunatCode?: string }).sunatCode
+        if (invoice.sunatCode === '0140') {
+          invoice.nextRetryAt = new Date(Date.now() + ESPERA_SUNAT_0140).toISOString()
+          invoice.mensaje = mensajeEsperaSunat(invoice.nextRetryAt, invoice.sunatCode)
+        } else {
+          delete invoice.nextRetryAt
+        }
       }
       if (!cdr) {
         await writeConfig('invoices', invoices, tx)
@@ -349,6 +407,8 @@ async function recibirSunat(orderId: string, config: SunatConfig) {
     }
     invoice.status = Number(cdr.code) === 0 ? 'aceptada' : 'rechazada'
     invoice.mensaje = cdr.message || `SUNAT ${cdr.code}`
+    delete invoice.sunatCode
+    delete invoice.nextRetryAt
     await writeConfig('invoices', invoices, tx)
     return invoice
   })
@@ -362,10 +422,10 @@ async function emitirDirecto(input: EmitInput, config: SunatConfig, tipo: EmitIn
   const ruc = String(config.ruc || '').trim()
   credencialesSunat(config, ruc)
 
-  const invoice = await withInvoiceLock(async (tx) => {
+  const { invoice, nuevo } = await withInvoiceLock(async (tx) => {
     const invoices = await readInvoices(tx)
     const existing = invoices.find((item) => item?.orderId?.toLowerCase() === orderId)
-    if (existing) return existing
+    if (existing) return { invoice: existing, nuevo: false }
     const result = await new sql.Request(tx).input('id', sql.UniqueIdentifier, orderId).query(`
       SELECT Paid, Status, Total, DocTipo FROM dbo.Orders WITH (UPDLOCK, ROWLOCK) WHERE Id = @id
     `)
@@ -391,16 +451,17 @@ async function emitirDirecto(input: EmitInput, config: SunatConfig, tipo: EmitIn
     if (resumen) await saveComprobanteFile(orderId, 'resumen', signedBoletaSummary(document, resumen.nombre.slice(12), keys))
     const reserved: Invoice = {
       orderId, tipo, serie: data.serie, numero, fechaEmision: now.toISOString(), status: 'pendiente', hashCdr: digest,
+      lastSentAt: now.toISOString(),
       clienteDoc: data.cliente.documento, clienteNombre: data.cliente.nombre, canal: 'sunat', rucEmisor: ruc, resumen,
       mensaje: 'En espera de la constancia de SUNAT.',
     }
     await writeConfig('invoices', [reserved, ...invoices], tx)
-    return reserved
+    return { invoice: reserved, nuevo: true }
   })
   if (invoice.canal === 'sunat' && invoice.status === 'pendiente' && invoice.rucEmisor !== ruc) {
     throw Object.assign(new Error('El envío pendiente corresponde a otro RUC. Revisa la configuración antes de reenviar.'), { status: 409 })
   }
-  return invoice.canal === 'sunat' && invoice.status === 'pendiente' ? reintentarSunat(orderId) : invoice
+  return invoice.canal === 'sunat' && invoice.status === 'pendiente' ? recibirSunat(orderId, config, nuevo) : invoice
 }
 
 let claveBeta: { privateKey: string; publicCert: string } | undefined

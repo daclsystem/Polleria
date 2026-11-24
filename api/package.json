@@ -7,7 +7,7 @@
     "dev": "tsx watch src/index.ts",
     "build": "tsc -p tsconfig.json",
     "start": "node dist/index.js",
-    "test:sunat": "npm run build && node --test test/sunat.test.mjs"
+    "test:sunat": "npm run build && node --test test/sunat.test.mjs test/sunat-pending.test.mjs"
   },
   "dependencies": {
     "@xmldom/xmldom": "^0.9.12",

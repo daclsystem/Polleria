@@ -1,0 +1,17 @@
+CHIFA POLLERÍA LOPEZ — FRONTENDS 1.6.62
+Build: 2026.11.23a — 23 de noviembre de 2026, hora de Lima.
+
+PUBLICACIÓN
+- web/: subir su contenido a la raíz de chifapollerialopez.com/.
+- system/: subir su contenido a /system/.
+- driver/: subir su contenido a /driver/.
+- cliente/: subir su contenido a /cliente/.
+
+Incluir el archivo oculto .htaccess de cada carpeta. Respaldar la versión
+publicada antes de reemplazarla. Purgar la caché del hosting/CDN y comprobar
+version.json en las cuatro aplicaciones: versión 1.6.62 y build 2026.11.23a.
+
+Este paquete contiene únicamente las cuatro aplicaciones web compiladas.
+La API se publica por separado. No reemplazar su configuración privada,
+base de datos, certificado ni almacenamiento de comprobantes.
+SHA256SUMS.txt permite verificar la integridad de los archivos de la entrega.

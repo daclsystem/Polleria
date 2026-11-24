@@ -16,6 +16,7 @@ const SIGNATURE_ID = 'FirmaCPE'
 const CATALOG = 'urn:pe:gob:sunat:cpe:see:gem:catalogos:catalogo'
 const SUNAT_BETA = 'https://e-beta.sunat.gob.pe/ol-ti-itcpfegem-beta/billService'
 const SUNAT_PRODUCTION = 'https://e-factura.sunat.gob.pe/ol-ti-itcpfegem/billService'
+const SUNAT_CONSULT = 'https://e-factura.sunat.gob.pe/ol-it-wsconscpegem/billConsultService'
 const XML_LIMIT = 2 * 1024 * 1024
 
 export interface SunatDocument {
@@ -277,13 +278,14 @@ export function parseCdr(zip: Buffer, fileName: string) {
   return { code, message: [description, ...notes].filter(Boolean).join(' · ').slice(0, 900), zip }
 }
 
-async function callBillService(environment: SunatEnvironment, auth: SunatAuth, action: 'sendBill' | 'sendSummary' | 'getStatus', payload: string) {
+async function callBillService(environment: SunatEnvironment, auth: SunatAuth, action: 'sendBill' | 'sendSummary' | 'getStatus' | 'getStatusCdr', payload: string, consulta = false) {
   const envelope = `<?xml version="1.0" encoding="UTF-8"?>
 <soap:Envelope xmlns:soap="${SOAP}" xmlns:ser="${SERVICE}" xmlns:wsse="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-secext-1.0.xsd">
   <soap:Header><wsse:Security><wsse:UsernameToken><wsse:Username>${xmlText(auth.ruc + auth.usuario)}</wsse:Username><wsse:Password>${xmlText(auth.clave)}</wsse:Password></wsse:UsernameToken></wsse:Security></soap:Header>
   <soap:Body><ser:${action}>${payload}</ser:${action}></soap:Body>
 </soap:Envelope>`
-  const response = await fetch(environment === 'beta' ? SUNAT_BETA : SUNAT_PRODUCTION, {
+  const endpoint = consulta ? SUNAT_CONSULT : environment === 'beta' ? SUNAT_BETA : SUNAT_PRODUCTION
+  const response = await fetch(endpoint, {
     method: 'POST',
     headers: { 'Content-Type': 'text/xml; charset=utf-8', SOAPAction: `urn:${action}` },
     redirect: 'error',
@@ -310,7 +312,7 @@ async function callBillService(environment: SunatEnvironment, auth: SunatAuth, a
     const message = child(fault, '', 'faultstring')?.textContent || fault.getElementsByTagName('faultstring').item(0)?.textContent
     const code = fault.getElementsByTagName('faultcode').item(0)?.textContent?.match(/\b(\d{3,4})\b/)?.[1]
     const safe = (message || 'El servicio devolvió un error.').replaceAll(auth.clave, '[omitida]').replaceAll(auth.ruc + auth.usuario, '[omitido]')
-    throw new Error(`SUNAT${code ? ' ' + code : ''}: ${safe.slice(0, 500)}`)
+    throw Object.assign(new Error(`SUNAT${code ? ' ' + code : ''}: ${safe.slice(0, 500)}`), { sunatCode: code })
   }
   const result = child(body, SERVICE, `${action}Response`)
   if (!response.ok || !result) throw new Error(`SUNAT devolvió una respuesta inesperada (HTTP ${response.status}).`)
@@ -331,6 +333,35 @@ export async function sendBill(environment: SunatEnvironment, auth: SunatAuth, f
   const content = responseText(result, 'applicationResponse').replace(/\s/g, '')
   if (!content) throw new Error('SUNAT no devolvió una constancia de recepción.')
   return parseCdr(Buffer.from(content, 'base64'), fileName)
+}
+
+function facturaConsultaPayload(auth: SunatAuth, fileName: string) {
+  const match = /^(\d{11})-01-(F[A-Z0-9]{3})-([1-9]\d{0,7})$/.exec(fileName)
+  if (!match || match[1] !== auth.ruc) throw new Error('La factura a consultar no corresponde al emisor.')
+  return `<rucComprobante>${match[1]}</rucComprobante><tipoComprobante>01</tipoComprobante><serieComprobante>${match[2]}</serieComprobante><numeroComprobante>${match[3]}</numeroComprobante>`
+}
+
+/** Recupera la constancia de una factura ya enviada sin presentar otra vez su XML. */
+export async function getFacturaCdr(auth: SunatAuth, fileName: string) {
+  const result = await callBillService('produccion', auth, 'getStatusCdr', facturaConsultaPayload(auth, fileName), true)
+  const status = child(result, '', 'statusCdr') || child(result, SERVICE, 'statusCdr')
+  const codigo = status && responseText(status, 'statusCode')
+  if (!status || !codigo || !/^\d{1,4}$/.test(codigo)) throw new Error('SUNAT devolvió una consulta de constancia sin código válido.')
+  const mensaje = responseText(status, 'statusMessage').replaceAll(auth.clave, '[omitida]').replaceAll(auth.ruc + auth.usuario, '[omitido]').slice(0, 500)
+  const content = responseText(status, 'content').replace(/\s/g, '')
+  // El código de la consulta no es el de aceptación del comprobante. Solo el CDR lo confirma.
+  const cdr = content ? parseCdr(Buffer.from(content, 'base64'), fileName) : null
+  return { cdr, codigo, mensaje }
+}
+
+/** Consulta por documento; es distinta de getStatus por ticket del servicio de envíos. */
+export async function getFacturaEstado(auth: SunatAuth, fileName: string) {
+  const result = await callBillService('produccion', auth, 'getStatus', facturaConsultaPayload(auth, fileName), true)
+  const status = child(result, '', 'status') || child(result, SERVICE, 'status')
+  const codigo = status && responseText(status, 'statusCode')
+  if (!status || !codigo || !/^\d{1,4}$/.test(codigo)) throw new Error('SUNAT devolvió una consulta de factura sin código válido.')
+  const mensaje = responseText(status, 'statusMessage').replaceAll(auth.clave, '[omitida]').replaceAll(auth.ruc + auth.usuario, '[omitido]').slice(0, 500)
+  return { codigo, mensaje }
 }
 
 export async function sendBoletaSummary(environment: SunatEnvironment, auth: SunatAuth, fileName: string, xml: Buffer) {

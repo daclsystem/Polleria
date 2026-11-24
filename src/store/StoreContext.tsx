@@ -526,9 +526,16 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       loadPublicCatalog()
     }
 
-    const onAuth = () => {
+    const onAuth = (ev: Event) => {
+      const detail = (ev as CustomEvent<{ scope?: string }>).detail
+      if (detail?.scope && detail.scope !== 'staff') return
       stop()
-      if (getApiToken('staff')) setApiReady(false)
+      setApiReady(false)
+      if (!getApiToken('staff')) {
+        setApiLoading(false)
+        setApiError(null)
+        setState(emptyApiState())
+      }
       stop = getApiToken('staff') ? startLive() : () => {}
     }
     window.addEventListener('polleria-auth', onAuth)

@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react'
+import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react'
 import { useStore } from '../store/StoreContext'
 import {
   isAllowedStaffView,
@@ -58,9 +58,10 @@ const AuthContext = createContext<AuthApi | null>(null)
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const { state, saveUser, reloadFromApi } = useStore()
-  const [replacedMsg, setReplacedMsg] = useState<string | null>(null)
+  const [sessionNotice, setSessionNotice] = useState<{ title: string; message: string } | null>(null)
   const [apiUser, setApiUser] = useState<User | null>(() => {
     try {
+      if (!getApiToken('staff')) return null
       const raw = localStorage.getItem('polleria-api-user')
       return raw ? (JSON.parse(raw) as User) : null
     } catch {
@@ -73,14 +74,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const actingRole: Role = resolveActingRole(user, viewRole)
   const needsViewPick = needsStaffViewPick(user, viewRole)
 
-  const logout = () => {
-    void apiLogout('staff')
+  const clearStaffSession = useCallback(() => {
     localStorage.removeItem(STAFF_SESSION_KEY)
     localStorage.removeItem('polleria-api-user')
     localStorage.removeItem(VIEW_KEY)
-    setApiToken(null, 'staff')
     setApiUser(null)
     setViewRoleState(null)
+  }, [])
+
+  const logout = () => {
+    void apiLogout('staff')
+    setApiToken(null, 'staff')
+    clearStaffSession()
   }
 
   const setViewRole = (role: Role) => {
@@ -165,25 +170,42 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [state.users, apiUser?.id])
 
   useEffect(() => {
+    const onAuth = (ev: Event) => {
+      const detail = (ev as CustomEvent<{ scope?: string }>).detail
+      if (detail?.scope === 'staff' && !getApiToken('staff')) clearStaffSession()
+    }
     const onReplaced = (ev: Event) => {
       const detail = (ev as CustomEvent<{ scope?: string; message?: string }>).detail
       if (detail?.scope && detail.scope !== 'staff') return
-      logout()
-      setReplacedMsg(detail?.message || 'Iniciaste sesión en otro celular o computadora. Esta queda cerrada.')
+      clearStaffSession()
+      setSessionNotice({ title: 'Sesión en otro dispositivo', message: detail?.message || 'Iniciaste sesión en otro celular o computadora. Esta queda cerrada.' })
     }
+    const onExpired = (ev: Event) => {
+      const detail = (ev as CustomEvent<{ scope?: string; message?: string }>).detail
+      if (detail?.scope !== 'staff') return
+      clearStaffSession()
+      setSessionNotice({ title: 'Sesión vencida', message: detail.message || 'Tu sesión ya no es válida. Vuelve a iniciar sesión.' })
+    }
+    window.addEventListener('polleria-auth', onAuth)
     window.addEventListener('polleria-session-replaced', onReplaced)
+    window.addEventListener('polleria-session-expired', onExpired)
 
-    const t = window.setInterval(() => {
+    const checkSession = () => {
       if (APP_NAME !== 'system') return
       if (!getApiToken('staff')) return
       void apiFetch('/api/auth/session', { scope: 'staff' }).catch(() => {})
-    }, 20000)
+    }
+    if (!getApiToken('staff')) clearStaffSession()
+    checkSession()
+    const t = window.setInterval(checkSession, 20000)
 
     return () => {
+      window.removeEventListener('polleria-auth', onAuth)
       window.removeEventListener('polleria-session-replaced', onReplaced)
+      window.removeEventListener('polleria-session-expired', onExpired)
       window.clearInterval(t)
     }
-  }, [])
+  }, [clearStaffSession])
 
   const can = (module: ModuleId) => {
     if (!user || needsStaffViewPick(user, viewRole)) return false
@@ -217,10 +239,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     <AuthContext.Provider value={api}>
       {children}
       <SessionReplacedDialog
-        open={Boolean(replacedMsg)}
-        message={replacedMsg || undefined}
+        open={Boolean(sessionNotice)}
+        title={sessionNotice?.title}
+        message={sessionNotice?.message}
         onAck={() => {
-          setReplacedMsg(null)
+          setSessionNotice(null)
           window.location.assign(siteUrl('system', '/login'))
         }}
       />

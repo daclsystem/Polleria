@@ -1,0 +1,123 @@
+INFORME INTERNO DE PRODUCCIÓN — POLLERÍA LOPEZ
+Fecha: 23 de noviembre de 2026, hora de Lima.
+
+PUBLICACIÓN
+System 1.6.62, build 2026.11.23a, está publicado en el dominio del negocio.
+Se verificaron version.json, el archivo JavaScript referenciado por el HTML y
+su SHA256 contra la compilación local. El propietario subió el ZIP de System.
+La API fue actualizada en /opt/polleria/api y responde con base de datos y
+tiempo real disponibles. El ajuste posterior del estado de pendientes también
+está publicado. No hace falta subir otro ZIP de System por ese ajuste de API.
+
+CAMBIOS
+- Una sesión de personal rechazada por la API se cierra y vuelve al acceso.
+- Las facturas pendientes consultan CDR antes de considerar un nuevo envío.
+- Solo una respuesta 0011 de inexistencia permite recuperar el envío original,
+  respetando 15 minutos desde el último intento y conservando XML y número.
+- El código 0140 establece una espera persistente de 15 minutos.
+- Un error posterior sustituye al código anterior; la espera técnica no debe
+  presentarse como un nuevo 0140 si SUNAT no lo devolvió.
+- Las boletas reutilizan su resumen firmado y consultan por ticket si existe.
+- La aceptación requiere una constancia CDR correspondiente al comprobante.
+
+VERIFICACIÓN
+24 pruebas SUNAT pasan en local y en el servidor, con datos simulados.
+Las cinco pruebas de sesión pasan en local. Compilación TypeScript correcta.
+Los archivos publicados del último ajuste coinciden con sus hashes locales.
+Estas pruebas no acreditan aceptación tributaria real de las ventas pendientes.
+
+RESPALDOS Y CONSERVACIÓN
+Respaldo previo de API y SQL:
+/opt/polleria/backups/api-before-1.6.62-20261123T235828Z/
+SQL COPY_ONLY con CHECKSUM, comprobado mediante RESTORE VERIFYONLY.
+Archivo SQL también conservado en el volumen del contenedor.
+Respaldo del ajuste posterior de estado:
+/opt/polleria/backups/api-pending-status-20261124T003454Z/
+La configuración anterior al usuario secundario se respaldó en el subdirectorio
+private del primer respaldo. No se incluyen contraseñas en este informe.
+La base de pedidos, el certificado y las variables de entorno se conservaron.
+
+SUNAT SOL
+Con autorización expresa del propietario se guardó el usuario secundario
+DAPOLAYA, que SUNAT muestra activo, con las dos opciones denominadas
+Servicio de Envío de Documentos Electrónicos por Servicio Web.
+Se volvió a abrir el resumen de programas de DAPOLAYA y se comprobó que
+ambos permisos permanecen guardados. Se salió sin realizar otros cambios.
+La API usa ese usuario secundario; se conservaron RUC, emisor, series y demás
+ajustes. El cambio de acceso no requiere reiniciar la API.
+Se registró y confirmó davant101982@gmail.com como correo del emisor.
+SUNAT mostró que la actualización del correo terminó correctamente.
+El certificado activo en SOL, el certificado de la API y el de ambos XML
+coinciden: serie 4051624B3292F0DA2925E6E085A0BB0579548DBC.
+Vigencia mostrada en SOL: 20/11/2026 a 19/11/2029.
+
+REGISTRO OFICIAL DEL EMISOR
+Se contrastó el RUC 20616806344 con la relación pública oficial de emisores,
+indicada por SUNAT como actualizada al 22/11/2026. El archivo AFILIA_GEM.txt,
+contenido en AFILIA_GEM.zip, incluye esta coincidencia en la línea 1.284.433:
+20616806344|CORPORACION LIDER F & D E.I.R.L.|20/11/2026|FACTURA/BOLETA|-|
+Por tanto, el RUC sí figura en la relación de emisores para FACTURA/BOLETA.
+Fuente e índice oficial:
+https://www.sunat.gob.pe/descargaPLE/AFILIA_GEM.zip
+https://www.sunat.gob.pe/descargaPLE/mrc101_relacionafiliados.html
+
+El RUC no aparece en ninguno de los seis listados oficiales de nuevos obligados
+a SEE-OSE publicados en el índice: enero de 2022, julio de 2022, julio de 2023,
+julio de 2024, julio de 2025 y julio de 2026. Se revisaron todas sus hojas,
+con 1.100, 5.422, 1.688, 3.076, 2.301 y 359 filas, respectivamente.
+Límite de esta comprobación: la ausencia en esos listados no descarta una
+afiliación voluntaria a OSE ni acredita por sí sola todos los permisos de envío
+directo del RUC. No se modificó ninguna vinculación ni se realizó un envío
+para esta consulta de fuentes públicas.
+Índice oficial de los listados OSE:
+https://cpe.sunat.gob.pe/listado-de-contribuyentes
+
+Las reglas oficiales de validación actualizadas al 26/08/2026 confirman en
+la hoja CódigosRetorno: A12/B12, código 0111, "No tiene el perfil para enviar
+comprobantes electronicos"; y A27/B27, código 0140, "Existe un Documento igual
+en Proceso.". La tabla describe los códigos y no establece un plazo de
+propagación de 24 horas para los permisos del usuario secundario.
+https://cpe.sunat.gob.pe/sites/default/files/2026-08/Reglas%20de%20validaci%C3%B3n%20-%20actualizado%20al%2026.08.2026.xlsx
+
+COMPROBANTES REVISADOS
+Factura F001-1 y boleta B001-2. Los reintentos reales de estos dos documentos
+fueron autorizados expresamente. Se conservaron sus números y XML firmados.
+La boleta histórica B001-1 no se reemitió ni se modificó por esta intervención.
+No se emitieron en lote los pedidos históricos.
+
+RESULTADO FINAL — 23/11/2026, 19:55 HORA DE LIMA
+La lectura final de la base de producción confirma:
+- F001-1: pendiente, SUNAT 0111, "No tiene el perfil para enviar comprobantes
+  electronicos - Detalle: Rejected by policy.". Sin CDR de aceptación.
+- B001-2: pendiente, SUNAT 0111 con el mismo mensaje, sin ticket de resumen
+  ni CDR de aceptación. La espera anterior por 0140 ya venció; el código
+  vigente persistido es 0111.
+Estos resultados se obtuvieron después de confirmar el correo del emisor,
+verificar el certificado y volver a leer los dos permisos guardados.
+La API sigue online con base de datos y tiempo real disponibles.
+System y API están publicados. No falta otro ZIP de System.
+La emisión tributaria real sigue bloqueada por el rechazo de perfil de SUNAT.
+No se declara resuelta ni se han emitido en lote los pedidos pendientes.
+
+DATOS PARA REVISIÓN DEL PERFIL CON SUNAT
+RUC: 20616806344. Usuario secundario: DAPOLAYA, activo en SOL.
+Servicio: https://e-factura.sunat.gob.pe/ol-ti-itcpfegem/billService
+Métodos afectados: sendBill y sendSummary.
+Respuesta: SOAP 0111 / Rejected by policy.
+Solicitud de revisión: comprobar la habilitación efectiva del perfil de envío
+por servicio web del usuario secundario, dado que ambos permisos permanecen
+guardados en SOL y el RUC figura en el padrón oficial de emisores.
+No se ha enviado una consulta o mensaje a soporte en nombre del propietario.
+No se atribuye el error a una propagación de 24 horas sin fuente oficial.
+
+REFERENCIAS PRIMARIAS
+https://cpe.sunat.gob.pe/sistema_emision/see_contribuyente
+https://cpe.sunat.gob.pe/sites/default/files/inline-files/manual_programador%20%281%29.pdf
+https://orientacion.sunat.gob.pe/6618-06-creacion-de-usuarios-secundarios
+https://www.sunat.gob.pe/legislacion/superin/2017/287-2017.pdf
+La regla de operación desde el día calendario siguiente corresponde a la
+habilitación SEE por elección después de cumplir sus requisitos. No se ha
+encontrado una fuente primaria que establezca 24 horas para propagar perfiles
+del usuario secundario, ni se garantiza aceptación en una fecha concreta.
+
+DOCUMENTO INTERNO. No subir este informe a una carpeta pública del sitio.

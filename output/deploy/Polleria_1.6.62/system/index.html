@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/system/favicon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="theme-color" content="#f4f5f7" />
+    <meta name="polleria-app" content="system" />
+    <title>Chifa-Pollería Lopez</title>
+    <script>
+      (function () {
+        try {
+          var t = localStorage.getItem('polleria-theme')
+          if (t !== 'dark' && t !== 'light') {
+            t = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+          }
+          if (t === 'dark') document.documentElement.classList.add('dark')
+          document.documentElement.style.colorScheme = t
+          var m = document.querySelector('meta[name="theme-color"]')
+          if (m) m.setAttribute('content', t === 'dark' ? '#121612' : '#f4f5f7')
+        } catch (e) {}
+      })()
+    </script>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:ital,wght@0,400;0,500;0,600;0,700;0,800;1,500&display=swap"
+      rel="stylesheet"
+    />
+    <script type="module" crossorigin src="/system/assets/app-20261123a-jqXVkUrD.js"></script>
+    <link rel="modulepreload" crossorigin href="/system/assets/rolldown-runtime-B0Z9INg1.js">
+    <link rel="modulepreload" crossorigin href="/system/assets/jsx-runtime-Ciaf_P-h.js">
+    <link rel="modulepreload" crossorigin href="/system/assets/format-BFQZFH9V.js">
+    <link rel="stylesheet" crossorigin href="/system/assets/index-Cd-r6eRo.css">
+  </head>
+  <body>
+    <div id="root"></div>
+  </body>
+</html>

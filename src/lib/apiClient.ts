@@ -1,5 +1,7 @@
 import { API_URL, apiUrl } from './api'
 import { APP_NAME } from './paths'
+import { getApiToken, handleApiAuthError, setApiToken, type TokenScope } from './apiSession'
+export { getApiToken, setApiToken, type TokenScope } from './apiSession'
 import type {
   Branch,
   Customer,
@@ -12,42 +14,6 @@ import type {
   Settings,
   User,
 } from '../types'
-
-const TOKEN_KEYS = {
-  staff: 'polleria-token-staff',
-  driver: 'polleria-token-driver',
-  customer: 'polleria-token-customer',
-} as const
-
-export type TokenScope = keyof typeof TOKEN_KEYS
-
-const LEGACY_TOKEN = 'polleria-api-token'
-
-export function getApiToken(scope: TokenScope = 'staff') {
-  const t = localStorage.getItem(TOKEN_KEYS[scope])
-  if (t) return t
-  // migrar token viejo solo a staff
-  if (scope === 'staff') {
-    const legacy = localStorage.getItem(LEGACY_TOKEN)
-    if (legacy) {
-      localStorage.setItem(TOKEN_KEYS.staff, legacy)
-      localStorage.removeItem(LEGACY_TOKEN)
-      return legacy
-    }
-  }
-  return null
-}
-
-export function setApiToken(token: string | null, scope: TokenScope = 'staff') {
-  if (token) localStorage.setItem(TOKEN_KEYS[scope], token)
-  else localStorage.removeItem(TOKEN_KEYS[scope])
-  if (scope === 'staff') localStorage.removeItem(LEGACY_TOKEN)
-  if (typeof window !== 'undefined') {
-    window.dispatchEvent(
-      new CustomEvent('polleria-auth', { detail: { token: Boolean(token), scope } }),
-    )
-  }
-}
 
 export class ApiError extends Error {
   code?: string
@@ -83,20 +49,12 @@ export async function apiFetch<T = unknown>(
     const token = skipStaffOnPublic ? null : getApiToken(scope)
     if (token) headers.set('Authorization', `Bearer ${token}`)
   }
+  const requestToken = options.auth === false ? null : headers.get('Authorization')?.match(/^Bearer (.+)$/)?.[1] ?? null
   const res = await fetch(apiUrl(path), { ...options, headers })
   const data = await res.json().catch(() => ({}))
   if (!res.ok) {
-    if (res.status === 401 && scope === 'staff' && publicFront) {
-      setApiToken(null, 'staff')
-    }
     const err = data as { error?: string; code?: string }
-    if (err.code === 'SESSION_REPLACED' && typeof window !== 'undefined') {
-      window.dispatchEvent(
-        new CustomEvent('polleria-session-replaced', {
-          detail: { scope: options.scope || 'staff', message: err.error },
-        }),
-      )
-    }
+    handleApiAuthError(res.status, requestToken, scope, err)
     throw new ApiError(err.error || `HTTP ${res.status}`, res.status, err.code)
   }
   return data as T
@@ -805,7 +763,8 @@ export async function apiDownloadComprobante(orderId: string, kind: 'pdf' | 'xml
     headers: token ? { Authorization: `Bearer ${token}` } : {},
   })
   if (!res.ok) {
-    const data = await res.json().catch(() => null) as { error?: string } | null
+    const data = await res.json().catch(() => null) as { error?: string; code?: string } | null
+    handleApiAuthError(res.status, token, 'staff', data || {})
     throw new Error(data?.error || 'No se pudo descargar')
   }
   const blob = await res.blob()

@@ -21,6 +21,7 @@
     "build:cliente:core": "cross-env VITE_APP=cliente tsc -b && cross-env VITE_APP=cliente vite build && shx cp deploy/htaccess/cliente.htaccess dist/cliente/.htaccess",
     "build:all": "node scripts/bump-version.mjs && npm run build:web:core && npm run build:system:core && npm run build:driver:core && npm run build:cliente:core",
     "lint": "oxlint",
+    "test:session": "node --test test/apiSession.test.mjs",
     "preview": "cross-env VITE_APP=web vite preview"
   },
   "dependencies": {
