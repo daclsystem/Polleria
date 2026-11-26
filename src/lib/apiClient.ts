@@ -682,7 +682,7 @@ export async function apiUploadCertificado(file: File, clave: string) {
 }
 
 export async function apiGetInvoices() {
-  return apiFetch<{ invoices: unknown[] }>('/api/config/invoices')
+  return apiFetch<{ invoices: Comprobante[] }>('/api/config/invoices')
 }
 
 export async function apiSaveInvoices(invoices: unknown[]) {
@@ -700,22 +700,22 @@ export async function apiEmisionEstado() {
   return apiFetch<EstadoEmision>('/api/config/emision', { cache: 'no-store' })
 }
 
-type EmissionResponse = {
-  ok: boolean
-  invoice: {
-    orderId: string
-    tipo: 'boleta' | 'factura'
-    serie: string
-    numero: number
-    status: 'pendiente' | 'enviada' | 'aceptada' | 'rechazada'
-    fechaEmision: string
-    hashCdr?: string
-    mensaje?: string
-    clienteDoc?: string
-    clienteNombre?: string
-    canal?: 'sunat'
-  }
+export type Comprobante = {
+  orderId: string
+  tipo: 'boleta' | 'factura'
+  serie: string
+  numero: number
+  status: 'pendiente' | 'enviada' | 'aceptada' | 'rechazada'
+  fechaEmision: string
+  hashCdr?: string
+  mensaje?: string
+  clienteDoc?: string
+  clienteNombre?: string
+  canal?: 'sunat'
+  resumen?: { nombre: string; ticket?: string }
 }
+
+type EmissionResponse = { ok: boolean; invoice: Comprobante }
 
 export async function apiEmitComprobante(body: unknown) {
   return apiFetch<EmissionResponse>(
@@ -724,8 +724,8 @@ export async function apiEmitComprobante(body: unknown) {
   )
 }
 
-export async function apiReintentarComprobante(orderId: string) {
-  return apiFetch<EmissionResponse>(`/api/config/comprobantes/${encodeURIComponent(orderId)}/reintentar`, { method: 'POST' })
+export async function apiReintentarComprobante(orderId: string, signal: AbortSignal) {
+  return apiFetch<EmissionResponse>(`/api/config/comprobantes/${encodeURIComponent(orderId)}/reintentar`, { method: 'POST', signal })
 }
 
 export type PruebaSunat = {

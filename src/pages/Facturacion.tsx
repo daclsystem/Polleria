@@ -19,6 +19,7 @@ import {
   apiReintentarComprobante,
   apiSaveSunatConfig,
   apiUploadCertificado,
+  type Comprobante,
   type EstadoEmision,
   type PruebaSunat,
 } from '../lib/apiClient'
@@ -46,22 +47,6 @@ const DEFAULT_SUNAT: SunatConfig = {
   establecimiento: '0000',
   serieboleta: 'B001',
   seriefactura: 'F001',
-}
-
-type InvoiceStatus = 'pendiente' | 'enviada' | 'aceptada' | 'rechazada'
-
-interface Invoice {
-  orderId: string
-  tipo: 'boleta' | 'factura'
-  serie: string
-  numero: number
-  status: InvoiceStatus
-  fechaEmision: string
-  hashCdr?: string
-  mensaje?: string
-  clienteDoc?: string
-  clienteNombre?: string
-  canal?: 'sunat'
 }
 
 const CLIENTE_GENERICO = { tipDoc: '0', num: '00000000', nombre: 'CLIENTES VARIOS' }
@@ -92,12 +77,13 @@ const DOCUMENTOS_CLIENTE: ReadonlyArray<{ tipo: TipoDocumentoCliente; etiqueta: 
 
 function clienteInicial(order: Order, tipo: 'boleta' | 'factura'): DatosCliente {
   const numero = (order.docNumero || '').replace(/\D/g, '')
-  const tieneRuc = order.docTipo === 'factura' || numero.length === 11
+  const tieneRuc = numero.length === 11 && numero !== '00000000000'
+  const nombre = order.docNombre?.trim() || ''
   if (tipo === 'factura' || tieneRuc) {
-    return { tipo: 'ruc', numero: tieneRuc ? numero.slice(0, 11) : '', nombre: tieneRuc ? order.docNombre || '' : '' }
+    return { tipo: 'ruc', numero: tieneRuc ? numero : '', nombre: tieneRuc || order.docTipo === 'factura' ? nombre : '' }
   }
-  if (order.docTipo === 'boleta_dni') {
-    return { tipo: 'dni', numero: numero.slice(0, 8), nombre: order.docNombre || order.customerName || '' }
+  if (numero.length === 8 && numero !== CLIENTE_GENERICO.num) {
+    return { tipo: 'dni', numero, nombre: nombre || order.customerName || '' }
   }
   if (order.total > 700) return { tipo: 'dni', numero: '', nombre: order.customerName || '' }
   return { tipo: 'ninguno', numero: '', nombre: '' }
@@ -338,7 +324,7 @@ export function Facturacion() {
   const admin = user?.role === 'admin'
   const [config, setConfig] = useState<SunatConfig>(DEFAULT_SUNAT)
   const [savedConfig, setSavedConfig] = useState<SunatConfig>(DEFAULT_SUNAT)
-  const [invoices, setInvoices] = useState<Invoice[]>([])
+  const [invoices, setInvoices] = useState<Comprobante[]>([])
   const [configOpen, setConfigOpen] = useState(false)
   const [emitOpen, setEmitOpen] = useState(false)
   const [queue, setQueue] = useState<Order[]>([])
@@ -348,6 +334,7 @@ export function Facturacion() {
   const [datosClientes, setDatosClientes] = useState<Record<string, DatosCliente>>({})
   const [lines, setLines] = useState<DetalleLine[]>([])
   const [sending, setSending] = useState(false)
+  const [emitError, setEmitError] = useState<string | null>(null)
   const [lastResult, setLastResult] = useState<string | null>(null)
   const [configResult, setConfigResult] = useState<string | null>(null)
   const [savingConfig, setSavingConfig] = useState(false)
@@ -400,7 +387,7 @@ export function Facturacion() {
       })
       .catch(() => undefined)
     void apiGetInvoices()
-      .then((r) => setInvoices((r.invoices as Invoice[]) || []))
+      .then((r) => setInvoices(r.invoices || []))
       .catch(() => undefined)
     void apiComprobanteFiles()
       .then((r) => setFiles(r.files || {}))
@@ -412,6 +399,7 @@ export function Facturacion() {
   const paidOrders = state.orders.filter((o) => o.paid && !isVoidOrder(o.status))
   const invoicedIds = new Set(invoices.map((i) => i.orderId))
   const pendingOrders = paidOrders.filter((o) => !invoicedIds.has(o.id))
+  const selectedOrders = pendingOrders.filter((o) => picked.includes(o.id))
   const emitidos = [...invoices].reverse().filter((inv) => {
     if (filtroTipo !== 'todos' && inv.tipo !== filtroTipo) return false
     if (soloAceptadas && inv.status !== 'aceptada') return false
@@ -510,12 +498,13 @@ export function Facturacion() {
 
   const cargarPedido = (order: Order) => {
     const tipo = order.docTipo === 'factura' ? 'factura' : 'boleta'
+    setEmitError(null)
     setEmitType(tipo)
     setLines(detalleDe(order))
   }
 
   const abrirCola = (orders: Order[]) => {
-    if (!orders.length || !disponible) return
+    if (!orders.length) return
     setDatosClientes({})
     setQueue(orders)
     setQueueAt(0)
@@ -536,20 +525,13 @@ export function Facturacion() {
   }
 
   const handleEmit = async () => {
-    if (!selectedOrder || !cliente) return
-    if (clienteError) {
-      setLastResult(clienteError)
-      return
-    }
+    if (!selectedOrder || !cliente || clienteError || sending || !disponible) return
     if (!lines.some((line) => line.descripcion.trim() && line.cantidad > 0)) {
-      setLastResult('Agrega al menos un detalle antes de emitir.')
-      return
-    }
-    if (!disponible) {
-      setLastResult('Revisa el estado de emisión en Configurar SUNAT.')
+      setEmitError('Agrega al menos un detalle antes de emitir.')
       return
     }
     setSending(true)
+    setEmitError(null)
     setLastResult(null)
     try {
       const result = await apiEmitComprobante({
@@ -565,35 +547,42 @@ export function Facturacion() {
       void apiComprobanteFiles().then((r) => setFiles(r.files || {})).catch(() => undefined)
       const numero = String(result.invoice.numero).padStart(8, '0')
       setLastResult(`${result.invoice.tipo} ${result.invoice.serie}-${numero} · ${result.invoice.status}${result.invoice.mensaje ? ' · ' + result.invoice.mensaje : ''}`)
-      if (result.invoice.status === 'aceptada' && queueAt < queue.length - 1) irA(queueAt + 1)
-      else {
+      const restantes = queue.filter((order) => order.id !== selectedOrder.id)
+      setQueue(restantes)
+      if (restantes.length && result.invoice.status !== 'rechazada') {
+        const siguiente = Math.min(queueAt, restantes.length - 1)
+        setQueueAt(siguiente)
+        cargarPedido(restantes[siguiente])
+      } else {
         cerrarEmision()
-        setVista('emitidos')
+        verEmitidos('todos')
       }
     } catch (e) {
-      setLastResult((e as Error).message || 'No se pudo emitir')
+      setEmitError((e as Error).message || 'No se pudo emitir el comprobante.')
     } finally {
       setSending(false)
       void apiEmisionEstado().then(setEmision).catch(() => undefined)
     }
   }
 
-  const reintentar = async (orderId: string) => {
+  const reintentar = async ({ orderId, tipo }: Comprobante) => {
+    if (retrying !== null) return
     setRetrying(orderId)
     setLastResult(null)
+    const signal = AbortSignal.timeout(tipo === 'boleta' ? 35_000 : 75_000)
     try {
-      const { invoice } = await apiReintentarComprobante(orderId)
+      const { invoice } = await apiReintentarComprobante(orderId, signal)
       setInvoices((prev) => prev.map((item) => item.orderId === orderId ? invoice : item))
       setLastResult(`${invoice.serie}-${invoice.numero} · ${invoice.status}${invoice.mensaje ? ' · ' + invoice.mensaje : ''}`)
       void apiComprobanteFiles().then((r) => setFiles(r.files || {})).catch(() => undefined)
     } catch (e) {
-      setLastResult((e as Error).message)
+      setLastResult(signal.aborted ? 'El servidor tardó en responder. Vuelve a consultar el estado del comprobante.' : (e as Error).message)
     } finally {
       setRetrying(null)
     }
   }
 
-  const statusIcon = (s: InvoiceStatus) => {
+  const statusIcon = (s: Comprobante['status']) => {
     if (s === 'aceptada') return <CheckCircle2 size={14} className="text-green-600" />
     if (s === 'rechazada') return <AlertCircle size={14} className="text-red-600" />
     return <RefreshCw size={14} className="text-amber-600" />
@@ -683,11 +672,11 @@ export function Facturacion() {
             <h2 className="text-sm font-semibold text-ink/75">Pedidos pagados sin comprobante</h2>
             <button
               type="button"
-              disabled={!disponible || !picked.length}
-              onClick={() => abrirCola(pendingOrders.filter((o) => picked.includes(o.id)))}
-              className="flex min-h-9 items-center gap-1 rounded-xl bg-ember px-3 text-xs font-semibold text-white disabled:opacity-40"
+              disabled={!selectedOrders.length}
+              onClick={() => abrirCola(selectedOrders)}
+              className="flex min-h-11 items-center gap-1 rounded-xl bg-ember px-3 text-xs font-semibold text-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ember disabled:opacity-40"
             >
-              <Send size={12} /> Revisar {picked.length || ''} seleccionados
+              <Send size={12} aria-hidden /> Preparar selección{selectedOrders.length ? ` (${selectedOrders.length})` : ''}
             </button>
           </div>
           {pendingOrders.length === 0 ? (
@@ -700,7 +689,6 @@ export function Facturacion() {
                     <input
                       type="checkbox"
                       className="h-4 w-4 rounded"
-                      disabled={!disponible}
                       checked={picked.includes(o.id)}
                       onChange={(e) => setPicked((prev) => e.target.checked ? [...prev, o.id] : prev.filter((id) => id !== o.id))}
                     />
@@ -716,9 +704,8 @@ export function Facturacion() {
                     <span className="whitespace-nowrap text-sm font-bold tabular-nums">{soles(o.total)}</span>
                     <button
                       type="button"
-                      disabled={!disponible}
                       onClick={() => abrirCola([o])}
-                      className="inline-flex min-h-11 items-center gap-1.5 rounded-lg border border-ink/12 px-3 text-xs font-semibold enabled:hover:bg-ink/8 focus-visible:outline-2 focus-visible:outline-ember disabled:opacity-45"
+                      className="inline-flex min-h-11 items-center gap-1.5 rounded-lg border border-ink/12 px-3 text-xs font-semibold hover:bg-ink/8 focus-visible:outline-2 focus-visible:outline-ember"
                     >
                       <Send size={13} aria-hidden /> Preparar
                     </button>
@@ -759,6 +746,7 @@ export function Facturacion() {
                 const motivo = inv.mensaje?.trim() === 'Failed to fetch'
                   ? 'El envío anterior falló por un error de conexión.'
                   : inv.mensaje?.replace(/https?:\/\/\S+|\bfactiliza\b/gi, 'servicio anterior')
+                const esperaSunat = inv.status === 'pendiente' && Boolean(inv.resumen?.ticket)
                 return (
                   <div key={`${inv.orderId}-${inv.serie}-${inv.numero}`} className="flex flex-wrap items-center justify-between gap-3 px-3 py-3 sm:px-4">
                     <div className="min-w-0">
@@ -777,13 +765,14 @@ export function Facturacion() {
                       ) : null}
                     </div>
                     <div className="flex flex-wrap items-center gap-3">
-                      <span className="inline-flex items-center gap-1 text-xs capitalize">
-                        {statusIcon(inv.status)} {inv.status}
+                      <span className={`inline-flex items-center gap-1 text-xs ${esperaSunat ? '' : 'capitalize'}`}>
+                        {statusIcon(inv.status)} {esperaSunat ? 'Pendiente en SUNAT' : inv.status}
                       </span>
                       {inv.canal === 'sunat' && inv.status === 'pendiente' ? (
-                        <button type="button" disabled={!emision?.configurada || retrying !== null} onClick={() => void reintentar(inv.orderId)}
+                        <button type="button" disabled={!emision?.configurada || retrying !== null} onClick={() => void reintentar(inv)}
                           className="min-h-10 rounded-lg border border-ink/12 px-2.5 text-xs font-semibold text-ember hover:bg-ember/10 disabled:opacity-50">
-                          {retrying === inv.orderId ? 'Enviando…' : 'Reintentar envío'}
+                          {esperaSunat ? (retrying === inv.orderId ? 'Consultando…' : 'Consultar estado')
+                            : (retrying === inv.orderId ? 'Reintentando…' : 'Reintentar envío')}
                         </button>
                       ) : null}
                       {admin && betaDisponible && order?.paid && inv.status === 'rechazada' ? (
@@ -827,15 +816,13 @@ export function Facturacion() {
               <p className="text-sm text-ink/60">
                 Pedido <strong>{padOrder(selectedOrder.number)}</strong> · {selectedOrder.customerName} · <strong>{soles(selectedOrder.total)}</strong>
               </p>
-              <div className="flex gap-2">
-                <button type="button" disabled={sending} onClick={() => setEmitType('boleta')} className={`flex-1 rounded-xl py-3 text-sm font-bold ${emitType === 'boleta' ? 'bg-ink text-cream' : 'bg-cream'}`}>
+              <div className="flex gap-2" role="group" aria-label="Tipo de comprobante">
+                <button type="button" aria-pressed={emitType === 'boleta'} disabled={sending || selectedOrder.docTipo === 'factura'} onClick={() => setEmitType('boleta')} className={`flex-1 rounded-xl py-3 text-sm font-bold disabled:opacity-50 ${emitType === 'boleta' ? 'bg-ink text-cream' : 'bg-cream'}`}>
                   Boleta
                 </button>
-                {emision?.activa ? (
-                  <button type="button" disabled={sending} onClick={() => setEmitType('factura')} className={`flex-1 rounded-xl py-3 text-sm font-bold ${emitType === 'factura' ? 'bg-ink text-cream' : 'bg-cream'}`}>
-                    Factura
-                  </button>
-                ) : null}
+                <button type="button" aria-pressed={emitType === 'factura'} disabled={sending} onClick={() => setEmitType('factura')} className={`flex-1 rounded-xl py-3 text-sm font-bold disabled:opacity-50 ${emitType === 'factura' ? 'bg-ink text-cream' : 'bg-cream'}`}>
+                  Factura
+                </button>
               </div>
               <DocumentoCliente key={claveCliente} cliente={cliente} tipo={emitType} total={selectedOrder.total} disabled={sending} error={clienteError}
                 onChange={(datos) => setDatosClientes((prev) => ({ ...prev, [claveCliente]: datos }))} />
@@ -879,6 +866,7 @@ export function Facturacion() {
               <p className="text-sm text-ink/70">
                 Total {soles(dinero.total)} · base {soles(dinero.base)} · IGV {soles(dinero.igv)}
               </p>
+              {emitError ? <p role="alert" className="text-sm text-amber-800 dark:text-amber-300">{emitError}</p> : null}
               <div className="flex gap-2">
                 {queue.length > 1 ? (
                   <button type="button" disabled={sending || queueAt === 0} onClick={() => irA(queueAt - 1)} className="min-h-11 rounded-xl border border-ink/12 px-3 text-sm font-bold disabled:opacity-40">
@@ -891,7 +879,7 @@ export function Facturacion() {
                   disabled={sending || !disponible || Boolean(clienteError) || total !== selectedOrder.total}
                   className="min-h-11 flex-1 rounded-xl bg-ember font-semibold text-white disabled:opacity-50"
                 >
-                  {sending ? 'Revisando…' : 'Emitir'}
+                  {sending ? 'Emitiendo…' : 'Emitir'}
                 </button>
                 {queue.length > 1 ? (
                   <button type="button" disabled={sending || queueAt >= queue.length - 1} onClick={() => irA(queueAt + 1)} className="min-h-11 rounded-xl border border-ink/12 px-3 text-sm font-bold disabled:opacity-40">
@@ -899,7 +887,7 @@ export function Facturacion() {
                   </button>
                 ) : null}
               </div>
-              {!disponible ? <p className="text-sm text-ink/70">{emision?.motivo || 'Completa Configurar SUNAT para habilitar la emisión.'}</p> : null}
+              {!disponible ? <p role="status" className="text-sm text-ink/70">{detalleEstado}</p> : null}
               {total !== selectedOrder.total ? (
                 <p className="text-sm text-amber-800 dark:text-amber-300">El detalle debe sumar el importe pagado de {soles(selectedOrder.total)}.</p>
               ) : null}
