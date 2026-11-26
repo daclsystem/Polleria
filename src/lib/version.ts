@@ -1,7 +1,7 @@
 /** Versión publicada de todas las apps (web, system, driver, cliente).
  *  Al cambiarla y hacer build, los clientes detectan el cambio y se actualizan. */
-export const APP_VERSION = '1.6.62'
-export const APP_BUILD = '2026.11.23a'
+export const APP_VERSION = '1.6.63'
+export const APP_BUILD = '2026.11.26a'
 
 /** true si `remote` es semver estrictamente mayor que `current`. */
 export function isNewerVersion(remote: string, current: string): boolean {
