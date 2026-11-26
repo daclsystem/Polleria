@@ -4,11 +4,13 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
 import forge from 'node-forge'
+import nodemailer from 'nodemailer'
 import { zipSync, unzipSync } from 'fflate'
 import { sql } from '../dist/db.js'
 import { saveCertificado } from '../dist/lib/certificado.js'
 import { comprobanteFilePath, saveComprobanteFile } from '../dist/lib/comprobantes.js'
-import { emitirComprobante, reintentarSunat } from '../dist/lib/emision.js'
+import { destinatarioComprobante } from '../dist/lib/comprobanteCorreo.js'
+import { emitirComprobante, procesarCorreosComprobantes, reintentarSunat } from '../dist/lib/emision.js'
 import { getFacturaCdr, getFacturaEstado, parseXml, sendBill } from '../dist/lib/sunat.js'
 
 const SOAP = 'http://schemas.xmlsoap.org/soap/envelope/'
@@ -102,7 +104,7 @@ function certificate(password) {
   return Buffer.from(forge.asn1.toDer(pkcs12).getBytes(), 'binary')
 }
 
-async function fixture(t, invoices = [invoice()]) {
+async function fixture(t, invoices = [invoice()], correoPedido) {
   const dir = await mkdtemp(join(tmpdir(), 'polleria-pendientes-'))
   const previous = { CERTIFICADO_DIR: process.env.CERTIFICADO_DIR, COMPROBANTES_DIR: process.env.COMPROBANTES_DIR }
   process.env.CERTIFICADO_DIR = join(dir, 'certificado')
@@ -130,6 +132,7 @@ async function fixture(t, invoices = [invoice()]) {
       storage.set(this.parameters.key.value, JSON.parse(this.parameters.value.value))
       return { recordset: [] }
     }
+    if (query.includes('o.DocEmail')) return { recordset: correoPedido ? [correoPedido] : [] }
     if (query.includes('FROM dbo.Orders')) return { recordset: [{ Paid: true, Status: 'entregado', Total: 20, DocTipo: 'factura' }] }
     if (query.includes('FROM dbo.Settings')) return { recordset: [{ IgvRate: 0.18 }] }
     assert.fail('Consulta SQL inesperada: ' + query)
@@ -141,6 +144,28 @@ async function fixture(t, invoices = [invoice()]) {
     return respond(url, options)
   })
   return { storage, calls, respond: (handler) => { respond = handler } }
+}
+
+function configurarSmtpFicticio(t, enviar) {
+  const env = {
+    COMPROBANTES_SMTP_HOST: 'smtp.example.test',
+    COMPROBANTES_SMTP_PORT: '587',
+    COMPROBANTES_SMTP_USER: 'remitente@example.test',
+    COMPROBANTES_SMTP_PASSWORD: 'ficticia',
+  }
+  const anterior = Object.fromEntries(Object.keys(env).map((key) => [key, process.env[key]]))
+  Object.assign(process.env, env)
+  t.after(() => {
+    for (const [key, value] of Object.entries(anterior)) {
+      if (value === undefined) delete process.env[key]
+      else process.env[key] = value
+    }
+  })
+  t.mock.method(nodemailer, 'createTransport', (config) => {
+    assert.equal(config.requireTLS, true)
+    assert.equal(config.disableUrlAccess, true)
+    return { sendMail: enviar }
+  })
 }
 
 test('consulta CDR de factura con los cuatro parámetros y verifica la constancia recibida', async (t) => {
@@ -465,4 +490,65 @@ test('la boleta sin ticket espera tras 0140 y después reutiliza exactamente el 
   assert.deepEqual(sent, [summary, summary])
   assert.deepEqual(await readFile(comprobanteFilePath(ORDER_ID, 'resumen')), summary)
   assert.equal(f.calls.length, 2)
+})
+
+test('el correo de facturación tiene prioridad y no se usa si el comprobante va a otro documento', () => {
+  const pedido = { DocNumero: RUC, DocEmail: 'facturacion@example.test', CustomerEmail: 'cliente@example.test' }
+  assert.equal(destinatarioComprobante(RUC, pedido), pedido.DocEmail)
+  assert.equal(destinatarioComprobante(RUC, { ...pedido, DocEmail: '' }), pedido.CustomerEmail)
+  assert.equal(destinatarioComprobante('20999999999', pedido), undefined)
+  assert.equal(destinatarioComprobante('-', { DocEmail: 'uno@example.test, dos@example.test' }), undefined)
+})
+
+for (const tipo of ['factura', 'boleta']) {
+  test(`la ${tipo} aceptada envía una vez el PDF, el XML y el CDR como adjuntos`, async (t) => {
+    const enviado = []
+    configurarSmtpFicticio(t, async (mail) => {
+      enviado.push(mail)
+      return { accepted: [mail.to.address] }
+    })
+    const value = invoice(tipo, { clienteDoc: RUC })
+    const destino = 'facturacion@example.test'
+    const f = await fixture(t, [value], { DocNumero: RUC, DocEmail: destino })
+    const cdr = cdrZip(nameFor(value), referenceFor(value))
+    const pdf = Buffer.from('PDF ficticio')
+    const xml = Buffer.from('XML ficticio')
+    await saveComprobanteFile(ORDER_ID, 'pdf', pdf)
+    await saveComprobanteFile(ORDER_ID, 'xml', xml)
+    await saveComprobanteFile(ORDER_ID, 'cdr', cdr)
+
+    assert.equal((await reintentarSunat(ORDER_ID)).status, 'aceptada')
+    assert.equal(enviado.length, 0)
+    assert.equal(f.storage.get('sunat_correos')[0].estado, 'pendiente')
+    await procesarCorreosComprobantes()
+    await reintentarSunat(ORDER_ID)
+    await procesarCorreosComprobantes()
+
+    assert.equal(enviado.length, 1)
+    assert.equal(enviado[0].to.address, destino)
+    assert.deepEqual(enviado[0].attachments.map((attachment) => attachment.content), [pdf, xml, cdr])
+    assert.equal(enviado[0].attachments[2].filename, `R-${nameFor(value)}.zip`)
+    assert.equal(f.storage.get('sunat_correos')[0].estado, 'enviado')
+    assert.equal(f.calls.length, 0)
+  })
+}
+
+test('un SMTP temporalmente indisponible no cambia la aceptación ni reintenta de inmediato', async (t) => {
+  let intentos = 0
+  configurarSmtpFicticio(t, async () => {
+    intentos++
+    throw Object.assign(new Error('Fallo SMTP ficticio'), { responseCode: 450, command: 'DATA' })
+  })
+  const value = invoice('factura', { clienteDoc: RUC })
+  const f = await fixture(t, [value], { DocNumero: RUC, CustomerEmail: 'cliente@example.test' })
+  await saveComprobanteFile(ORDER_ID, 'pdf', Buffer.from('PDF ficticio'))
+  await saveComprobanteFile(ORDER_ID, 'xml', Buffer.from('XML ficticio'))
+  await saveComprobanteFile(ORDER_ID, 'cdr', cdrZip(nameFor(value), referenceFor(value)))
+  assert.equal((await reintentarSunat(ORDER_ID)).status, 'aceptada')
+  await procesarCorreosComprobantes()
+  await procesarCorreosComprobantes()
+  assert.equal(intentos, 1)
+  assert.equal(f.storage.get('invoices')[0].status, 'aceptada')
+  assert.equal(f.storage.get('sunat_correos')[0].estado, 'pendiente')
+  assert.ok(f.storage.get('sunat_correos')[0].siguienteIntento > Date.now())
 })

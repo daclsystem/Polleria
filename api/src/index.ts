@@ -4,6 +4,7 @@ import http from 'http'
 import dotenv from 'dotenv'
 import { getPool } from './db.js'
 import { initRealtime } from './realtime.js'
+import { iniciarCorreoComprobantes } from './lib/emision.js'
 import { authRouter } from './auth.js'
 import { recoverRouter } from './routes/recover.js'
 import { catalogRouter } from './routes/catalog.js'
@@ -83,6 +84,7 @@ const server = http.createServer(app)
 initRealtime(server, corsOrigins)
 
 server.listen(PORT, async () => {
+  iniciarCorreoComprobantes()
   try {
     await getPool()
     console.log(`[polleria-api] http://localhost:${PORT}`)

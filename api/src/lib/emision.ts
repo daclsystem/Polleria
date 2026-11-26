@@ -3,6 +3,7 @@ import fs from 'node:fs/promises'
 import forge from 'node-forge'
 import { getPool, sql } from '../db.js'
 import { certificadoInfo, leerCertificado } from './certificado.js'
+import { configuracionSmtpComprobantes, destinatarioComprobante, enviarCorreoComprobante, type CorreoComprobante } from './comprobanteCorreo.js'
 import { comprobanteFilePath, saveComprobanteFile } from './comprobantes.js'
 import { loadIgvRate, round2 } from './money.js'
 import {
@@ -48,7 +49,16 @@ type Invoice = {
   lastSentAt?: string
 }
 
+type EnvioCorreo = CorreoComprobante & {
+  estado: 'pendiente' | 'enviando' | 'enviado' | 'fallido' | 'sin_confirmar'
+  intentos: number
+  siguienteIntento: number
+  inicio?: number
+}
+
 const ESPERA_SUNAT_0140 = 15 * 60 * 1000
+const COLA_CORREOS = 'sunat_correos'
+const ESPERA_CORREO = 5 * 60 * 1000
 
 function mensajeEsperaSunat(nextRetryAt: string, sunatCode?: string) {
   const hora = new Intl.DateTimeFormat('es-PE', {
@@ -112,6 +122,87 @@ async function readInvoices(tx: sql.Transaction) {
   const invoices = await readConfig<Invoice[]>('invoices', tx)
   if (invoices !== null && !Array.isArray(invoices)) throw new Error('El registro de comprobantes no es una lista.')
   return invoices ?? []
+}
+
+async function leerCorreos(tx: sql.Transaction) {
+  const correos = await readConfig<EnvioCorreo[]>(COLA_CORREOS, tx)
+  if (correos !== null && !Array.isArray(correos)) throw new Error('La cola de correos no es una lista.')
+  return correos ?? []
+}
+
+async function prepararCorreo(invoice: Invoice, nombreCdr: string, tx: sql.Transaction) {
+  if (!configuracionSmtpComprobantes() || !invoice.rucEmisor) return
+  const { recordset } = await new sql.Request(tx)
+    .input('id', sql.UniqueIdentifier, invoice.orderId)
+    .query<{ DocNumero?: string; DocEmail?: string; CustomerEmail?: string }>(`
+      SELECT o.DocNumero, o.DocEmail, c.Email AS CustomerEmail
+      FROM dbo.Orders o
+      LEFT JOIN dbo.Customers c ON c.Id = o.CustomerId
+      WHERE o.Id = @id
+    `)
+  const para = destinatarioComprobante(invoice.clienteDoc, recordset[0])
+  if (!para) return
+  const correos = await leerCorreos(tx)
+  if (correos.some((correo) => correo.orderId === invoice.orderId)) return
+  correos.push({
+    orderId: invoice.orderId, tipo: invoice.tipo, serie: invoice.serie, numero: invoice.numero,
+    ruc: invoice.rucEmisor, nombreCdr, para, estado: 'pendiente', intentos: 0, siguienteIntento: Date.now(),
+  })
+  await writeConfig(COLA_CORREOS, correos, tx)
+}
+
+async function tomarCorreo() {
+  return withInvoiceLock(async (tx) => {
+    const correos = await leerCorreos(tx)
+    const ahora = Date.now()
+    const interrumpidos = correos.filter((correo) => correo.estado === 'enviando' && (correo.inicio ?? 0) <= ahora - ESPERA_CORREO)
+    // Si el proceso se interrumpió durante SMTP, el servidor pudo haber aceptado el mensaje.
+    for (const correo of interrumpidos) correo.estado = 'sin_confirmar'
+    const siguiente = correos.find((correo) => correo.estado === 'pendiente' && correo.siguienteIntento <= ahora)
+    if (siguiente) Object.assign(siguiente, { estado: 'enviando', inicio: ahora, intentos: siguiente.intentos + 1 })
+    if (siguiente || interrumpidos.length) await writeConfig(COLA_CORREOS, correos, tx)
+    return siguiente
+  })
+}
+
+export async function procesarCorreosComprobantes() {
+  if (!configuracionSmtpComprobantes()) return
+  for (let procesados = 0; procesados < 5; procesados++) {
+    const correo = await tomarCorreo()
+    if (!correo) return
+    let estado: EnvioCorreo['estado'] = 'enviado'
+    try {
+      await enviarCorreoComprobante(correo)
+    } catch (error) {
+      const { responseCode, command, code } = error as { responseCode?: number; command?: string; code?: string }
+      const rechazoTemporal = responseCode !== undefined && responseCode >= 400 && responseCode < 500
+      const sinConexion = command === 'CONN' && (code === 'ECONNECTION' || code === 'ETIMEDOUT')
+      if (rechazoTemporal || sinConexion) estado = correo.intentos < 3 ? 'pendiente' : 'fallido'
+      else estado = command === 'DATA' && responseCode === undefined ? 'sin_confirmar' : 'fallido'
+      console.warn(`[comprobantes-correo] ${correo.serie}-${correo.numero}: ${estado}`)
+    }
+    await withInvoiceLock(async (tx) => {
+      const correos = await leerCorreos(tx)
+      const actual = correos.find((item) => item.orderId === correo.orderId)
+      if (!actual || actual.inicio !== correo.inicio || actual.estado !== 'enviando') return
+      actual.estado = estado
+      if (estado === 'pendiente') actual.siguienteIntento = Date.now() + ESPERA_CORREO
+      await writeConfig(COLA_CORREOS, correos, tx)
+    })
+  }
+}
+
+export function iniciarCorreoComprobantes() {
+  if (!configuracionSmtpComprobantes()) return
+  let procesando = false
+  const timer = setInterval(() => {
+    if (procesando) return
+    procesando = true
+    void procesarCorreosComprobantes()
+      .catch(() => console.warn('[comprobantes-correo] No se pudo procesar la cola de correo.'))
+      .finally(() => { procesando = false })
+  }, 15_000)
+  timer.unref()
 }
 
 export async function guardarComprobantes(incoming: Invoice[]) {
@@ -409,6 +500,7 @@ async function recibirSunat(orderId: string, config: SunatConfig, primerEnvio = 
     invoice.mensaje = cdr.message || `SUNAT ${cdr.code}`
     delete invoice.sunatCode
     delete invoice.nextRetryAt
+    if (invoice.status === 'aceptada') await prepararCorreo(invoice, nombre, tx)
     await writeConfig('invoices', invoices, tx)
     return invoice
   })
