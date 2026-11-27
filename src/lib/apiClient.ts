@@ -163,7 +163,7 @@ export async function apiPayOrder(
   id: string,
   payments: Array<{ method: string; amount: number; cashTendered?: number; reference?: string }>,
   billing?: {
-    docTipo?: string
+    docTipo?: Order['docTipo']
     docNumero?: string
     docNombre?: string
     docEmail?: string
@@ -172,7 +172,13 @@ export async function apiPayOrder(
   },
   opts?: { keepKitchen?: boolean },
 ) {
-  return apiFetch<{ order: unknown; paid: boolean; paidAmount?: number }>(`/api/orders/${id}/payments`, {
+  return apiFetch<{
+    order: unknown
+    paid: boolean
+    paidAmount?: number
+    comprobante?: Order['comprobante']
+    avisoComprobante?: string
+  }>(`/api/orders/${id}/payments`, {
     method: 'POST',
     body: JSON.stringify({ payments, billing, closeBalance: true, keepKitchen: opts?.keepKitchen === true }),
   })

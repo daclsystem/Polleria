@@ -3,7 +3,7 @@ import { getDeviceOS } from './platform'
 import { printRawbt, sendToPrinter } from './printer-driver'
 import { defaultPrinterSetup, loadPrinterSetup } from './printerStore'
 import { prepareTicketShare, shareTicketPayload } from './share'
-import { buildTicketDoc, renderEscPos, type TicketDoc, type TicketKind } from './ticket-doc'
+import { buildTicketDoc, comprobanteTicket, renderEscPos, type TicketDoc, type TicketKind } from './ticket-doc'
 import type { Order, PrinterConfig, Settings, User } from '../types'
 import { DEFAULT_PRINTER, PAY_LABEL, TYPE_LABEL } from '../types'
 import { publicWebHost, withBase } from './paths'
@@ -68,11 +68,11 @@ function sloganOk(s?: string) {
   return true
 }
 
-function headerContactHtml(settings: Settings) {
-  const rucDigits = (settings.ruc || '').replace(/\D/g, '')
+function headerContactHtml(settings: Settings, ruc = settings.ruc) {
+  const rucDigits = (ruc || '').replace(/\D/g, '')
   const phone = ticketPublicPhone()
   const bits: string[] = []
-  if (rucDigits.length >= 8) bits.push(`<p class="muted">RUC ${esc(settings.ruc)}</p>`)
+  if (rucDigits.length >= 8) bits.push(`<p class="muted">RUC ${esc(ruc)}</p>`)
   if (phone) bits.push(`<p class="muted">Tel. ${esc(phone)}</p>`)
   bits.push(`<p class="muted">${esc(publicWebHost())}</p>`)
   return bits.join('')
@@ -80,17 +80,14 @@ function headerContactHtml(settings: Settings) {
 
 export function ticketHtml(order: Order, settings: Settings, kind: TicketKind) {
   order = reconcileOrderMoney(order, settings.igvRate)
-  const printedAt = new Date().toISOString()
+  const fiscal = kind === 'caja' ? comprobanteTicket(order) : undefined
+  const printedAt = fiscal?.comprobante?.fechaEmision || new Date().toISOString()
   const heading =
     kind === 'cocina'
       ? 'COMANDA COCINA'
       : kind === 'cuenta'
         ? 'PRE-CUENTA'
-        : order.docTipo === 'factura'
-          ? 'FACTURA'
-          : order.docTipo && order.docTipo !== 'ninguno'
-            ? 'BOLETA'
-            : 'TICKET DE VENTA'
+        : fiscal?.titulo || 'TICKET DE VENTA'
   const items = order.items
     .map((i) => {
       const line =
@@ -101,7 +98,7 @@ export function ticketHtml(order: Order, settings: Settings, kind: TicketKind) {
     })
     .join('')
 
-  const factura = order.docTipo === 'factura'
+  const factura = fiscal?.factura ?? order.docTipo === 'factura'
   const money =
     kind === 'cocina'
       ? ''
@@ -112,8 +109,11 @@ export function ticketHtml(order: Order, settings: Settings, kind: TicketKind) {
         <div class="row big"><span>TOTAL</span><span>${esc(solesPrint(order.total))}</span></div>
         <p class="center muted" style="margin-top:8px">${esc(PAY_LABEL[order.paymentMethod])} · ${order.paid ? 'PAGADO' : 'POR COBRAR'}</p>`
 
-  const billing =
-    kind !== 'cocina' && (order.docTipo === 'factura' || order.docTipo === 'boleta_dni' || order.docTipo === 'boleta_simple')
+  const billing = fiscal
+    ? `${fiscal.documento ? `<p>${esc(fiscal.documento)}</p>` : ''}
+        ${fiscal.nombre ? `<p><strong>${esc(fiscal.nombre)}</strong></p>` : ''}
+        ${fiscal.direccion ? `<p>${esc(fiscal.direccion)}</p>` : ''}`
+    : kind === 'cuenta' && (order.docTipo === 'factura' || order.docTipo === 'boleta_dni' || order.docTipo === 'boleta_simple')
       ? `<p>${order.docTipo === 'factura' && order.docNumero ? `RUC ${esc(order.docNumero)}` : order.docTipo === 'boleta_dni' && order.docNumero ? `DNI ${esc(order.docNumero)}` : ''}</p>
         ${order.docNombre ? `<p><strong>${esc(order.docNombre)}</strong></p>` : ''}
         ${order.docAddress ? `<p>${esc(order.docAddress)}</p>` : ''}`
@@ -130,11 +130,13 @@ export function ticketHtml(order: Order, settings: Settings, kind: TicketKind) {
       <img class="logo" src="${esc(ticketLogoSrc())}" alt="${esc(settings.name)}" />
       ${sloganOk(settings.slogan) ? `<p class="muted">${esc(settings.slogan)}</p>` : ''}
       <p class="muted">${esc(settings.address)}</p>
-      ${headerContactHtml(settings)}
+      ${headerContactHtml(settings, fiscal?.comprobante?.rucEmisor)}
     </div>
     <hr class="dash" />
     <p class="center big">${heading}</p>
-    <p class="center">${esc(padOrder(order.number))} · ${esc(formatDate(printedAt))}</p>
+    ${fiscal?.referencia ? `<p class="center big">${esc(fiscal.referencia)}</p>` : ''}
+    ${fiscal?.estado ? `<p class="center muted">${esc(fiscal.estado)}</p>` : ''}
+    <p class="center">${fiscal ? 'Pedido ' : ''}${esc(padOrder(order.number))} · ${esc(formatDate(printedAt))}</p>
     <p class="center"><strong>Hora ${esc(formatTime(printedAt))}</strong></p>
     ${mesa}
     <p class="center"><strong>${esc(TYPE_LABEL[order.type])}</strong></p>

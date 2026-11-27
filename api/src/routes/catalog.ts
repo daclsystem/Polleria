@@ -2,6 +2,7 @@ import { Router } from 'express'
 import { v4 as uuid } from 'uuid'
 import { getPool, sql } from '../db.js'
 import { authRequired } from '../auth.js'
+import { comprobantesParaImpresion } from '../lib/emision.js'
 import { num, pickOrderMoney } from '../lib/money.js'
 
 export const catalogRouter = Router()
@@ -494,7 +495,7 @@ function mapOrder(r: Record<string, unknown>, items: unknown[] = []) {
 }
 
 /** Estado completo para el POS — reemplaza el seed local */
-catalogRouter.get('/bootstrap', authRequired, async (_req, res) => {
+catalogRouter.get('/bootstrap', authRequired, async (req, res) => {
   try {
     await ensureProducts()
     await ensureProductExtras()
@@ -509,7 +510,8 @@ catalogRouter.get('/bootstrap', authRequired, async (_req, res) => {
       : `SELECT Id, Name, Email, Role, Active, Pin, Phone, PhotoUrl, Dni
          FROM dbo.Users WHERE ISNULL(IsSystem, 0) = 0 ORDER BY Name`
 
-    const [users, products, tables, inventory, settings, orders, customers, reservations, branches, ranges] =
+    const puedeImprimirComprobante = req.user?.role === 'admin' || req.user?.role === 'cajero'
+    const [users, products, tables, inventory, settings, orders, customers, reservations, branches, ranges, comprobantes] =
       await Promise.all([
         pool.request().query(usersSql),
         pool.request().query(`SELECT * FROM dbo.Products ORDER BY Category, Name`),
@@ -529,6 +531,10 @@ catalogRouter.get('/bootstrap', authRequired, async (_req, res) => {
         pool.request().query(`SELECT TOP 50 * FROM dbo.Reservations ORDER BY [Date] DESC, [Time] DESC`),
         pool.request().query(`SELECT * FROM dbo.Branches ORDER BY Name`),
         pool.request().query(`SELECT * FROM dbo.DeliveryRanges ORDER BY SortOrder`),
+        puedeImprimirComprobante ? comprobantesParaImpresion().catch(() => {
+          console.warn('[catalog] No se pudo leer la numeración de los comprobantes.')
+          return undefined
+        }) : undefined,
       ])
 
     const orderIds = orders.recordset.map((o: { Id: string }) => o.Id)
@@ -597,9 +603,10 @@ catalogRouter.get('/bootstrap', authRequired, async (_req, res) => {
         originLat: s.OriginLat != null ? Number(s.OriginLat) : undefined,
         originLng: s.OriginLng != null ? Number(s.OriginLng) : undefined,
       },
-      orders: orders.recordset.map((o: Record<string, unknown>) =>
-        mapOrder(o, itemsByOrder.get(String(o.Id)) || []),
-      ),
+      orders: orders.recordset.map((o: Record<string, unknown>) => ({
+        ...mapOrder(o, itemsByOrder.get(String(o.Id)) || []),
+        comprobante: comprobantes?.get(String(o.Id).toLowerCase()),
+      })),
       customers: customers.recordset.map((c: Record<string, unknown>) => ({
         id: String(c.Id),
         name: c.Name,

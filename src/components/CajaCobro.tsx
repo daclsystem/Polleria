@@ -35,12 +35,12 @@ export function CajaCobro({
   const total = orderBalance(order, money.total)
   const [efectivo, setEfectivo] = useState(total)
   const [extras, setExtras] = useState<{ kind: ExtraKind; amount: number; op: string }[]>([])
-  const [docTipo, setDocTipo] = useState<FiscalDocTipo>('ninguno')
-  const [docNumero, setDocNumero] = useState('')
-  const [docNombre, setDocNombre] = useState(order.customerName || '')
-  const [docEmail, setDocEmail] = useState('')
-  const [docPhone, setDocPhone] = useState(order.customerPhone || '')
-  const [docAddress, setDocAddress] = useState(order.address || '')
+  const [docTipo, setDocTipo] = useState<FiscalDocTipo>(order.docTipo || (money.total > 700 ? 'boleta_dni' : 'boleta_simple'))
+  const [docNumero, setDocNumero] = useState(order.docTipo === 'boleta_dni' || order.docTipo === 'factura' ? order.docNumero || '' : '')
+  const [docNombre, setDocNombre] = useState((order.docTipo !== 'boleta_simple' ? order.docNombre : undefined) || order.customerName || '')
+  const [docEmail, setDocEmail] = useState(order.docEmail || '')
+  const [docPhone, setDocPhone] = useState(order.docPhone || order.customerPhone || '')
+  const [docAddress, setDocAddress] = useState(order.docAddress || order.address || '')
   const [err, setErr] = useState('')
   const [lookupNote, setLookupNote] = useState('')
   const [pending, setPending] = useState<Parameters<typeof onConfirm>[0] | null>(null)
@@ -113,6 +113,7 @@ export function CajaCobro({
   }
 
   const genericBoleta = docTipo === 'boleta_simple'
+  const requiereIdentificacion = genericBoleta && money.total > 700
   const needsDocData = docTipo === 'boleta_dni' || docTipo === 'factura'
   const needsRuc = isFactura
   const needsDni = docTipo === 'boleta_dni'
@@ -128,15 +129,17 @@ export function CajaCobro({
     if (falta !== 0) return false
     if (suma <= 0) return false
     if (!opOk) return false
+    if (requiereIdentificacion) return false
     if (needsDocData && !(nameOk && mailOk && phoneOk && addrOk && rucOk && dniOk)) return false
     return true
-  }, [falta, suma, opOk, needsDocData, nameOk, mailOk, phoneOk, addrOk, rucOk, dniOk])
+  }, [falta, suma, opOk, requiereIdentificacion, needsDocData, nameOk, mailOk, phoneOk, addrOk, rucOk, dniOk])
 
   const submit = () => {
     setErr('')
     if (!canPay) {
       if (falta !== 0) setErr(`La suma debe ser ${soles(total)}`)
       else if (!opOk) setErr('Yape o tarjeta necesitan el número de operación')
+      else if (requiereIdentificacion) setErr('Selecciona Boleta con DNI o Factura para este importe.')
       else setErr('Completa los datos del documento')
       return
     }

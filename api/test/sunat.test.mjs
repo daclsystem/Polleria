@@ -9,8 +9,8 @@ import { SignedXml } from 'xml-crypto'
 import { sql } from '../dist/db.js'
 import { saveCertificado } from '../dist/lib/certificado.js'
 import {
-  activarEmision, comprobantePrueba, configuracionSunat, emitirComprobante, estadoEmision,
-  guardarConfiguracionSunat, probarSunat, reintentarSunat,
+  activarEmision, comprobantePrueba, comprobantesParaImpresion, configuracionSunat, emitirBoletaAlCobrar,
+  emitirComprobante, estadoEmision, guardarConfiguracionSunat, probarSunat, procesarPendientesSunat, reintentarSunat,
 } from '../dist/lib/emision.js'
 import { parseCdr, parseXml, pkcs12SigningKeys, signedInvoice } from '../dist/lib/sunat.js'
 import { comprobantePdf } from '../dist/lib/sunatPdf.js'
@@ -155,11 +155,19 @@ test('habilita boletas y facturas sin key, conserva reintentos y valida pedido, 
     if (query.includes('FROM dbo.Orders')) {
       return { recordset: [{ Paid: true, Status: 'entregado', Total: 20, DocTipo: this.parameters.id.value === pedidoFacturaId ? 'factura' : 'boleta', ...orderOverride }] }
     }
+    if (query.includes('FROM dbo.OrderItems')) {
+      return { recordset: [
+        { Name: 'Producto ficticio', Qty: 2, Price: 8.77 },
+        { Name: 'Otro producto ficticio', Qty: 3, Price: 2.51 },
+        { Name: 'Cortesía', Qty: 1, Price: 0 },
+      ] }
+    }
     if (query.includes('FROM dbo.Settings')) return { recordset: [{ IgvRate: 0.18 }] }
     assert.fail('Consulta inesperada: ' + query)
   })
 
   const payloads = []
+  let duranteEnvioDeCaja
   const resultXml = (content) => new Response(`<soap:Envelope xmlns:soap="${SOAP}" xmlns:ser="${SERVICE}">
       <soap:Body>${content}</soap:Body></soap:Envelope>`)
   const fetchMock = t.mock.method(globalThis, 'fetch', async (url, options) => {
@@ -185,6 +193,7 @@ test('habilita boletas y facturas sin key, conserva reintentos y valida pedido, 
       assert.match(xml.toString(), new RegExp(`<cbc:ID>B003-${storage.get('invoices')[0].numero}</cbc:ID>`))
       assert.match(xml.toString(), /<cbc:Percent>18\.00<\/cbc:Percent>/)
       if (payloads.length === 1) throw new Error('Corte ficticio después de la reserva')
+      if (duranteEnvioDeCaja) await duranteEnvioDeCaja()
       return resultXml('<ser:sendSummaryResponse><ticket>123456</ticket></ser:sendSummaryResponse>')
     }
     assert.equal(options.headers.SOAPAction, 'urn:sendBill')
@@ -250,6 +259,40 @@ test('habilita boletas y facturas sin key, conserva reintentos y valida pedido, 
   assert.equal(fetchMock.mock.callCount(), 6)
   assert.deepEqual(storage.get('emision_activa'), { activa: false })
   assert.deepEqual(storage.get('emision_sin_licencia'), { orderId: 'cupo-ya-utilizado' })
+
+  const idCaja = 'c4ab2aae-126e-4d3b-9dea-d0381803a85f'
+  orderOverride = { DocTipo: 'boleta_dni', DocNumero: '98765432', DocNombre: 'COMPRADOR FICTICIO', Paid: false }
+  await assert.rejects(emitirBoletaAlCobrar(idCaja), /pedido pagado y vigente/)
+  orderOverride.Paid = true
+  const boletaCaja = await emitirBoletaAlCobrar(idCaja)
+  assert.equal(boletaCaja.status, 'pendiente')
+  assert.equal(boletaCaja.serie, 'B003')
+  assert.equal(boletaCaja.numero, 9)
+  assert.equal(boletaCaja.clienteDoc, '98765432')
+  assert.equal(boletaCaja.clienteNombre, 'COMPRADOR FICTICIO')
+  assert.deepEqual(await emitirBoletaAlCobrar(idCaja.toUpperCase()), boletaCaja)
+  assert.equal(fetchMock.mock.callCount(), 6)
+  const xmlCaja = await readFile(join(dir, 'comprobantes', idCaja, 'xml.xml'), 'utf8')
+  assert.match(xmlCaja, /<cbc:ID>B003-9<\/cbc:ID>/)
+  assert.match(xmlCaja, /<cbc:PayableAmount currencyID="PEN">20\.00<\/cbc:PayableAmount>/)
+  assert.match(xmlCaja, /Producto ficticio/)
+  assert.match(xmlCaja, /98765432/)
+  assert.doesNotMatch(xmlCaja, /Cortesía/)
+  duranteEnvioDeCaja = async () => {
+    const reintentoEnCurso = await reintentarSunat(idCaja)
+    assert.equal(reintentoEnCurso.status, 'pendiente')
+    assert.equal(reintentoEnCurso.numero, boletaCaja.numero)
+    assert.ok(reintentoEnCurso.nextRetryAt)
+    assert.equal(fetchMock.mock.callCount(), 7)
+  }
+  await procesarPendientesSunat()
+  assert.equal(fetchMock.mock.callCount(), 7)
+  assert.equal(storage.get('invoices')[0].resumen.ticket, '123456')
+  await procesarPendientesSunat()
+  const reimpresion = (await comprobantesParaImpresion()).get(idCaja)
+  assert.deepEqual(reimpresion, { ...boletaCaja, status: 'aceptada' })
+  assert.equal(fetchMock.mock.callCount(), 8)
+  orderOverride = {}
 
   await guardarConfiguracionSunat({ ruc: '' })
   assert.equal((await estadoEmision()).disponible, false)

@@ -6,7 +6,7 @@ import { emitEvent } from '../realtime.js'
 import { certificadoInfo, leerCertificado } from './certificado.js'
 import { configuracionSmtpComprobantes, destinatarioComprobante, enviarCorreoComprobante, type CorreoComprobante } from './comprobanteCorreo.js'
 import { comprobanteFilePath, saveComprobanteFile } from './comprobantes.js'
-import { loadIgvRate, round2 } from './money.js'
+import { loadIgvRate, num, round2 } from './money.js'
 import {
   getBoletaSummaryStatus, getFacturaCdr, getFacturaEstado, parseCdr, pkcs12SigningKeys, sendBill, sendBoletaSummary,
   signedBoletaSummary, signedInvoice, type SunatDocument,
@@ -48,6 +48,7 @@ type Invoice = {
   sunatCode?: string
   nextRetryAt?: string
   lastSentAt?: string
+  envioInicialPendiente?: true
 }
 
 type EnvioCorreo = CorreoComprobante & {
@@ -123,6 +124,22 @@ async function readInvoices(tx: sql.Transaction) {
   const invoices = await readConfig<Invoice[]>('invoices', tx)
   if (invoices !== null && !Array.isArray(invoices)) throw new Error('El registro de comprobantes no es una lista.')
   return invoices ?? []
+}
+
+export function comprobanteParaImpresion(invoice?: Invoice) {
+  if (invoice?.canal !== 'sunat') return undefined
+  const { tipo, serie, numero, status, fechaEmision, rucEmisor, clienteDoc, clienteNombre } = invoice
+  return { tipo, serie, numero, status, fechaEmision, rucEmisor, clienteDoc, clienteNombre }
+}
+
+export async function comprobantesParaImpresion() {
+  const invoices = await readConfig<Invoice[]>('invoices')
+  const comprobantes = new Map<string, NonNullable<ReturnType<typeof comprobanteParaImpresion>>>()
+  for (const invoice of Array.isArray(invoices) ? invoices : []) {
+    const comprobante = comprobanteParaImpresion(invoice)
+    if (comprobante && typeof invoice.orderId === 'string') comprobantes.set(invoice.orderId.toLowerCase(), comprobante)
+  }
+  return comprobantes
 }
 
 async function leerCorreos(tx: sql.Transaction) {
@@ -394,17 +411,26 @@ function nombreResumen(document: SunatDocument, invoices: Invoice[]) {
   return `${prefijo}${numero}`
 }
 
-async function consultarResumen(invoice: Invoice, resumen: NonNullable<Invoice['resumen']>, auth: ReturnType<typeof credencialesSunat>) {
-  const ticketGuardado = resumen.ticket || await fs.readFile(comprobanteFilePath(invoice.orderId, 'ticket'), 'utf8')
+async function ticketResumenGuardado(orderId: string) {
+  return fs.readFile(comprobanteFilePath(orderId, 'ticket'), 'utf8')
     .catch((error: NodeJS.ErrnoException) => {
       if (error.code !== 'ENOENT') throw error
       return ''
     })
+}
+
+async function enviarResumenFirmado(orderId: string, nombre: string, auth: ReturnType<typeof credencialesSunat>) {
+  const xml = await fs.readFile(comprobanteFilePath(orderId, 'resumen'))
+  const ticket = await sendBoletaSummary('produccion', auth, nombre, xml)
+  await saveComprobanteFile(orderId, 'ticket', Buffer.from(ticket))
+  return ticket
+}
+
+async function consultarResumen(invoice: Invoice, resumen: NonNullable<Invoice['resumen']>, auth: ReturnType<typeof credencialesSunat>) {
+  const ticketGuardado = resumen.ticket || await ticketResumenGuardado(invoice.orderId)
   if (!ticketGuardado) {
-    const xml = await fs.readFile(comprobanteFilePath(invoice.orderId, 'resumen'))
-    const ticket = await sendBoletaSummary('produccion', auth, resumen.nombre, xml)
+    const ticket = await enviarResumenFirmado(invoice.orderId, resumen.nombre, auth)
     resumen.ticket = ticket
-    await saveComprobanteFile(invoice.orderId, 'ticket', Buffer.from(ticket))
     invoice.mensaje = `Resumen enviado. SUNAT asignó el ticket ${ticket}.`
     return null
   }
@@ -422,7 +448,7 @@ async function enviarFacturaReservada(invoice: Invoice, auth: ReturnType<typeof 
   return sendBill('produccion', auth, nombre, xml)
 }
 
-async function recibirSunat(orderId: string, config: SunatConfig, primerEnvio = false) {
+async function recibirSunat(orderId: string, config: SunatConfig, primeraFactura = false) {
   const invoice = await withInvoiceLock(async (tx) => {
     const invoices = await readInvoices(tx)
     const invoice = invoices.find((item) => item?.orderId === orderId)
@@ -452,11 +478,15 @@ async function recibirSunat(orderId: string, config: SunatConfig, primerEnvio = 
         await writeConfig('invoices', invoices, tx)
         return invoice
       }
+      if (invoice.envioInicialPendiente) {
+        delete invoice.envioInicialPendiente
+        invoice.lastSentAt = new Date().toISOString()
+      }
       try {
         if (resumen) {
           cdr = await consultarResumen(invoice, resumen, auth)
         } else if (invoice.tipo === 'factura') {
-          if (primerEnvio) {
+          if (primeraFactura) {
             cdr = await enviarFacturaReservada(invoice, auth, nombre)
           } else {
             const consulta = await getFacturaCdr(auth, nombre)
@@ -501,12 +531,56 @@ async function recibirSunat(orderId: string, config: SunatConfig, primerEnvio = 
     invoice.mensaje = cdr.message || `SUNAT ${cdr.code}`
     delete invoice.sunatCode
     delete invoice.nextRetryAt
+    delete invoice.envioInicialPendiente
     if (invoice.status === 'aceptada') await prepararCorreo(invoice, nombre, tx)
     await writeConfig('invoices', invoices, tx)
     return invoice
   })
   emitEvent('invoice:updated', invoice, ['ops', 'caja'])
   return invoice
+}
+
+async function enviarBoletaInicial(orderId: string, auth: ReturnType<typeof credencialesSunat>) {
+  const envio = await withInvoiceLock(async (tx) => {
+    const invoices = await readInvoices(tx)
+    const invoice = invoices.find((item) => item?.orderId === orderId)
+    if (!invoice?.envioInicialPendiente || !invoice.resumen || invoice.status !== 'pendiente' ||
+        invoice.rucEmisor !== auth.ruc) return null
+    const inicio = Date.now()
+    delete invoice.envioInicialPendiente
+    invoice.lastSentAt = new Date(inicio).toISOString()
+    // Protege el envío en curso ante reintentos y reinicios sin bloquear la siguiente venta.
+    invoice.nextRetryAt = new Date(inicio + ESPERA_SUNAT_0140).toISOString()
+    await writeConfig('invoices', invoices, tx)
+    return { nombre: invoice.resumen.nombre, ticket: invoice.resumen.ticket, inicio: invoice.lastSentAt }
+  })
+  if (!envio) return
+
+  let ticket = envio.ticket
+  let mensaje = ''
+  let codigo: string | undefined
+  try {
+    ticket ||= await ticketResumenGuardado(orderId) || await enviarResumenFirmado(orderId, envio.nombre, auth)
+    mensaje = `Resumen enviado. SUNAT asignó el ticket ${ticket}.`
+  } catch (error) {
+    mensaje = (error as Error).message || 'SUNAT aún no confirmó el envío.'
+    codigo = (error as Error & { sunatCode?: string }).sunatCode
+  }
+  const actualizado = await withInvoiceLock(async (tx) => {
+    const invoices = await readInvoices(tx)
+    const invoice = invoices.find((item) => item?.orderId === orderId)
+    if (!invoice?.resumen || invoice.resumen.nombre !== envio.nombre || invoice.lastSentAt !== envio.inicio ||
+        invoice.status !== 'pendiente') return null
+    if (ticket) {
+      invoice.resumen.ticket = ticket
+      delete invoice.nextRetryAt
+    }
+    invoice.sunatCode = codigo
+    invoice.mensaje = codigo === '0140' && invoice.nextRetryAt ? mensajeEsperaSunat(invoice.nextRetryAt, codigo) : mensaje
+    await writeConfig('invoices', invoices, tx)
+    return invoice
+  })
+  if (actualizado) emitEvent('invoice:updated', actualizado, ['ops', 'caja'])
 }
 
 let consultandoPendientesSunat = false
@@ -527,6 +601,14 @@ export async function procesarPendientesSunat() {
     // Las consultas avanzan en paralelo; los guardados locales conservan su orden y el bloqueo SQL.
     let persistencia = Promise.resolve()
     const consultar = async (pendiente: Invoice) => {
+      if (pendiente.envioInicialPendiente) {
+        try {
+          await enviarBoletaInicial(pendiente.orderId, auth)
+        } catch {
+          console.warn(`[sunat-pendientes] No se pudo iniciar el envío de ${pendiente.serie}-${pendiente.numero}.`)
+        }
+        return
+      }
       const nombre = pendiente.resumen?.nombre || nombreSunat(pendiente)
       let cdr: ReturnType<typeof parseCdr> | null = null
       let mensaje = ''
@@ -541,11 +623,7 @@ export async function procesarPendientesSunat() {
         // Una constancia ya recibida se recupera incluso durante la espera de otro intento.
         if (!cdr && pendiente.nextRetryAt && Date.parse(pendiente.nextRetryAt) > Date.now()) return
         if (!cdr && pendiente.resumen) {
-          ticket ||= await fs.readFile(comprobanteFilePath(pendiente.orderId, 'ticket'), 'utf8')
-            .catch((error: NodeJS.ErrnoException) => {
-              if (error.code !== 'ENOENT') throw error
-              return ''
-            })
+          ticket ||= await ticketResumenGuardado(pendiente.orderId)
           // Un envío sin ticket requiere su flujo de recuperación; el seguimiento solo consulta.
           if (!ticket) return
           cdr = await getBoletaSummaryStatus('produccion', auth, nombre, ticket)
@@ -614,25 +692,64 @@ export function iniciarSeguimientoSunat() {
   consultar()
 }
 
-async function emitirDirecto(input: EmitInput, config: SunatConfig, tipo: EmitInput['tipo'], lines: EmitLine[], cliente: EmitInput['cliente']) {
+async function datosBoletaDeCaja(orderId: string, order: { DocTipo?: string; DocNumero?: string; DocNombre?: string; DocAddress?: string; Total: number }, tx: sql.Transaction) {
+  if (order.DocTipo !== 'boleta_simple' && order.DocTipo !== 'boleta_dni') {
+    throw new Error('El pedido no tiene una boleta seleccionada en caja.')
+  }
+  const identificado = order.DocTipo === 'boleta_dni'
+  const cliente = {
+    tipDoc: identificado ? '1' : '0',
+    num: identificado ? String(order.DocNumero || '').replace(/\D/g, '') : '',
+    nombre: identificado ? String(order.DocNombre || '') : '',
+    direccion: identificado ? order.DocAddress : undefined,
+  }
+  if (identificado && (!/^[0-9]{8}$/.test(cliente.num) || cliente.num === '00000000')) {
+    throw new Error('La boleta con DNI requiere un documento válido.')
+  }
+  const { recordset } = await new sql.Request(tx)
+    .input('id', sql.UniqueIdentifier, orderId)
+    .query<{ Name: string; Qty: number; Price: number }>(`
+      SELECT Name, Qty, Price FROM dbo.OrderItems WHERE OrderId = @id ORDER BY SortOrder, Id
+    `)
+  const items = recordset
+    .map((item) => ({ descripcion: item.Name.trim(), cantidad: num(item.Qty), precio: num(item.Price) }))
+    .filter((item) => item.cantidad > 0 && item.precio > 0)
+  if (!items.length || items.some((item) => !item.descripcion)) throw new Error('Revisa el detalle de la boleta.')
+
+  // Distribuye el total pagado, incluidos descuentos y redondeos, en centavos acumulados.
+  const bruto = items.reduce((suma, item) => suma + item.cantidad * item.precio, 0)
+  const totalCentavos = Math.round(Number(order.Total) * 100)
+  let acumulado = 0
+  let asignado = 0
+  const lines = items.map((item) => {
+    acumulado += item.cantidad * item.precio
+    const hasta = Math.round(acumulado / bruto * totalCentavos)
+    const importe = (hasta - asignado) / 100
+    asignado = hasta
+    return { ...item, precio: Number((importe / item.cantidad).toFixed(10)) }
+  }).filter((item) => item.precio > 0)
+  return { tipo: 'boleta' as const, cliente, lines }
+}
+
+async function reservarComprobante(orderId: string, config: SunatConfig, datos?: Pick<EmitInput, 'tipo' | 'cliente' | 'lines'>) {
   if (!datosEmisorCompletos(config)) {
     throw Object.assign(new Error('Completa los datos de emisión en Configurar SUNAT.'), { status: 400 })
   }
-  const orderId = input.orderId.toLowerCase()
   const ruc = String(config.ruc || '').trim()
-  credencialesSunat(config, ruc)
 
-  const { invoice, nuevo } = await withInvoiceLock(async (tx) => {
+  return withInvoiceLock(async (tx) => {
     const invoices = await readInvoices(tx)
     const existing = invoices.find((item) => item?.orderId?.toLowerCase() === orderId)
     if (existing) return { invoice: existing, nuevo: false }
     const result = await new sql.Request(tx).input('id', sql.UniqueIdentifier, orderId).query(`
-      SELECT Paid, Status, Total, DocTipo FROM dbo.Orders WITH (UPDLOCK, ROWLOCK) WHERE Id = @id
+      SELECT Paid, Status, Total, DocTipo, DocNumero, DocNombre, DocAddress
+      FROM dbo.Orders WITH (UPDLOCK, ROWLOCK) WHERE Id = @id
     `)
     const order = result.recordset[0]
     if (!order?.Paid || /^(cancelad[oa]|eliminad[oa]|anulad[oa])$/i.test(order.Status) || !(Number(order.Total) > 0)) {
       throw Object.assign(new Error('El comprobante requiere un pedido pagado y vigente.'), { status: 400 })
     }
+    const { tipo, cliente, lines } = datos ?? await datosBoletaDeCaja(orderId, order, tx)
     if (String(order.DocTipo || '').toLowerCase() === 'factura' && tipo !== 'factura') {
       throw Object.assign(new Error('El pedido requiere una factura.'), { status: 400 })
     }
@@ -653,15 +770,23 @@ async function emitirDirecto(input: EmitInput, config: SunatConfig, tipo: EmitIn
       orderId, tipo, serie: data.serie, numero, fechaEmision: now.toISOString(), status: 'pendiente', hashCdr: digest,
       lastSentAt: now.toISOString(),
       clienteDoc: data.cliente.documento, clienteNombre: data.cliente.nombre, canal: 'sunat', rucEmisor: ruc, resumen,
-      mensaje: 'En espera de la constancia de SUNAT.',
+      ...(!datos && { envioInicialPendiente: true as const }),
+      mensaje: datos ? 'En espera de la constancia de SUNAT.' : 'Boleta generada. En espera de envío a SUNAT.',
     }
     await writeConfig('invoices', [reserved, ...invoices], tx)
     return { invoice: reserved, nuevo: true }
   })
-  if (invoice.canal === 'sunat' && invoice.status === 'pendiente' && invoice.rucEmisor !== ruc) {
-    throw Object.assign(new Error('El envío pendiente corresponde a otro RUC. Revisa la configuración antes de reenviar.'), { status: 409 })
+}
+
+export async function emitirBoletaAlCobrar(id: string) {
+  const config = (await readConfig<SunatConfig>('sunat')) ?? {}
+  const { invoice, nuevo } = await reservarComprobante(id.toLowerCase(), config)
+  const comprobante = comprobanteParaImpresion(invoice)
+  if (comprobante?.tipo !== 'boleta' || comprobante.rucEmisor !== String(config.ruc || '').trim()) {
+    throw new Error('El pedido ya tiene un comprobante registrado en Facturación.')
   }
-  return invoice.canal === 'sunat' && invoice.status === 'pendiente' ? recibirSunat(orderId, config, nuevo) : invoice
+  if (nuevo) emitEvent('invoice:updated', invoice, ['ops', 'caja'])
+  return comprobante
 }
 
 let claveBeta: { privateKey: string; publicCert: string } | undefined
@@ -748,5 +873,11 @@ export async function emitirComprobante(input: EmitInput) {
     throw Object.assign(new Error('La factura exige RUC y razón social'), { status: 400 })
   }
   const config = (await readConfig<SunatConfig>('sunat')) || {}
-  return { invoice: await emitirDirecto(input, config, tipo, lines, cliente) }
+  const id = orderId.toLowerCase()
+  const { invoice, nuevo } = await reservarComprobante(id, config, { tipo, lines, cliente })
+  if (invoice.canal !== 'sunat' || invoice.status !== 'pendiente') return { invoice }
+  if (invoice.rucEmisor !== String(config.ruc || '').trim()) {
+    throw Object.assign(new Error('El envío pendiente corresponde a otro RUC. Revisa la configuración antes de reenviar.'), { status: 409 })
+  }
+  return { invoice: await recibirSunat(id, config, nuevo && tipo === 'factura') }
 }

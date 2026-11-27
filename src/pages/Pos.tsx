@@ -10,7 +10,7 @@ import { formatDeliveryQuote, quoteDeliveryFromAddress } from '../lib/deliveryQu
 import { pickDeliveryBranchId } from '../lib/deliveryRanges'
 import { filterKitchenItems } from '../lib/kitchen'
 import { orderBelongsToStaff } from '../lib/realtime'
-import type { Customer, OrderItem, OrderType, PaymentMethod } from '../types'
+import type { Customer, Order, OrderItem, OrderType, PaymentMethod } from '../types'
 import { canCharge } from '../types'
 import { Empty, Field, Modal, PageTitle, inputClass } from '../components/ui'
 
@@ -322,18 +322,21 @@ export function Pos() {
         source: 'pos',
         codPaymentMethod: type === 'delivery' ? (payMethod === 'yape' ? 'yape' : 'efectivo') : undefined,
       })
-      let paymentConfirmed = false
+      let paidOrder: Order | undefined
       let paymentError = ''
       if (paid && mayCharge) {
         try {
-          paymentConfirmed = await payOrder(order.id, {
+          const billing = { docTipo: 'boleta_simple' as const, docNumero: '00000000', docNombre: 'CLIENTES VARIOS' }
+          const { paid: paymentConfirmed, comprobante } = await payOrder(order.id, {
             payments: [{
               method: payMethod,
               amount: order.total,
               cashTendered: payMethod === 'efectivo' ? order.total : undefined,
             }],
+            billing,
             keepKitchen: true,
           })
+          if (paymentConfirmed) paidOrder = { ...order, ...billing, paid: true, paymentMethod: payMethod, comprobante }
         } catch (error) {
           paymentError = (error as Error).message
         }
@@ -342,8 +345,9 @@ export function Pos() {
       if (kitchenItems.length > 0) {
         printTicket({ ...order, items: kitchenItems }, state.settings, 'cocina', state.users)
       }
-      if (paymentConfirmed) {
-        setTimeout(() => printTicket({ ...order, paid: true, paymentMethod: payMethod }, state.settings, 'caja', state.users), 400)
+      if (paidOrder) {
+        const receipt = paidOrder
+        setTimeout(() => printTicket(receipt, state.settings, 'caja', state.users), 400)
       } else if (paid && mayCharge) {
         alert(`El pedido ${padOrder(order.number)} quedó registrado. Revisa su saldo en Caja antes de volver a cobrar.${paymentError ? ` ${paymentError}` : ''}`)
         navigate('/comandas')

@@ -171,9 +171,21 @@ export interface Order {
   docEmail?: string
   docPhone?: string
   docAddress?: string
+  comprobante?: ComprobanteImpresion
 }
 
 export type FiscalDocTipo = 'ninguno' | 'boleta_simple' | 'boleta_dni' | 'factura'
+
+export type ComprobanteImpresion = {
+  tipo: 'boleta' | 'factura'
+  serie: string
+  numero: number
+  status: 'pendiente' | 'aceptada' | 'rechazada'
+  fechaEmision: string
+  rucEmisor?: string
+  clienteDoc?: string
+  clienteNombre?: string
+}
 
 export type PaySplit = {
   method: PaymentMethod

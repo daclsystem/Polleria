@@ -38,7 +38,7 @@ export interface TicketDoc {
 
 // ─── Construcción ───────────────────────────────────────────────────────────
 
-function header(settings: Settings, full: boolean): TicketLine[] {
+function header(settings: Settings, full: boolean, ruc = settings.ruc): TicketLine[] {
   const lines: TicketLine[] = [
     { t: 'text', text: settings.name, align: 'center', bold: true, size: 'double' },
   ]
@@ -48,9 +48,9 @@ function header(settings: Settings, full: boolean): TicketLine[] {
   }
   lines.push({ t: 'text', text: settings.address, align: 'center' })
   if (full) {
-    const rucDigits = (settings.ruc || '').replace(/\D/g, '')
+    const rucDigits = (ruc || '').replace(/\D/g, '')
     if (rucDigits.length >= 8) {
-      lines.push({ t: 'text', text: `RUC ${settings.ruc}`, align: 'center' })
+      lines.push({ t: 'text', text: `RUC ${ruc}`, align: 'center' })
     }
   }
   const phone = ticketPublicPhone()
@@ -62,13 +62,13 @@ function header(settings: Settings, full: boolean): TicketLine[] {
 
 function orderMeta(
   order: Order,
-  opts: { phone?: boolean; address?: boolean; boldNumber?: boolean } = {},
+  opts: { phone?: boolean; address?: boolean; boldNumber?: boolean; caja?: boolean; fechaEmision?: string } = {},
 ): TicketLine[] {
-  const printedAt = new Date().toISOString()
+  const printedAt = opts.fechaEmision || new Date().toISOString()
   const lines: TicketLine[] = [
     {
       t: 'text',
-      text: `${padOrder(order.number)} · ${formatDate(printedAt)}`,
+      text: `${opts.caja ? 'Pedido ' : ''}${padOrder(order.number)} · ${formatDate(printedAt)}`,
       align: 'center',
       bold: opts.boldNumber,
     },
@@ -115,8 +115,7 @@ function orderMeta(
   return lines
 }
 
-function totals(order: Order, settings: Settings): TicketLine[] {
-  const factura = order.docTipo === 'factura'
+function totals(order: Order, settings: Settings, factura = order.docTipo === 'factura'): TicketLine[] {
   const lines: TicketLine[] = [{ t: 'sep' }]
   if (factura) {
     lines.push({ t: 'row', left: 'Op. gravadas', right: solesPrint(order.subtotal) })
@@ -135,37 +134,38 @@ function totals(order: Order, settings: Settings): TicketLine[] {
   return lines
 }
 
-function billingBlock(order: Order): TicketLine[] {
-  if (order.docTipo !== 'factura' && order.docTipo !== 'boleta_dni' && order.docTipo !== 'boleta_simple') {
-    return []
-  }
-  const lines: TicketLine[] = [{ t: 'sep' }]
-  if (order.docTipo === 'factura') {
-    lines.push({ t: 'text', text: 'FACTURA', align: 'center', bold: true })
-    if (order.docNumero) lines.push({ t: 'text', text: `RUC ${order.docNumero}` })
-    if (order.docNombre) lines.push({ t: 'text', text: order.docNombre, bold: true })
-  } else if (order.docTipo === 'boleta_dni') {
-    lines.push({ t: 'text', text: 'BOLETA', align: 'center', bold: true })
-    if (order.docNumero) lines.push({ t: 'text', text: `DNI ${order.docNumero}` })
-    if (order.docNombre) lines.push({ t: 'text', text: order.docNombre })
-  } else {
-    lines.push({ t: 'text', text: 'BOLETA', align: 'center', bold: true })
-    if (order.docNombre) lines.push({ t: 'text', text: order.docNombre })
-  }
-  if (order.docAddress) lines.push({ t: 'text', text: order.docAddress })
-  return lines
+export function comprobanteTicket(order: Order) {
+  const comprobante = order.paid ? order.comprobante : undefined
+  const boletaSolicitada = order.docTipo === 'boleta_dni' || order.docTipo === 'boleta_simple'
+  const factura = comprobante ? comprobante.tipo === 'factura' : order.docTipo === 'factura'
+  const titulo = comprobante
+    ? (factura ? 'FACTURA ELECTRÓNICA' : 'BOLETA DE VENTA ELECTRÓNICA')
+    : (factura ? 'FACTURA' : 'TICKET DE VENTA')
+  const referencia = comprobante ? `${comprobante.serie}-${String(comprobante.numero).padStart(8, '0')}` : ''
+  const estado = comprobante?.status === 'rechazada' ? 'Rechazada por SUNAT'
+    : !comprobante && order.paid && boletaSolicitada ? 'Boleta pendiente de emisión' : ''
+  const numero = comprobante ? comprobante.clienteDoc
+    : factura || order.docTipo === 'boleta_dni' ? order.docNumero : undefined
+  const documento = numero && numero !== '-' ? `${factura || numero.length === 11 ? 'RUC' : 'DNI'} ${numero}` : ''
+  const nombre = comprobante ? comprobante.clienteNombre : factura || boletaSolicitada ? order.docNombre : undefined
+  const direccion = factura || boletaSolicitada ? order.docAddress : undefined
+  return { titulo, referencia, estado, documento, nombre, direccion, factura, comprobante }
 }
 
 function buildCaja(order: Order, settings: Settings, cols: number): TicketDoc {
-  const heading =
-    order.docTipo === 'factura' ? 'FACTURA' : order.docTipo === 'ninguno' || !order.docTipo ? 'TICKET DE VENTA' : 'BOLETA'
+  const fiscal = comprobanteTicket(order)
+  const datosCliente = [fiscal.documento, fiscal.nombre, fiscal.direccion].filter((dato): dato is string => Boolean(dato))
   const lines: TicketLine[] = [
-    ...header(settings, true),
-    { t: 'text', text: heading, align: 'center', bold: true },
-    ...orderMeta(order, { phone: true, address: true }),
-    ...billingBlock(order),
-    { t: 'sep' },
+    ...header(settings, true, fiscal.comprobante?.rucEmisor),
+    { t: 'text', text: fiscal.titulo, align: 'center', bold: true },
   ]
+  if (fiscal.referencia) lines.push({ t: 'text', text: fiscal.referencia, align: 'center', bold: true })
+  if (fiscal.estado) lines.push({ t: 'text', text: fiscal.estado, align: 'center' })
+  lines.push(...orderMeta(order, { phone: true, address: true, caja: true, fechaEmision: fiscal.comprobante?.fechaEmision }), { t: 'sep' })
+  if (datosCliente.length) {
+    for (const dato of datosCliente) lines.push({ t: 'text', text: dato })
+    lines.push({ t: 'sep' })
+  }
 
   for (const item of order.items) {
     lines.push({ t: 'row', left: `${item.qty} ${item.name}`, right: solesPrint(item.qty * item.price) })
@@ -173,7 +173,7 @@ function buildCaja(order: Order, settings: Settings, cols: number): TicketDoc {
   }
   if (order.notes) lines.push({ t: 'text', text: `Nota: ${order.notes}` })
 
-  lines.push(...totals(order, settings))
+  lines.push(...totals(order, settings, fiscal.factura))
   lines.push({ t: 'feed', n: 1 })
   lines.push({
     t: 'text',

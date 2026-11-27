@@ -725,7 +725,7 @@ export function Comandas() {
                     onConfirm={async (payload) => {
                       setPaying(true)
                       try {
-                        const paid = await payOrder(current.id, payload)
+                        const { paid, comprobante } = await payOrder(current.id, payload)
                         if (!paid) throw new Error('El abono quedó registrado. Revisa el saldo actualizado.')
                         if (current.status !== 'entregado' && (current.type === 'salon' || current.type === 'llevar' || current.tableNumber)) {
                           updateOrderStatus(current.id, 'entregado')
@@ -734,12 +734,8 @@ export function Comandas() {
                           ...reconcileOrderMoney(current, state.settings.igvRate),
                           paid: true,
                           paymentMethod: payload.payments[0]?.method ?? 'efectivo',
-                          docTipo: payload.billing.docTipo,
-                          docNumero: payload.billing.docNumero,
-                          docNombre: payload.billing.docNombre,
-                          docEmail: payload.billing.docEmail,
-                          docPhone: payload.billing.docPhone,
-                          docAddress: payload.billing.docAddress,
+                          ...payload.billing,
+                          comprobante,
                         }
                         printTicket(paidOrder, state.settings, 'caja', state.users)
                       } finally {

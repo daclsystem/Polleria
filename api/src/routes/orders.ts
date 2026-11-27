@@ -3,6 +3,7 @@ import { v4 as uuid } from 'uuid'
 import { getPool, sql } from '../db.js'
 import { authRequired, requireRoles } from '../auth.js'
 import { emitEvent, roomsForOrderStatus } from '../realtime.js'
+import { emitirBoletaAlCobrar } from '../lib/emision.js'
 import { notifyOrderCreatedServer, notifyOrderPaidServer, notifyOrderStatusServer } from '../lib/whatsappNotify.js'
 import {
   deductStockForKitchenItems,
@@ -694,6 +695,13 @@ ordersRouter.patch('/:id/status', authRequired, async (req, res) => {
       await tx.rollback()
       return res.json({ order: existing })
     }
+    // Una ronda atrasada no reabre un pedido cerrado. Los adicionales legítimos
+    // reactivan primero la cabecera mediante POST /:id/items.
+    const currentStatus = String(existing.Status || '').trim().toLowerCase()
+    if (['entregado', 'cancelado', 'eliminado'].includes(currentStatus) && ['nuevo', 'en_cocina', 'listo'].includes(status)) {
+      await tx.rollback()
+      return res.status(409).json({ error: `El pedido ya está ${currentStatus} y no puede volver a un estado activo. Actualiza la pantalla.` })
+    }
     if (status === 'eliminado' && (existing.Paid || existing.payments.length > 0)) {
       await tx.rollback()
       return res.status(409).json({ error: 'El pedido tiene pagos registrados y no se puede eliminar.' })
@@ -1016,6 +1024,8 @@ ordersRouter.post('/:id/payments', authRequired, requireRoles('admin', 'cajero')
   let paid: boolean
   let totalPaid: number
   let closedAsDelivered = false
+  let emitirBoleta = false
+  let billingGuardado = true
   try {
     const existing = await loadOrder(orderId, tx)
     if (!existing) {
@@ -1125,8 +1135,8 @@ ordersRouter.post('/:id/payments', authRequired, requireRoles('admin', 'cajero')
           .input('docNumero', sql.NVarChar, billing.docNumero ? String(billing.docNumero).slice(0, 20) : null)
           .input('docNombre', sql.NVarChar, billing.docNombre ? String(billing.docNombre).slice(0, 160) : null)
           .input('docEmail', sql.NVarChar, billing.docEmail ? String(billing.docEmail).slice(0, 120) : null)
-          .input('docPhone', sql.NVarChar, billing.docPhone ? String(billing.docPhone).slice(0, 40) : null)
-          .input('docAddress', sql.NVarChar, billing.docAddress ? String(billing.docAddress).slice(0, 255) : null)
+          .input('docPhone', sql.NVarChar, billing.docPhone ? String(billing.docPhone).slice(0, 30) : null)
+          .input('docAddress', sql.NVarChar, billing.docAddress ? String(billing.docAddress).slice(0, 200) : null)
           .query(`
             IF COL_LENGTH('dbo.Orders', 'DocTipo') IS NOT NULL
             UPDATE dbo.Orders SET
@@ -1135,10 +1145,12 @@ ordersRouter.post('/:id/payments', authRequired, requireRoles('admin', 'cajero')
             WHERE Id=@id
           `)
       } catch {
-        /* columnas de documento aún no existen */
+        billingGuardado = false
       }
     }
 
+    const docTipo = billing?.docTipo || existing.DocTipo
+    emitirBoleta = paid && (docTipo === 'boleta_simple' || docTipo === 'boleta_dni')
     await tx.commit()
   } catch (e) {
     await tx.rollback()
@@ -1149,7 +1161,18 @@ ordersRouter.post('/:id/payments', authRequired, requireRoles('admin', 'cajero')
     console.warn('[orders] reload after payment', (e as Error).message)
     return null
   })
-  res.json({ order: paidOrder, paid, paidAmount: totalPaid })
+  let comprobante
+  let avisoComprobante
+  if (emitirBoleta) {
+    try {
+      if (!billingGuardado) throw new Error('No se guardaron los datos del comprobante.')
+      comprobante = await emitirBoletaAlCobrar(orderId)
+    } catch (e) {
+      console.warn('[orders] boleta after payment', (e as Error).message)
+      avisoComprobante = 'El pago quedó registrado. Revisa la emisión de la boleta en Facturación.'
+    }
+  }
+  res.json({ order: paidOrder, paid, paidAmount: totalPaid, comprobante, avisoComprobante })
   emitEvent(paid ? 'order:paid' : 'order:updated', paidOrder, ['ops', 'caja', 'mesas'])
   if (closedAsDelivered && paidOrder) {
     emitEvent('order:status', paidOrder, roomsForOrderStatus('entregado'))

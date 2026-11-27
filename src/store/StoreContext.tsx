@@ -57,6 +57,7 @@ import { filterKitchenItems } from '../lib/kitchen'
 import { createSeed } from '../data/seed'
 import { APP_NAME } from '../lib/paths'
 import { rememberWebSite } from '../lib/webSite'
+import { canCharge } from '../types'
 import type {
   AppState,
   Branch,
@@ -237,7 +238,7 @@ interface StoreApi {
       /** Cobrar y enviar: el pedido acaba de crearse y cocina todavía debe verlo. */
       keepKitchen?: boolean
     },
-  ) => Promise<boolean>
+  ) => Promise<{ paid: boolean; comprobante?: Order['comprobante'] }>
   cancelOrder: (id: string) => void
   updateOrder: (id: string, patch: Partial<Order>) => void
   saveProduct: (product: Product) => void
@@ -401,7 +402,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       }
       window.addEventListener('polleria-view-role', onViewRole)
       const offEvent = onRealtimeEvent((event: RealtimeEvent, payload) => {
-        if (event === 'invoice:updated') return
+        if (event === 'invoice:updated') {
+          const role = readStaffRole()
+          if (role && canCharge(role)) scheduleReload()
+          return
+        }
         if (event === 'inventory:updated') {
           const data = payload as {
             inventory?: InventoryItem[]
@@ -840,35 +845,32 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     async (id, { payments, billing, keepKitchen }) => {
       requireApi()
       try {
-        const { paid, paidAmount } = await apiPayOrder(id, payments, billing, { keepKitchen })
+        const { paid, paidAmount, comprobante, avisoComprobante } = await apiPayOrder(id, payments, billing, { keepKitchen })
+        if (avisoComprobante) pushNotice(avisoComprobante, 'warn')
         await reloadFromApi()
         patchLocal((prev) => ({
           ...prev,
           orders: prev.orders.map((o) => {
-            if (o.id !== id) return o
+            if (o.id.toLowerCase() !== id.toLowerCase()) return o
             return {
               ...o,
               paid: o.paid || paid,
               paidAmount: paidAmount == null ? o.paidAmount : Math.max(o.paidAmount ?? 0, paidAmount),
               ...(paid ? {
                 paymentMethod: (payments[0]?.method || 'efectivo') as PaymentMethod,
-                docTipo: billing?.docTipo as Order['docTipo'],
-                docNumero: billing?.docNumero,
-                docNombre: billing?.docNombre,
-                docEmail: billing?.docEmail,
-                docPhone: billing?.docPhone,
-                docAddress: billing?.docAddress,
+                ...billing,
+                comprobante: o.comprobante ?? comprobante,
               } : {}),
             }
           }),
         }))
-        return paid
+        return { paid, comprobante }
       } catch (e) {
         await reloadFromApi()
         throw e
       }
     },
-    [patchLocal, reloadFromApi],
+    [patchLocal, pushNotice, reloadFromApi],
   )
 
   const cancelOrder = useCallback(
