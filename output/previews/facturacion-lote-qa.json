@@ -1,0 +1,27 @@
+{
+  "ok": true,
+  "checks": {
+    "mixedCaseInvoiceHidden": true,
+    "batchOneClick": true,
+    "posts": 3,
+    "maxConcurrentEmissions": 1,
+    "continuedAfterError": true,
+    "noDialogs": true,
+    "missingRucNoPost": true,
+    "realtimeUpdate": true,
+    "overflowDesktop": {
+      "viewport": 1536,
+      "width": 1536
+    },
+    "overflowMobile": {
+      "viewport": 390,
+      "width": 390
+    },
+    "pageErrors": [],
+    "blockedRemoteRequests": 2
+  },
+  "screenshots": [
+    "/Volumes/Datos/Proyectos IndevSoft/Polleria/output/previews/facturacion-lote-desktop.png",
+    "/Volumes/Datos/Proyectos IndevSoft/Polleria/output/previews/facturacion-lote-mobile.png"
+  ]
+}

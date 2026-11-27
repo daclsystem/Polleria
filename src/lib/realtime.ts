@@ -13,6 +13,7 @@ export type RealtimeEvent =
   | 'table:updated'
   | 'reservation:updated'
   | 'inventory:updated'
+  | 'invoice:updated'
 
 export type RealtimeRoom = 'ops' | 'cocina' | 'caja' | 'mesas' | 'delivery'
 
@@ -188,6 +189,7 @@ export function connectRealtime(rooms: string[] = ['ops']) {
     'table:updated',
     'reservation:updated',
     'inventory:updated',
+    'invoice:updated',
   ]
   for (const ev of events) {
     socket.on(ev, (payload: unknown) => emitLocal(ev, payload))

@@ -4,7 +4,7 @@ import http from 'http'
 import dotenv from 'dotenv'
 import { getPool } from './db.js'
 import { initRealtime } from './realtime.js'
-import { iniciarCorreoComprobantes } from './lib/emision.js'
+import { iniciarCorreoComprobantes, iniciarSeguimientoSunat } from './lib/emision.js'
 import { authRouter } from './auth.js'
 import { recoverRouter } from './routes/recover.js'
 import { catalogRouter } from './routes/catalog.js'
@@ -94,4 +94,5 @@ server.listen(PORT, async () => {
     console.error('[polleria-api] No se pudo conectar a SQL Server:', (e as Error).message)
     console.error('Revisa api/.env (DB_SERVER, DB_USER, DB_PASSWORD, DB_NAME)')
   }
+  iniciarSeguimientoSunat()
 })

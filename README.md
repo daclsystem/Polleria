@@ -22,6 +22,8 @@ VITE_API_URL=https://apipchifapollerialopez.indevsoft.com
 npm run build:all
 ```
 
+Este comando elimina primero `dist/` completo y vuelve a generar las cuatro aplicaciones con la misma versión, sin archivos de compilaciones anteriores.
+
 O por app:
 
 ```bash

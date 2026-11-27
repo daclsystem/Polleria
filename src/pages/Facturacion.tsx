@@ -1,13 +1,16 @@
 import { useCallback, useEffect, useId, useRef, useState } from 'react'
-import { AlertCircle, CheckCircle2, Eye, EyeOff, FileText, Plus, RefreshCw, Send, Settings2, Trash2 } from 'lucide-react'
+import { AlertCircle, CheckCircle2, Download, Eye, EyeOff, Pencil, Plus, RefreshCw, Send, Settings2, Trash2 } from 'lucide-react'
 import { useStore } from '../store/StoreContext'
 import { useAuth } from '../auth/AuthContext'
 import { formatDateTime, padOrder, round2, soles } from '../lib/format'
-import { isVoidOrder, type Order } from '../types'
+import type { Order } from '../types'
+import { isRealtimeConnected, onRealtimeEvent, onRealtimeStatus } from '../lib/realtime'
+import { combinarComprobante, ejecutarLoteSecuencial, normalizarPedidoId, pedidosSinComprobante } from '../lib/facturacionBatch'
 import { Field, Modal, PageTitle, inputClass } from '../components/ui'
 import {
   apiComprobanteFiles,
   apiDownloadComprobante,
+  apiDownloadComprobantes,
   apiEmitComprobante,
   apiEmisionEstado,
   apiGetClaveSol,
@@ -69,8 +72,12 @@ function configuracionGuardada(value: unknown): SunatConfig {
 }
 
 type DetalleLine = { descripcion: string; cantidad: number; precio: number }
+
 type TipoDocumentoCliente = 'ninguno' | 'dni' | 'ruc'
 type DatosCliente = { tipo: TipoDocumentoCliente; numero: string; nombre: string }
+type BorradorComprobante = { tipo: 'boleta' | 'factura'; cliente: DatosCliente; lines: DetalleLine[] }
+type EstadoFila = { estado: 'en_cola' | 'emitiendo' | 'error'; mensaje?: string }
+type ProgresoLote = { total: number; completados: number; emitidos: number; errores: number }
 const DOCUMENTOS_CLIENTE: ReadonlyArray<{ tipo: TipoDocumentoCliente; etiqueta: string }> = [
   { tipo: 'ninguno', etiqueta: 'Sin documento' }, { tipo: 'dni', etiqueta: 'DNI' }, { tipo: 'ruc', etiqueta: 'RUC' },
 ]
@@ -85,7 +92,7 @@ function clienteInicial(order: Order, tipo: 'boleta' | 'factura'): DatosCliente 
   if (numero.length === 8 && numero !== CLIENTE_GENERICO.num) {
     return { tipo: 'dni', numero, nombre: nombre || order.customerName || '' }
   }
-  if (order.total > 700) return { tipo: 'dni', numero: '', nombre: order.customerName || '' }
+  if (order.total > 700 || order.docTipo === 'boleta_dni') return { tipo: 'dni', numero: '', nombre: nombre || order.customerName || '' }
   return { tipo: 'ninguno', numero: '', nombre: '' }
 }
 
@@ -93,7 +100,7 @@ function errorDatosCliente(cliente: DatosCliente, tipo: 'boleta' | 'factura', to
   if (tipo === 'factura' && cliente.tipo !== 'ruc') return 'La factura requiere RUC y razón social.'
   if (cliente.tipo === 'ninguno') return total > 700 ? 'Selecciona DNI o RUC para este pedido.' : null
   const esRuc = cliente.tipo === 'ruc'
-  if (cliente.numero.length !== (esRuc ? 11 : 8)) return esRuc ? 'Ingresa un RUC de 11 dígitos.' : 'Ingresa un DNI de 8 dígitos.'
+  if (!(esRuc ? /^\d{11}$/ : /^\d{8}$/).test(cliente.numero) || /^0+$/.test(cliente.numero)) return esRuc ? 'Ingresa un RUC de 11 dígitos.' : 'Ingresa un DNI de 8 dígitos.'
   if (cliente.nombre.trim().length < 2) return esRuc ? 'Ingresa la razón social.' : 'Ingresa el nombre del cliente.'
   return null
 }
@@ -121,7 +128,26 @@ function detalleDe(order: Order): DetalleLine[] {
 }
 
 function totalDetalle(lines: DetalleLine[]) {
-  return round2(lines.reduce((sum, line) => sum + line.cantidad * line.precio, 0))
+  return round2(lines.reduce((sum, line) => sum + round2(line.cantidad * line.precio), 0))
+}
+
+function borradorInicial(order: Order): BorradorComprobante {
+  const tipo = order.docTipo === 'factura' ? 'factura' : 'boleta'
+  return { tipo, cliente: clienteInicial(order, tipo), lines: detalleDe(order) }
+}
+
+function errorBorrador(order: Order, borrador: BorradorComprobante) {
+  if (order.docTipo === 'factura' && borrador.tipo !== 'factura') return 'Este pedido requiere una factura.'
+  const clienteError = errorDatosCliente(borrador.cliente, borrador.tipo, order.total)
+  if (clienteError) return clienteError
+  if (!borrador.lines.length) return 'Agrega al menos una línea al detalle.'
+  if (borrador.lines.some((line) => !line.descripcion.trim() || !Number.isFinite(line.cantidad) ||
+      line.cantidad <= 0 || line.cantidad !== Number(line.cantidad.toFixed(3)) ||
+      !Number.isFinite(line.precio) || line.precio <= 0)) {
+    return 'Cada línea necesita descripción, cantidad positiva de hasta tres decimales y precio positivo.'
+  }
+  if (totalDetalle(borrador.lines) !== round2(order.total)) return `El detalle debe sumar el importe pagado de ${soles(order.total)}.`
+  return null
 }
 
 /** El precio de venta ya incluye IGV: a 10 se le resta, no se le suma. */
@@ -175,8 +201,8 @@ function DocumentoCliente({ cliente, tipo, total, disabled, error, onChange }: {
   }
 
   return (
-    <fieldset disabled={disabled} aria-describedby={error ? `${id}-error` : undefined} className="min-w-0 space-y-3 rounded-xl border border-ink/12 px-3 pb-3">
-      <legend className="px-1 text-sm font-semibold">Cliente del comprobante</legend>
+    <fieldset disabled={disabled} aria-describedby={error ? `${id}-error` : undefined} className="min-w-0 space-y-3">
+      <legend className="mb-2 text-sm font-semibold">Cliente del comprobante</legend>
       {tipo === 'boleta' ? (
         <div className="flex flex-wrap gap-2" role="group" aria-label="Tipo de documento del cliente">
           {DOCUMENTOS_CLIENTE.filter((doc) => doc.tipo !== 'ninguno' || total <= 700).map((doc) => (
@@ -212,6 +238,76 @@ function DocumentoCliente({ cliente, tipo, total, disabled, error, onChange }: {
       ) : null}
       {error ? <p id={`${id}-error`} className="text-xs font-medium text-ink/75">{error}</p> : null}
       {aviso ? <p role="status" className="text-xs text-ink/75">{aviso}</p> : null}
+    </fieldset>
+  )
+}
+
+function EditorComprobante({ order, borrador, disabled, igvRate, onChange, onTipo, onClose }: {
+  order: Order
+  borrador: BorradorComprobante
+  disabled: boolean
+  igvRate: number
+  onChange: (cambios: Partial<BorradorComprobante>) => void
+  onTipo: (tipo: BorradorComprobante['tipo']) => void
+  onClose: () => void
+}) {
+  const { tipo, cliente, lines } = borrador
+  const dinero = separarIgv(totalDetalle(lines), igvRate)
+  const actualizarLinea = (index: number, cambios: Partial<DetalleLine>) => {
+    onChange({ lines: lines.map((line, i) => i === index ? { ...line, ...cambios } : line) })
+  }
+
+  return (
+    <fieldset disabled={disabled} className="min-w-0 space-y-5 border-t border-ink/12 bg-cream/55 px-3 py-4 sm:px-4">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex gap-2" role="group" aria-label={`Tipo de comprobante de ${padOrder(order.number)}`}>
+          {(['boleta', 'factura'] as const).map((opcion) => (
+            <button key={opcion} type="button" aria-pressed={tipo === opcion}
+              disabled={disabled || (opcion === 'boleta' && order.docTipo === 'factura')}
+              onClick={() => onTipo(opcion)}
+              className={`min-h-11 rounded-lg border px-3 text-sm font-semibold capitalize focus-visible:outline-2 focus-visible:outline-ember disabled:opacity-50 ${tipo === opcion ? 'border-ember/55 bg-ember/10 text-ember' : 'border-ink/12 hover:bg-ink/8'}`}>
+              {opcion}
+            </button>
+          ))}
+        </div>
+        <button type="button" onClick={onClose} className="min-h-11 rounded-lg px-3 text-xs font-semibold text-ink/75 hover:bg-ink/8 focus-visible:outline-2 focus-visible:outline-ember">Cerrar edición</button>
+      </div>
+      <DocumentoCliente key={tipo} cliente={cliente} tipo={tipo} total={order.total} disabled={disabled}
+        error={errorDatosCliente(cliente, tipo, order.total)} onChange={(datos) => onChange({ cliente: datos })} />
+      <div className="space-y-2">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h3 className="text-sm font-semibold">Detalle del comprobante</h3>
+          <button type="button" onClick={() => onChange({ lines: [...lines, { descripcion: '', cantidad: 1, precio: 0 }] })}
+            className="inline-flex min-h-11 items-center gap-1 rounded-lg px-2 text-xs font-semibold text-ember hover:bg-ember/10 focus-visible:outline-2 focus-visible:outline-ember">
+            <Plus size={14} aria-hidden /> Agregar línea
+          </button>
+        </div>
+        <div className="grid grid-cols-[minmax(0,1fr)_3.5rem_4.5rem_2.75rem] gap-2 text-xs font-medium text-ink/75 sm:grid-cols-[minmax(0,1fr)_5rem_6rem_2.75rem]">
+          <span>Descripción</span><span>Cant.</span><span>Precio</span><span className="sr-only">Acciones</span>
+        </div>
+        {lines.map((line, index) => (
+          <div key={index} className="grid grid-cols-[minmax(0,1fr)_3.5rem_4.5rem_2.75rem] gap-2 sm:grid-cols-[minmax(0,1fr)_5rem_6rem_2.75rem]">
+            <input className={`${inputClass} min-w-0`} value={line.descripcion} maxLength={500}
+              aria-label={`Descripción de la línea ${index + 1} del pedido ${padOrder(order.number)}`}
+              onChange={(event) => actualizarLinea(index, { descripcion: event.target.value })} />
+            <input className={`${inputClass} min-w-0 px-2 tabular-nums`} type="number" inputMode="decimal" min="0.001" step="0.001" value={line.cantidad}
+              aria-label={`Cantidad de la línea ${index + 1} del pedido ${padOrder(order.number)}`}
+              onChange={(event) => actualizarLinea(index, { cantidad: Number(event.target.value) || 0 })} />
+            <input className={`${inputClass} min-w-0 px-2 tabular-nums`} type="number" inputMode="decimal" min="0.01" step="any" value={line.precio}
+              aria-label={`Precio de la línea ${index + 1} del pedido ${padOrder(order.number)}`}
+              onChange={(event) => actualizarLinea(index, { precio: Number(event.target.value) || 0 })} />
+            <button type="button" aria-label={`Quitar línea ${index + 1} del pedido ${padOrder(order.number)}`}
+              onClick={() => onChange({ lines: lines.filter((_, i) => i !== index) })}
+              className="flex min-h-11 items-center justify-center rounded-lg text-ink/70 hover:bg-ink/8 focus-visible:outline-2 focus-visible:outline-ember">
+              <Trash2 size={16} aria-hidden />
+            </button>
+          </div>
+        ))}
+      </div>
+      <p className="text-sm text-ink/80 tabular-nums">Total <strong>{soles(dinero.total)}</strong> · base {soles(dinero.base)} · IGV {soles(dinero.igv)}</p>
+      {dinero.total !== round2(order.total) ? (
+        <p role="status" className="text-sm text-amber-800 dark:text-amber-300">El detalle debe sumar el importe pagado de {soles(order.total)}.</p>
+      ) : null}
     </fieldset>
   )
 }
@@ -326,15 +422,13 @@ export function Facturacion() {
   const [savedConfig, setSavedConfig] = useState<SunatConfig>(DEFAULT_SUNAT)
   const [invoices, setInvoices] = useState<Comprobante[]>([])
   const [configOpen, setConfigOpen] = useState(false)
-  const [emitOpen, setEmitOpen] = useState(false)
-  const [queue, setQueue] = useState<Order[]>([])
-  const [queueAt, setQueueAt] = useState(0)
   const [picked, setPicked] = useState<string[]>([])
-  const [emitType, setEmitType] = useState<'boleta' | 'factura'>('boleta')
-  const [datosClientes, setDatosClientes] = useState<Record<string, DatosCliente>>({})
-  const [lines, setLines] = useState<DetalleLine[]>([])
+  const [borradores, setBorradores] = useState<Record<string, BorradorComprobante>>({})
+  const [edicionesAbiertas, setEdicionesAbiertas] = useState<string[]>([])
+  const [estadosFila, setEstadosFila] = useState<Record<string, EstadoFila>>({})
+  const [progresoLote, setProgresoLote] = useState<ProgresoLote | null>(null)
   const [sending, setSending] = useState(false)
-  const [emitError, setEmitError] = useState<string | null>(null)
+  const loteEnCurso = useRef(false)
   const [lastResult, setLastResult] = useState<string | null>(null)
   const [configResult, setConfigResult] = useState<string | null>(null)
   const [savingConfig, setSavingConfig] = useState(false)
@@ -342,6 +436,8 @@ export function Facturacion() {
   const [betaDisponible, setBetaDisponible] = useState(false)
   const [pruebas, setPruebas] = useState<Partial<Record<PruebaSunat['tipo'], PruebaSunat>>>({})
   const [retrying, setRetrying] = useState<string | null>(null)
+  const [descargandoArchivos, setDescargandoArchivos] = useState<string | null>(null)
+  const descargaEnCurso = useRef(false)
   const [files, setFiles] = useState<Record<string, { pdf: boolean; xml: boolean; cdr: boolean }>>({})
   const [vista, setVista] = useState<'pendientes' | 'emitidos'>('pendientes')
   const [filtroTipo, setFiltroTipo] = useState<'todos' | 'boleta' | 'factura'>('todos')
@@ -356,8 +452,83 @@ export function Facturacion() {
   const [consultandoEmision, setConsultandoEmision] = useState(true)
   const [errorEmision, setErrorEmision] = useState(false)
   const consultaEmisionId = useRef(0)
+  const cambiosComprobantes = useRef(new Map<string, Comprobante>())
+  const refrescarComprobantes = useRef<() => void>(() => {})
   const compatible = typeof emision?.configurada === 'boolean' && emision.requiereLicencia === false
   const disponible = !consultandoEmision && compatible && emision?.disponible === true
+
+  const actualizarComprobante = useCallback((invoice: Comprobante) => {
+    const id = normalizarPedidoId(invoice.orderId)
+    const actual = cambiosComprobantes.current.get(id)
+    const [ultimo] = combinarComprobante(actual ? [actual] : [], invoice)
+    cambiosComprobantes.current.set(id, ultimo)
+    setInvoices((prev) => combinarComprobante(prev, ultimo))
+  }, [])
+
+  useEffect(() => {
+    let activo = true
+    let actualizando = false
+    let repetir = false
+
+    const refrescar = async () => {
+      if (!activo) return
+      if (actualizando) {
+        repetir = true
+        return
+      }
+      actualizando = true
+      cambiosComprobantes.current.clear()
+      try {
+        const [comprobantes, archivos] = await Promise.allSettled([apiGetInvoices(), apiComprobanteFiles()])
+        if (!activo) return
+        if (comprobantes.status === 'fulfilled') {
+          const recientes = [...cambiosComprobantes.current.values()]
+          setInvoices(recientes.reduce(combinarComprobante, comprobantes.value.invoices || []))
+        }
+        if (archivos.status === 'fulfilled') {
+          setFiles(Object.fromEntries(Object.entries(archivos.value.files || {}).map(([id, available]) => [normalizarPedidoId(id), available])))
+        }
+      } finally {
+        actualizando = false
+        if (repetir && activo) {
+          repetir = false
+          void refrescar()
+        }
+      }
+    }
+    refrescarComprobantes.current = () => { void refrescar() }
+    const offEvent = onRealtimeEvent((event, payload) => {
+      if (event !== 'invoice:updated' || !payload || typeof payload !== 'object') return
+      const invoice = payload as Comprobante
+      if (typeof invoice.orderId !== 'string' || typeof invoice.serie !== 'string' ||
+          !Number.isInteger(invoice.numero) || !['boleta', 'factura'].includes(invoice.tipo) ||
+          !['pendiente', 'enviada', 'aceptada', 'rechazada'].includes(invoice.status)) return
+      actualizarComprobante(invoice)
+      if (invoice.status === 'aceptada' || invoice.status === 'rechazada') {
+        setLastResult(`${invoice.serie}-${invoice.numero} · ${invoice.status}${invoice.mensaje ? ' · ' + invoice.mensaje : ''}`)
+      }
+      void refrescar()
+    })
+    const offStatus = onRealtimeStatus((conectado) => { if (conectado) void refrescar() })
+    if (!isRealtimeConnected()) void refrescar()
+    const alVolver = () => {
+      if (document.visibilityState === 'visible') void refrescar()
+    }
+    document.addEventListener('visibilitychange', alVolver)
+    window.addEventListener('focus', alVolver)
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === 'visible' && navigator.onLine) void refrescar()
+    }, 15_000)
+    return () => {
+      activo = false
+      refrescarComprobantes.current = () => {}
+      offEvent()
+      offStatus()
+      window.clearInterval(timer)
+      document.removeEventListener('visibilitychange', alVolver)
+      window.removeEventListener('focus', alVolver)
+    }
+  }, [actualizarComprobante])
 
   const consultarEmision = useCallback(async () => {
     const solicitud = ++consultaEmisionId.current
@@ -386,24 +557,16 @@ export function Facturacion() {
         setBetaDisponible(true)
       })
       .catch(() => undefined)
-    void apiGetInvoices()
-      .then((r) => setInvoices(r.invoices || []))
-      .catch(() => undefined)
-    void apiComprobanteFiles()
-      .then((r) => setFiles(r.files || {}))
-      .catch(() => undefined)
     void consultarEmision()
     return () => { consultaEmisionId.current += 1 }
   }, [admin, consultarEmision])
 
-  const paidOrders = state.orders.filter((o) => o.paid && !isVoidOrder(o.status))
-  const invoicedIds = new Set(invoices.map((i) => i.orderId))
-  const pendingOrders = paidOrders.filter((o) => !invoicedIds.has(o.id))
-  const selectedOrders = pendingOrders.filter((o) => picked.includes(o.id))
+  const pendingOrders = pedidosSinComprobante(state.orders, invoices)
+  const selectedOrders = pendingOrders.filter((o) => picked.includes(normalizarPedidoId(o.id)))
   const emitidos = [...invoices].reverse().filter((inv) => {
     if (filtroTipo !== 'todos' && inv.tipo !== filtroTipo) return false
     if (soloAceptadas && inv.status !== 'aceptada') return false
-    const order = state.orders.find((o) => o.id === inv.orderId)
+    const order = state.orders.find((o) => normalizarPedidoId(o.id) === normalizarPedidoId(inv.orderId))
     const texto = `${inv.tipo} ${inv.serie} ${inv.numero} ${inv.status} ${order?.number || ''} ${order?.customerName || ''} ${inv.clienteDoc || ''} ${inv.clienteNombre || ''}`.toLowerCase()
     return !buscarEmitido.trim() || texto.includes(buscarEmitido.trim().toLowerCase())
   })
@@ -490,77 +653,79 @@ export function Facturacion() {
     }
   }
 
-  const selectedOrder = queue[queueAt] ?? null
-  const claveCliente = `${selectedOrder?.id}:${emitType}`
-  const cliente = selectedOrder && (datosClientes[claveCliente] ?? clienteInicial(selectedOrder, emitType))
-  const clienteError = selectedOrder && cliente ? errorDatosCliente(cliente, emitType, selectedOrder.total) : null
   const igvRate = state.settings.igvRate > 0 ? state.settings.igvRate : 0.18
 
-  const cargarPedido = (order: Order) => {
-    const tipo = order.docTipo === 'factura' ? 'factura' : 'boleta'
-    setEmitError(null)
-    setEmitType(tipo)
-    setLines(detalleDe(order))
+  const borradorDe = (order: Order) => borradores[normalizarPedidoId(order.id)] ?? borradorInicial(order)
+
+  const editarPedido = (order: Order, cambios: Partial<BorradorComprobante>) => {
+    const id = normalizarPedidoId(order.id)
+    setBorradores((prev) => ({ ...prev, [id]: { ...(prev[id] ?? borradorInicial(order)), ...cambios } }))
+    setEstadosFila((prev) => {
+      const siguientes = { ...prev }
+      delete siguientes[id]
+      return siguientes
+    })
   }
 
-  const abrirCola = (orders: Order[]) => {
-    if (!orders.length) return
-    setDatosClientes({})
-    setQueue(orders)
-    setQueueAt(0)
-    cargarPedido(orders[0])
-    setEmitOpen(true)
+  const cambiarTipo = (order: Order, tipo: BorradorComprobante['tipo']) => {
+    if (order.docTipo === 'factura' && tipo !== 'factura') return
+    const borrador = borradorDe(order)
+    editarPedido(order, {
+      tipo,
+      cliente: tipo === 'factura' && borrador.cliente.tipo !== 'ruc'
+        ? clienteInicial(order, tipo) : borrador.cliente,
+    })
   }
 
-  const irA = (index: number) => {
-    const order = queue[index]
-    if (!order) return
-    setQueueAt(index)
-    cargarPedido(order)
-  }
-
-  const cerrarEmision = () => {
-    setEmitOpen(false)
-    setDatosClientes({})
-  }
-
-  const handleEmit = async () => {
-    if (!selectedOrder || !cliente || clienteError || sending || !disponible) return
-    if (!lines.some((line) => line.descripcion.trim() && line.cantidad > 0)) {
-      setEmitError('Agrega al menos un detalle antes de emitir.')
-      return
-    }
+  const emitirPedidos = async (orders: Order[]) => {
+    if (loteEnCurso.current || !disponible || !orders.length) return
+    loteEnCurso.current = true
+    const pendientes = pedidosSinComprobante(orders, invoices)
+    const unicos = [...new Map(pendientes.map((order) => [normalizarPedidoId(order.id), order])).values()]
+    const lote = unicos.map((order) => ({ order, borrador: borradorDe(order) }))
+    let completados = 0
+    let emitidosLote = 0
+    let errores = 0
     setSending(true)
-    setEmitError(null)
     setLastResult(null)
+    setProgresoLote({ total: lote.length, completados: 0, emitidos: 0, errores: 0 })
+    setEstadosFila((prev) => ({ ...prev, ...Object.fromEntries(lote.map(({ order }) => [normalizarPedidoId(order.id), { estado: 'en_cola' as const }])) }))
     try {
-      const result = await apiEmitComprobante({
-        orderId: selectedOrder.id,
-        tipo: emitType,
-        cliente: clienteComprobante(cliente),
-        lines: lines
-          .filter((line) => line.descripcion.trim() && line.cantidad > 0)
-          .map((line) => ({ descripcion: line.descripcion.trim(), cantidad: line.cantidad, precio: line.precio })),
+      await ejecutarLoteSecuencial(lote, async ({ order, borrador }) => {
+        const id = normalizarPedidoId(order.id)
+        setEstadosFila((prev) => ({ ...prev, [id]: { estado: 'emitiendo' } }))
+        try {
+          const error = errorBorrador(order, borrador)
+          if (error) throw new Error(error)
+          const { invoice } = await apiEmitComprobante({
+            orderId: id,
+            tipo: borrador.tipo,
+            cliente: clienteComprobante(borrador.cliente),
+            lines: borrador.lines.map((line) => ({ ...line, descripcion: line.descripcion.trim() })),
+          })
+          actualizarComprobante(invoice)
+          setPicked((prev) => prev.filter((pickedId) => pickedId !== id))
+          setEdicionesAbiertas((prev) => prev.filter((abierto) => abierto !== id))
+          if (invoice.status === 'rechazada') {
+            errores += 1
+            setLastResult(`${padOrder(order.number)} · ${invoice.serie}-${invoice.numero} rechazada: ${invoice.mensaje || 'Revisa el resultado en Comprobantes.'}`)
+          } else emitidosLote += 1
+        } finally {
+          completados += 1
+          setProgresoLote({ total: lote.length, completados, emitidos: emitidosLote, errores })
+        }
+      }, ({ order }, error) => {
+        const id = normalizarPedidoId(order.id)
+        errores += 1
+        const mensaje = error instanceof Error ? error.message : 'No se pudo emitir. Revisa los datos e inténtalo nuevamente.'
+        setEstadosFila((prev) => ({ ...prev, [id]: { estado: 'error', mensaje } }))
+        setEdicionesAbiertas((prev) => prev.includes(id) ? prev : [...prev, id])
+        setProgresoLote({ total: lote.length, completados, emitidos: emitidosLote, errores })
       })
-      setInvoices((prev) => [result.invoice, ...prev.filter((inv) => inv.orderId !== result.invoice.orderId)])
-      setPicked((prev) => prev.filter((id) => id !== result.invoice.orderId))
-      void apiComprobanteFiles().then((r) => setFiles(r.files || {})).catch(() => undefined)
-      const numero = String(result.invoice.numero).padStart(8, '0')
-      setLastResult(`${result.invoice.tipo} ${result.invoice.serie}-${numero} · ${result.invoice.status}${result.invoice.mensaje ? ' · ' + result.invoice.mensaje : ''}`)
-      const restantes = queue.filter((order) => order.id !== selectedOrder.id)
-      setQueue(restantes)
-      if (restantes.length && result.invoice.status !== 'rechazada') {
-        const siguiente = Math.min(queueAt, restantes.length - 1)
-        setQueueAt(siguiente)
-        cargarPedido(restantes[siguiente])
-      } else {
-        cerrarEmision()
-        verEmitidos('todos')
-      }
-    } catch (e) {
-      setEmitError((e as Error).message || 'No se pudo emitir el comprobante.')
     } finally {
+      loteEnCurso.current = false
       setSending(false)
+      refrescarComprobantes.current()
       void apiEmisionEstado().then(setEmision).catch(() => undefined)
     }
   }
@@ -572,13 +737,35 @@ export function Facturacion() {
     const signal = AbortSignal.timeout(tipo === 'boleta' ? 35_000 : 75_000)
     try {
       const { invoice } = await apiReintentarComprobante(orderId, signal)
-      setInvoices((prev) => prev.map((item) => item.orderId === orderId ? invoice : item))
+      actualizarComprobante(invoice)
       setLastResult(`${invoice.serie}-${invoice.numero} · ${invoice.status}${invoice.mensaje ? ' · ' + invoice.mensaje : ''}`)
-      void apiComprobanteFiles().then((r) => setFiles(r.files || {})).catch(() => undefined)
+      refrescarComprobantes.current()
     } catch (e) {
       setLastResult(signal.aborted ? 'El servidor tardó en responder. Vuelve a consultar el estado del comprobante.' : (e as Error).message)
     } finally {
       setRetrying(null)
+    }
+  }
+
+  const tieneArchivosDescargables = (invoice: Comprobante) => {
+    const disponibles = files[normalizarPedidoId(invoice.orderId)]
+    return Boolean(disponibles?.xml || disponibles?.cdr ||
+      (disponibles?.pdf && (invoice.canal !== 'sunat' || invoice.status === 'aceptada')))
+  }
+  const comprobantesDescargables = emitidos.filter(tieneArchivosDescargables)
+
+  const descargarArchivos = async (orderIds: string[], destino: string) => {
+    if (descargaEnCurso.current || !orderIds.length) return
+    descargaEnCurso.current = true
+    setDescargandoArchivos(destino)
+    setLastResult(null)
+    try {
+      await apiDownloadComprobantes(orderIds)
+    } catch (error) {
+      setLastResult((error as Error).message || 'No se pudieron descargar los archivos. Vuelve a intentarlo.')
+    } finally {
+      descargaEnCurso.current = false
+      setDescargandoArchivos(null)
     }
   }
 
@@ -596,6 +783,8 @@ export function Facturacion() {
     : errorEmision ? 'No se pudo consultar la facturación. Vuelve a comprobar el estado; si el problema continúa, revisa la conexión con el servidor.'
       : !compatible ? 'La API de facturación del servidor aún debe actualizarse. Sube la API compilada y reinicia su servicio para habilitar esta versión. Conserva el certificado y la configuración guardados.'
         : emision?.motivo || 'La emisión se habilita al completar los datos SUNAT y cargar un certificado válido.'
+  const porcentajeLote = progresoLote?.total
+    ? Math.min(100, Math.round(progresoLote.completados / progresoLote.total * 100)) : 0
   const metrics = [
     { label: 'Por facturar', value: pendingOrders.length, action: () => setVista('pendientes'), selected: vista === 'pendientes' },
     { label: 'Boletas', value: invoices.filter((i) => i.tipo === 'boleta').length, action: () => verEmitidos('boleta'), selected: vista === 'emitidos' && filtroTipo === 'boleta' },
@@ -668,58 +857,132 @@ export function Facturacion() {
 
       {vista === 'pendientes' ? (
         <div>
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <h2 className="text-sm font-semibold text-ink/75">Pedidos pagados sin comprobante</h2>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h2 className="text-sm font-semibold text-ink/85">Pedidos pagados sin comprobante</h2>
+              <p className="mt-1 text-xs text-ink/75">Selecciona los pedidos y emítelos juntos. Edita una fila solo si necesitas cambiar sus datos.</p>
+            </div>
             <button
               type="button"
-              disabled={!selectedOrders.length}
-              onClick={() => abrirCola(selectedOrders)}
-              className="flex min-h-11 items-center gap-1 rounded-xl bg-ember px-3 text-xs font-semibold text-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ember disabled:opacity-40"
+              disabled={!selectedOrders.length || sending || !disponible}
+              onClick={() => void emitirPedidos(selectedOrders)}
+              className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg bg-ember px-4 text-sm font-semibold text-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ember disabled:opacity-50"
             >
-              <Send size={12} aria-hidden /> Preparar selección{selectedOrders.length ? ` (${selectedOrders.length})` : ''}
+              {sending ? <RefreshCw size={15} aria-hidden className="motion-safe:animate-spin" /> : <Send size={15} aria-hidden />}
+              {sending && progresoLote ? `Emitiendo ${Math.min(progresoLote.completados + 1, progresoLote.total)} de ${progresoLote.total}…` : `Emitir seleccionados (${selectedOrders.length})`}
             </button>
           </div>
+          {!disponible ? <p role="status" className="mt-3 text-sm text-ink/80">{detalleEstado}</p> : null}
+          {progresoLote ? (
+            <div className="mt-4 space-y-2">
+              <div className="flex items-end justify-between gap-3 text-sm tabular-nums">
+                <p role="status" aria-live="polite" className="text-ink/85">
+                  {sending ? 'Emitiendo comprobantes' : 'Emisión finalizada'}
+                  <span className="mt-0.5 block text-xs text-ink/75 sm:ml-2 sm:mt-0 sm:inline">
+                    {progresoLote.completados} de {progresoLote.total} procesados
+                  </span>
+                </p>
+                <span aria-hidden="true" className="shrink-0 font-bold text-ember">{porcentajeLote}%</span>
+              </div>
+              <div role="progressbar" aria-label="Progreso de emisión" aria-valuemin={0} aria-valuemax={100}
+                aria-valuenow={porcentajeLote}
+                aria-valuetext={`${porcentajeLote}%, ${progresoLote.completados} de ${progresoLote.total} procesados`}
+                className="h-2.5 w-full overflow-hidden rounded-full bg-ink/10">
+                <div className="h-full rounded-full bg-ember motion-safe:transition-[width] motion-safe:duration-300"
+                  style={{ width: `${porcentajeLote}%` }} />
+              </div>
+              <p className="text-xs text-ink/75">
+                {progresoLote.emitidos} emitidos
+                {progresoLote.errores ? ` · ${progresoLote.errores} con error; revisa las filas marcadas o Comprobantes.`
+                  : !sending ? ' · El estado SUNAT se actualizará automáticamente en Comprobantes.' : ''}
+              </p>
+            </div>
+          ) : null}
           {pendingOrders.length === 0 ? (
             <p className="card mt-3 p-4 text-sm text-ink/60">No hay pedidos pagados sin comprobante.</p>
           ) : (
             <div className="mt-3 divide-y divide-ink/10 overflow-hidden rounded-xl border border-ink/12 bg-surface">
-              {pendingOrders.map((o) => (
-                <div key={o.id} className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 px-3 py-2.5 sm:flex-nowrap sm:px-4">
-                  <label className="flex min-w-0 items-center gap-3">
-                    <input
-                      type="checkbox"
-                      className="h-4 w-4 rounded"
-                      checked={picked.includes(o.id)}
-                      onChange={(e) => setPicked((prev) => e.target.checked ? [...prev, o.id] : prev.filter((id) => id !== o.id))}
-                    />
-                    <FileText size={18} className="shrink-0 text-ink/30" />
-                    <div className="min-w-0">
-                      <p className="truncate text-sm font-semibold">{padOrder(o.number)} · {o.customerName}</p>
-                      <p className="text-xs leading-relaxed text-ink/70">
-                        {formatDateTime(o.createdAt)} · {o.paymentMethod} · {o.docTipo === 'factura' ? 'Factura' : o.docTipo === 'boleta_dni' ? 'Boleta con DNI' : 'Boleta'}
-                      </p>
+              <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 px-3 py-2 xl:grid-cols-[minmax(12rem,1.2fr)_5rem_minmax(10rem,1fr)_6rem_10rem] sm:px-4">
+                <label className="inline-flex min-h-11 items-center gap-3 text-xs font-semibold text-ink/80">
+                  <input type="checkbox" className="h-4 w-4 shrink-0 rounded" disabled={sending}
+                    checked={selectedOrders.length === pendingOrders.length}
+                    ref={(node) => { if (node) node.indeterminate = selectedOrders.length > 0 && selectedOrders.length < pendingOrders.length }}
+                    onChange={(event) => setPicked(event.target.checked ? pendingOrders.map((order) => normalizarPedidoId(order.id)) : [])} />
+                  Seleccionar todos
+                </label>
+                <span className="hidden text-xs font-semibold text-ink/75 xl:block">Tipo</span>
+                <span className="hidden text-xs font-semibold text-ink/75 xl:block">Cliente del comprobante</span>
+                <span className="hidden text-right text-xs font-semibold text-ink/75 xl:block">Total</span>
+                <span className="text-right text-xs font-medium text-ink/75">{selectedOrders.length} seleccionados</span>
+              </div>
+              {pendingOrders.map((o) => {
+                const id = normalizarPedidoId(o.id)
+                const borrador = borradorDe(o)
+                const abierta = edicionesAbiertas.includes(id)
+                const estadoFila = estadosFila[id]
+                const resumenCliente = borrador.cliente.tipo === 'ninguno' ? 'CLIENTES VARIOS' : borrador.cliente.nombre || (borrador.cliente.tipo === 'ruc' ? 'Completa la razón social' : 'Completa el nombre')
+                return (
+                  <div key={id}>
+                    <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-2 px-3 py-3 xl:grid-cols-[minmax(12rem,1.2fr)_5rem_minmax(10rem,1fr)_6rem_10rem] sm:px-4">
+                      <label className="flex min-w-0 items-center gap-3">
+                        <input type="checkbox" className="h-4 w-4 shrink-0 rounded" disabled={sending}
+                          checked={picked.includes(id)} aria-label={`Seleccionar pedido ${padOrder(o.number)}`}
+                          onChange={(event) => setPicked((prev) => event.target.checked ? [...new Set([...prev, id])] : prev.filter((pickedId) => pickedId !== id))} />
+                        <span className="min-w-0">
+                          <span className="block truncate text-sm font-semibold">{padOrder(o.number)} · {o.customerName}</span>
+                          <span className="mt-0.5 block text-xs leading-relaxed text-ink/75">{formatDateTime(o.createdAt)} · {o.paymentMethod}</span>
+                        </span>
+                      </label>
+                      <span className="text-right text-sm font-medium capitalize text-ink/85 xl:text-left">{borrador.tipo}</span>
+                      <div className="min-w-0 pl-7 xl:pl-0">
+                        <p className="truncate text-xs font-medium text-ink/85" title={resumenCliente}>{resumenCliente}</p>
+                        {borrador.cliente.tipo !== 'ninguno' ? <p className="mt-0.5 text-xs text-ink/75">{borrador.cliente.tipo.toUpperCase()} {borrador.cliente.numero || 'pendiente'}</p> : null}
+                      </div>
+                      <span className="whitespace-nowrap text-right text-sm font-bold tabular-nums">{soles(o.total)}</span>
+                      <div className="col-span-2 flex flex-wrap items-center justify-end gap-1 xl:col-span-1">
+                        {estadoFila?.estado === 'en_cola' ? <span role="status" className="mr-2 text-xs text-ink/75">En cola</span> : null}
+                        <button type="button" disabled={sending} aria-expanded={abierta} aria-controls={`editar-${id}`}
+                          onClick={() => setEdicionesAbiertas((prev) => abierta ? prev.filter((abierto) => abierto !== id) : [...prev, id])}
+                          className="inline-flex min-h-11 items-center gap-1.5 rounded-lg px-2.5 text-xs font-semibold text-ink/80 hover:bg-ink/8 focus-visible:outline-2 focus-visible:outline-ember disabled:opacity-50">
+                          <Pencil size={13} aria-hidden /> {abierta ? 'Cerrar' : 'Editar'}
+                        </button>
+                        <button type="button" disabled={sending || !disponible} onClick={() => void emitirPedidos([o])}
+                          className="inline-flex min-h-11 items-center gap-1.5 rounded-lg border border-ink/15 px-3 text-xs font-semibold text-ember hover:bg-ember/10 focus-visible:outline-2 focus-visible:outline-ember disabled:opacity-50">
+                          {estadoFila?.estado === 'emitiendo' ? <RefreshCw size={13} aria-hidden className="motion-safe:animate-spin" /> : <Send size={13} aria-hidden />}
+                          {estadoFila?.estado === 'emitiendo' ? 'Emitiendo…' : 'Emitir'}
+                        </button>
+                      </div>
+                      {estadoFila?.estado === 'error' ? (
+                        <p role="alert" className="col-span-2 flex items-start gap-2 text-sm text-amber-800 dark:text-amber-300 xl:col-span-5">
+                          <AlertCircle size={16} className="mt-0.5 shrink-0" aria-hidden /> {estadoFila.mensaje}
+                        </p>
+                      ) : null}
                     </div>
-                  </label>
-                  <div className="ml-auto flex shrink-0 items-center gap-3">
-                    <span className="whitespace-nowrap text-sm font-bold tabular-nums">{soles(o.total)}</span>
-                    <button
-                      type="button"
-                      onClick={() => abrirCola([o])}
-                      className="inline-flex min-h-11 items-center gap-1.5 rounded-lg border border-ink/12 px-3 text-xs font-semibold hover:bg-ink/8 focus-visible:outline-2 focus-visible:outline-ember"
-                    >
-                      <Send size={13} aria-hidden /> Preparar
-                    </button>
+                    {abierta ? (
+                      <div id={`editar-${id}`}>
+                        <EditorComprobante order={o} borrador={borrador} disabled={sending} igvRate={igvRate}
+                          onChange={(cambios) => editarPedido(o, cambios)} onTipo={(tipo) => cambiarTipo(o, tipo)}
+                          onClose={() => setEdicionesAbiertas((prev) => prev.filter((abierto) => abierto !== id))} />
+                      </div>
+                    ) : null}
                   </div>
-                </div>
-              ))}
+                )
+              })}
             </div>
           )}
         </div>
       ) : (
         <div>
           <div className="flex flex-wrap items-end justify-between gap-3">
-            <div>
+            <div className="flex flex-wrap items-center gap-3">
               <h2 className="text-sm font-semibold text-ink/75">{soloAceptadas ? 'Aceptados por SUNAT' : 'Comprobantes registrados'} ({emitidos.length})</h2>
+              <button type="button" disabled={descargandoArchivos !== null || !comprobantesDescargables.length}
+                title="Descargar los archivos disponibles de los comprobantes mostrados"
+                onClick={() => void descargarArchivos(comprobantesDescargables.map((invoice) => invoice.orderId), 'todos')}
+                className="inline-flex min-h-11 items-center gap-2 rounded-lg border border-ink/15 px-3 text-xs font-semibold text-ember hover:bg-ember/10 focus-visible:outline-2 focus-visible:outline-ember disabled:opacity-50">
+                {descargandoArchivos === 'todos' ? <RefreshCw size={15} aria-hidden className="motion-safe:animate-spin" /> : <Download size={15} aria-hidden />}
+                {descargandoArchivos === 'todos' ? 'Descargando…' : `Descargar todos (${comprobantesDescargables.length})`}
+              </button>
             </div>
             <div className="flex flex-wrap gap-2">
               <input
@@ -741,7 +1004,7 @@ export function Facturacion() {
           ) : (
             <div className="mt-3 divide-y divide-ink/10 overflow-hidden rounded-xl border border-ink/12 bg-surface">
               {emitidos.map((inv) => {
-                const order = state.orders.find((o) => o.id === inv.orderId)
+                const order = state.orders.find((o) => normalizarPedidoId(o.id) === normalizarPedidoId(inv.orderId))
                 const prueba = order && pruebas[inv.tipo]?.pedidoNumero === order.number ? pruebas[inv.tipo] : undefined
                 const motivo = inv.mensaje?.trim() === 'Failed to fetch'
                   ? 'El envío anterior falló por un error de conexión.'
@@ -760,7 +1023,7 @@ export function Facturacion() {
                       {motivo ? (
                         <p className="mt-1 max-w-2xl text-xs text-ink/70">{motivo}</p>
                       ) : null}
-                      {inv.status === 'rechazada' && !files[inv.orderId]?.cdr ? (
+                      {inv.status === 'rechazada' && !files[normalizarPedidoId(inv.orderId)]?.cdr ? (
                         <p className="mt-1 text-xs text-ink/70">Constancia de rechazo no disponible.</p>
                       ) : null}
                     </div>
@@ -781,11 +1044,20 @@ export function Facturacion() {
                           {testing === inv.tipo ? 'Validando en Beta…' : prueba ? 'Volver a probar en Beta' : 'Generar evidencia Beta'}
                         </button>
                       ) : null}
+                      <button type="button" disabled={descargandoArchivos !== null || !tieneArchivosDescargables(inv)}
+                        aria-label={`Descargar todos los archivos de ${inv.tipo} ${inv.serie}-${String(inv.numero).padStart(8, '0')}`}
+                        title="Descargar PDF, XML y CDR disponibles"
+                        onClick={() => void descargarArchivos([inv.orderId], normalizarPedidoId(inv.orderId))}
+                        className="inline-flex min-h-10 items-center gap-1.5 rounded-lg border border-ink/15 px-2.5 text-xs font-semibold text-ember hover:bg-ember/10 focus-visible:outline-2 focus-visible:outline-ember disabled:opacity-50">
+                        {descargandoArchivos === normalizarPedidoId(inv.orderId)
+                          ? <RefreshCw size={13} aria-hidden className="motion-safe:animate-spin" /> : <Download size={13} aria-hidden />}
+                        {descargandoArchivos === normalizarPedidoId(inv.orderId) ? 'Descargando…' : 'Descargar todo'}
+                      </button>
                       {(['pdf', 'xml', 'cdr'] as const).map((kind) => (
                         <button
                           key={kind}
                           type="button"
-                          disabled={!files[inv.orderId]?.[kind] || (inv.canal === 'sunat' && inv.status !== 'aceptada' && kind === 'pdf')}
+                          disabled={!files[normalizarPedidoId(inv.orderId)]?.[kind] || (inv.canal === 'sunat' && inv.status !== 'aceptada' && kind === 'pdf')}
                           className="text-xs font-bold uppercase text-ember disabled:text-ink/30"
                           onClick={() => void apiDownloadComprobante(inv.orderId, kind).catch((e) => setLastResult((e as Error).message))}
                         >
@@ -805,96 +1077,6 @@ export function Facturacion() {
           )}
         </div>
       )}
-
-      {/* Emit Modal */}
-      <Modal open={emitOpen} title={queue.length > 1 ? `Preparar ${queueAt + 1} de ${queue.length}` : 'Preparar comprobante'} onClose={cerrarEmision} closeDisabled={sending} wide>
-        {selectedOrder && cliente && (() => {
-          const total = totalDetalle(lines)
-          const dinero = separarIgv(total, igvRate)
-          return (
-            <div className="space-y-4">
-              <p className="text-sm text-ink/60">
-                Pedido <strong>{padOrder(selectedOrder.number)}</strong> · {selectedOrder.customerName} · <strong>{soles(selectedOrder.total)}</strong>
-              </p>
-              <div className="flex gap-2" role="group" aria-label="Tipo de comprobante">
-                <button type="button" aria-pressed={emitType === 'boleta'} disabled={sending || selectedOrder.docTipo === 'factura'} onClick={() => setEmitType('boleta')} className={`flex-1 rounded-xl py-3 text-sm font-bold disabled:opacity-50 ${emitType === 'boleta' ? 'bg-ink text-cream' : 'bg-cream'}`}>
-                  Boleta
-                </button>
-                <button type="button" aria-pressed={emitType === 'factura'} disabled={sending} onClick={() => setEmitType('factura')} className={`flex-1 rounded-xl py-3 text-sm font-bold disabled:opacity-50 ${emitType === 'factura' ? 'bg-ink text-cream' : 'bg-cream'}`}>
-                  Factura
-                </button>
-              </div>
-              <DocumentoCliente key={claveCliente} cliente={cliente} tipo={emitType} total={selectedOrder.total} disabled={sending} error={clienteError}
-                onChange={(datos) => setDatosClientes((prev) => ({ ...prev, [claveCliente]: datos }))} />
-              <div className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <p className="text-sm font-semibold">Detalle</p>
-                  <button
-                    type="button"
-                    onClick={() => setLines((prev) => [...prev, { descripcion: '', cantidad: 1, precio: 0 }])}
-                    className="inline-flex items-center gap-1 text-xs font-bold text-ember"
-                  >
-                    <Plus size={14} /> Agregar línea
-                  </button>
-                </div>
-                {lines.map((line, index) => (
-                  <div key={index} className="grid grid-cols-[1fr_4.5rem_5.5rem_2rem] gap-2">
-                    <input
-                      className={inputClass}
-                      value={line.descripcion}
-                      placeholder="Descripción"
-                      onChange={(e) => setLines((prev) => prev.map((row, i) => i === index ? { ...row, descripcion: e.target.value } : row))}
-                    />
-                    <input
-                      className={inputClass}
-                      inputMode="decimal"
-                      value={line.cantidad}
-                      onChange={(e) => setLines((prev) => prev.map((row, i) => i === index ? { ...row, cantidad: Number(e.target.value) || 0 } : row))}
-                    />
-                    <input
-                      className={inputClass}
-                      inputMode="decimal"
-                      value={line.precio}
-                      onChange={(e) => setLines((prev) => prev.map((row, i) => i === index ? { ...row, precio: Number(e.target.value) || 0 } : row))}
-                    />
-                    <button type="button" aria-label="Quitar línea" onClick={() => setLines((prev) => prev.filter((_, i) => i !== index))} className="flex items-center justify-center text-ink/40">
-                      <Trash2 size={16} />
-                    </button>
-                  </div>
-                ))}
-              </div>
-              <p className="text-sm text-ink/70">
-                Total {soles(dinero.total)} · base {soles(dinero.base)} · IGV {soles(dinero.igv)}
-              </p>
-              {emitError ? <p role="alert" className="text-sm text-amber-800 dark:text-amber-300">{emitError}</p> : null}
-              <div className="flex gap-2">
-                {queue.length > 1 ? (
-                  <button type="button" disabled={sending || queueAt === 0} onClick={() => irA(queueAt - 1)} className="min-h-11 rounded-xl border border-ink/12 px-3 text-sm font-bold disabled:opacity-40">
-                    Anterior
-                  </button>
-                ) : null}
-                <button
-                  type="button"
-                  onClick={() => void handleEmit()}
-                  disabled={sending || !disponible || Boolean(clienteError) || total !== selectedOrder.total}
-                  className="min-h-11 flex-1 rounded-xl bg-ember font-semibold text-white disabled:opacity-50"
-                >
-                  {sending ? 'Emitiendo…' : 'Emitir'}
-                </button>
-                {queue.length > 1 ? (
-                  <button type="button" disabled={sending || queueAt >= queue.length - 1} onClick={() => irA(queueAt + 1)} className="min-h-11 rounded-xl border border-ink/12 px-3 text-sm font-bold disabled:opacity-40">
-                    Siguiente
-                  </button>
-                ) : null}
-              </div>
-              {!disponible ? <p role="status" className="text-sm text-ink/70">{detalleEstado}</p> : null}
-              {total !== selectedOrder.total ? (
-                <p className="text-sm text-amber-800 dark:text-amber-300">El detalle debe sumar el importe pagado de {soles(selectedOrder.total)}.</p>
-              ) : null}
-            </div>
-          )
-        })()}
-      </Modal>
 
       <Modal open={configOpen} title="Configurar SUNAT" onClose={() => setConfigOpen(false)} closeDisabled={savingConfig || certSending || testing !== null} wide>
         <form className="space-y-5" onSubmit={(event) => { event.preventDefault(); void handleSaveConfig() }}>

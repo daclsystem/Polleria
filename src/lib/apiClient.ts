@@ -682,7 +682,7 @@ export async function apiUploadCertificado(file: File, clave: string) {
 }
 
 export async function apiGetInvoices() {
-  return apiFetch<{ invoices: Comprobante[] }>('/api/config/invoices')
+  return apiFetch<{ invoices: Comprobante[] }>('/api/config/invoices', { cache: 'no-store' })
 }
 
 export async function apiSaveInvoices(invoices: unknown[]) {
@@ -754,7 +754,7 @@ export async function apiProbarSunat(tipo: PruebaSunat['tipo'], orderId?: string
 }
 
 export async function apiComprobanteFiles() {
-  return apiFetch<{ files: Record<string, { pdf: boolean; xml: boolean; cdr: boolean }> }>('/api/config/comprobantes/files')
+  return apiFetch<{ files: Record<string, { pdf: boolean; xml: boolean; cdr: boolean }> }>('/api/config/comprobantes/files', { cache: 'no-store' })
 }
 
 export async function apiDownloadComprobante(orderId: string, kind: 'pdf' | 'xml' | 'cdr') {
@@ -762,19 +762,41 @@ export async function apiDownloadComprobante(orderId: string, kind: 'pdf' | 'xml
   const res = await fetch(apiUrl(`/api/config/comprobantes/${orderId}/${kind}`), {
     headers: token ? { Authorization: `Bearer ${token}` } : {},
   })
+  const ext = kind === 'cdr' ? 'zip' : kind
+  await guardarDescargaComprobante(res, token, `${kind}-${orderId}.${ext}`)
+}
+
+export async function apiDownloadComprobantes(orderIds: string[]) {
+  const token = getApiToken()
+  const res = await fetch(apiUrl('/api/config/comprobantes/descargar'), {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json', Accept: 'application/zip',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    cache: 'no-store',
+    body: JSON.stringify({ orderIds: [...new Set(orderIds.map((id) => id.trim().toLowerCase()))] }),
+  })
+  const nombre = res.headers.get('Content-Disposition')?.match(/filename="([^"]+)"/)?.[1]
+    ?.replace(/[\\/]/g, '-') || 'comprobantes.zip'
+  await guardarDescargaComprobante(res, token, nombre)
+}
+
+async function guardarDescargaComprobante(res: Response, token: string | null, nombre: string) {
   if (!res.ok) {
     const data = await res.json().catch(() => null) as { error?: string; code?: string } | null
     handleApiAuthError(res.status, token, 'staff', data || {})
     throw new Error(data?.error || 'No se pudo descargar')
   }
   const blob = await res.blob()
-  const ext = kind === 'cdr' ? 'zip' : kind
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
   a.href = url
-  a.download = `${kind}-${orderId}.${ext}`
+  a.download = nombre
+  document.body.append(a)
   a.click()
-  URL.revokeObjectURL(url)
+  a.remove()
+  window.setTimeout(() => URL.revokeObjectURL(url), 1_000)
 }
 
 

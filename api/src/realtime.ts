@@ -12,6 +12,7 @@ export type RealtimeEvent =
   | 'table:updated'
   | 'reservation:updated'
   | 'inventory:updated'
+  | 'invoice:updated'
 
 let io: Server | null = null
 

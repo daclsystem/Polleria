@@ -401,6 +401,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       }
       window.addEventListener('polleria-view-role', onViewRole)
       const offEvent = onRealtimeEvent((event: RealtimeEvent, payload) => {
+        if (event === 'invoice:updated') return
         if (event === 'inventory:updated') {
           const data = payload as {
             inventory?: InventoryItem[]

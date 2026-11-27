@@ -1,0 +1,34 @@
+{
+  "ok": true,
+  "checks": {
+    "rowCorrectId": true,
+    "filenameFromHeader": true,
+    "zipContains": [
+      "PDF",
+      "XML",
+      "CDR"
+    ],
+    "generalOnlyVisibleWithFiles": true,
+    "filterBoletas": true,
+    "searchOneInvoice": true,
+    "loadingDisablesRepeatedClicks": true,
+    "downloadCount": 4,
+    "requestCount": 6,
+    "noDownloadOn500": true,
+    "noDownloadOn401": true,
+    "overflowDesktop": {
+      "viewport": 1536,
+      "width": 1536
+    },
+    "overflowMobile": {
+      "viewport": 390,
+      "width": 390
+    },
+    "pageErrors": [],
+    "blockedRemoteRequests": 1
+  },
+  "screenshots": [
+    "/Volumes/Datos/Proyectos IndevSoft/Polleria/output/previews/facturacion-descarga-desktop.png",
+    "/Volumes/Datos/Proyectos IndevSoft/Polleria/output/previews/facturacion-descarga-mobile.png"
+  ]
+}

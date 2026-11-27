@@ -6,6 +6,8 @@ alwaysApply: true
 # Despliegue Polleria
 
 - **Front** (web, system, driver, cliente): el agente **compila** (`npm run build` / `build:all`). El usuario **sube** `dist/` al servidor.
+- **Compilación limpia y completa**: para entregar una versión, ejecutar `npm run build:all`. Este comando elimina primero `dist/` completo y vuelve a generar `web`, `system`, `driver` y `cliente` con la misma versión. No entregar solo una aplicación recompilada junto a carpetas antiguas de las otras.
+- **Compilaciones sin ZIP**: no generar archivos ZIP al compilar. Entregar las carpetas compiladas de `dist/`, salvo que el usuario pida explícitamente un ZIP.
 - **API y base de datos**: el agente **los sube** al VPS (`/opt/polleria/api`, SQL `23_*.sql` y siguientes). No pedir al usuario que suba back ni SQL.
 - Tras cambios de API o SQL, desplegar back+BD y avisar que el front ya se puede compilar y subir.
 - No commitear ni imprimir claves SSH, SQL ni API keys.

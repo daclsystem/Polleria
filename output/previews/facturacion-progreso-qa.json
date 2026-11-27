@@ -1,0 +1,94 @@
+{
+  "ok": true,
+  "checks": {
+    "roleLabel": "Progreso de emisión",
+    "ariaMin": 0,
+    "ariaMax": 100,
+    "samples": [
+      {
+        "done": 0,
+        "total": 12,
+        "percentage": 0
+      },
+      {
+        "done": 1,
+        "total": 12,
+        "percentage": 8
+      },
+      {
+        "done": 2,
+        "total": 12,
+        "percentage": 17
+      },
+      {
+        "done": 3,
+        "total": 12,
+        "percentage": 25
+      },
+      {
+        "done": 4,
+        "total": 12,
+        "percentage": 33
+      },
+      {
+        "done": 5,
+        "total": 12,
+        "percentage": 42
+      },
+      {
+        "done": 6,
+        "total": 12,
+        "percentage": 50
+      },
+      {
+        "done": 7,
+        "total": 12,
+        "percentage": 58
+      },
+      {
+        "done": 8,
+        "total": 12,
+        "percentage": 67
+      },
+      {
+        "done": 9,
+        "total": 12,
+        "percentage": 75
+      },
+      {
+        "done": 10,
+        "total": 12,
+        "percentage": 83
+      },
+      {
+        "done": 11,
+        "total": 12,
+        "percentage": 92
+      },
+      {
+        "done": 12,
+        "total": 12,
+        "percentage": 100
+      }
+    ],
+    "errorIncludedInProgress": true,
+    "finalPercentage": 100,
+    "posts": 12,
+    "maxConcurrentEmissions": 1,
+    "noDialogs": true,
+    "overflowDesktop": {
+      "viewport": 1536,
+      "width": 1536
+    },
+    "overflowMobile": {
+      "viewport": 390,
+      "width": 390
+    },
+    "pageErrors": [],
+    "blockedRemoteRequests": 1
+  },
+  "screenshots": [
+    "/Volumes/Datos/Proyectos IndevSoft/Polleria/output/previews/facturacion-progreso-desktop.png",
+    "/Volumes/Datos/Proyectos IndevSoft/Polleria/output/previews/facturacion-progreso-mobile.png"
+  ]
+}

@@ -2,6 +2,7 @@ import { randomInt } from 'crypto'
 import fs from 'node:fs/promises'
 import forge from 'node-forge'
 import { getPool, sql } from '../db.js'
+import { emitEvent } from '../realtime.js'
 import { certificadoInfo, leerCertificado } from './certificado.js'
 import { configuracionSmtpComprobantes, destinatarioComprobante, enviarCorreoComprobante, type CorreoComprobante } from './comprobanteCorreo.js'
 import { comprobanteFilePath, saveComprobanteFile } from './comprobantes.js'
@@ -422,7 +423,7 @@ async function enviarFacturaReservada(invoice: Invoice, auth: ReturnType<typeof 
 }
 
 async function recibirSunat(orderId: string, config: SunatConfig, primerEnvio = false) {
-  return withInvoiceLock(async (tx) => {
+  const invoice = await withInvoiceLock(async (tx) => {
     const invoices = await readInvoices(tx)
     const invoice = invoices.find((item) => item?.orderId === orderId)
     if (!invoice?.rucEmisor || invoice.canal !== 'sunat') throw new Error('No se encontró el comprobante reservado.')
@@ -504,6 +505,113 @@ async function recibirSunat(orderId: string, config: SunatConfig, primerEnvio = 
     await writeConfig('invoices', invoices, tx)
     return invoice
   })
+  emitEvent('invoice:updated', invoice, ['ops', 'caja'])
+  return invoice
+}
+
+let consultandoPendientesSunat = false
+let seguimientoSunat: ReturnType<typeof setInterval> | undefined
+
+/** Recupera resultados sin reenviar documentos ni mantener bloqueada la caja durante la consulta. */
+export async function procesarPendientesSunat() {
+  if (consultandoPendientesSunat) return
+  consultandoPendientesSunat = true
+  try {
+    const config = await readConfig<SunatConfig>('sunat')
+    if (!config || !datosEmisorCompletos(config)) return
+    const auth = credencialesSunat(config, String(config.ruc).trim())
+    const invoices = await readConfig<Invoice[]>('invoices')
+    if (invoices !== null && !Array.isArray(invoices)) throw new Error('El registro de comprobantes no es una lista.')
+    const pendientes = (invoices ?? []).filter((invoice) =>
+      invoice?.canal === 'sunat' && invoice.status === 'pendiente' && invoice.rucEmisor === auth.ruc)
+    // Las consultas avanzan en paralelo; los guardados locales conservan su orden y el bloqueo SQL.
+    let persistencia = Promise.resolve()
+    const consultar = async (pendiente: Invoice) => {
+      const nombre = pendiente.resumen?.nombre || nombreSunat(pendiente)
+      let cdr: ReturnType<typeof parseCdr> | null = null
+      let mensaje = ''
+      let ticket = pendiente.resumen?.ticket
+      try {
+        cdr = await fs.readFile(comprobanteFilePath(pendiente.orderId, 'cdr'))
+          .then((zip) => parseCdr(zip, nombre))
+          .catch((error: NodeJS.ErrnoException) => {
+            if (error.code !== 'ENOENT') throw error
+            return null
+          })
+        // Una constancia ya recibida se recupera incluso durante la espera de otro intento.
+        if (!cdr && pendiente.nextRetryAt && Date.parse(pendiente.nextRetryAt) > Date.now()) return
+        if (!cdr && pendiente.resumen) {
+          ticket ||= await fs.readFile(comprobanteFilePath(pendiente.orderId, 'ticket'), 'utf8')
+            .catch((error: NodeJS.ErrnoException) => {
+              if (error.code !== 'ENOENT') throw error
+              return ''
+            })
+          // Un envío sin ticket requiere su flujo de recuperación; el seguimiento solo consulta.
+          if (!ticket) return
+          cdr = await getBoletaSummaryStatus('produccion', auth, nombre, ticket)
+          if (!cdr) mensaje = `SUNAT está procesando el resumen. Ticket ${ticket}.`
+        } else if (!cdr && pendiente.tipo === 'factura') {
+          const consulta = await getFacturaCdr(auth, nombre)
+          cdr = consulta.cdr
+          if (!cdr) mensaje = `Consulta SUNAT ${consulta.codigo}: ${consulta.mensaje || 'la constancia todavía no está disponible'}. La factura sigue pendiente; no se volvió a enviar.`
+        } else if (!cdr) {
+          return
+        }
+      } catch (error) {
+        mensaje = (error as Error).message || 'SUNAT aún no confirmó el envío.'
+      }
+      try {
+        const guardar = persistencia.then(() => withInvoiceLock(async (tx) => {
+          const actuales = await readInvoices(tx)
+          const actual = actuales.find((item) => item?.orderId === pendiente.orderId)
+          if (!actual || actual.status !== 'pendiente' || actual.canal !== 'sunat' ||
+              actual.rucEmisor !== pendiente.rucEmisor || actual.serie !== pendiente.serie || actual.numero !== pendiente.numero ||
+              actual.resumen?.nombre !== pendiente.resumen?.nombre) return null
+          // No sustituye un reintento manual más reciente por el error de una consulta anterior.
+          if (!cdr && JSON.stringify(actual) !== JSON.stringify(pendiente)) return null
+          const antes = JSON.stringify(actual)
+          if (actual.resumen && ticket) actual.resumen.ticket = ticket
+          if (cdr) {
+            await saveComprobanteFile(actual.orderId, 'cdr', cdr.zip)
+            actual.status = Number(cdr.code) === 0 ? 'aceptada' : 'rechazada'
+            actual.mensaje = cdr.message || `SUNAT ${cdr.code}`
+            delete actual.sunatCode
+            delete actual.nextRetryAt
+            if (actual.status === 'aceptada') await prepararCorreo(actual, nombre, tx)
+          } else {
+            actual.mensaje = mensaje
+          }
+          if (JSON.stringify(actual) === antes) return null
+          await writeConfig('invoices', actuales, tx)
+          return actual
+        }))
+        // Un fallo de persistencia de un comprobante no impide guardar el siguiente resultado.
+        persistencia = guardar.then(() => undefined, () => undefined)
+        const actualizada = await guardar
+        if (actualizada) emitEvent('invoice:updated', actualizada, ['ops', 'caja'])
+      } catch {
+        console.warn(`[sunat-pendientes] No se pudo guardar el resultado de ${pendiente.serie}-${pendiente.numero}.`)
+      }
+    }
+    let siguiente = 0
+    await Promise.all(Array.from({ length: Math.min(3, pendientes.length) }, async () => {
+      while (siguiente < pendientes.length) {
+        const pendiente = pendientes[siguiente++]
+        await consultar(pendiente)
+      }
+    }))
+  } finally {
+    consultandoPendientesSunat = false
+  }
+}
+
+export function iniciarSeguimientoSunat() {
+  if (seguimientoSunat) return
+  const consultar = () => void procesarPendientesSunat()
+    .catch(() => console.warn('[sunat-pendientes] No se pudieron consultar los comprobantes pendientes.'))
+  seguimientoSunat = setInterval(consultar, 5_000)
+  seguimientoSunat.unref()
+  consultar()
 }
 
 async function emitirDirecto(input: EmitInput, config: SunatConfig, tipo: EmitInput['tipo'], lines: EmitLine[], cliente: EmitInput['cliente']) {

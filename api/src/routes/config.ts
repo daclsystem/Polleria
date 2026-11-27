@@ -6,6 +6,7 @@ import { authRequired, requireRoles, requireSystemAdmin } from '../auth.js'
 import { sendWhatsAppSoon } from '../lib/wspgo.js'
 import { lookupFactiliza } from '../lib/factiliza.js'
 import { saveCertificado } from '../lib/certificado.js'
+import { construirDescargaComprobantes } from '../lib/comprobanteDescarga.js'
 import {
   activarEmision, configuracionSunat, emitirComprobante, estadoEmision, guardarComprobantes,
   guardarConfiguracionSunat, pedidoParaBeta, probarSunat, reintentarSunat, type EmisorBeta,
@@ -295,6 +296,23 @@ configRouter.get('/comprobantes/files', authRequired, requireRoles('admin', 'caj
     res.json({ files: await listComprobanteFiles() })
   } catch (e) {
     res.status(500).json({ error: (e as Error).message })
+  }
+})
+
+configRouter.post('/comprobantes/descargar', authRequired, requireRoles('admin', 'cajero'), async (req, res) => {
+  try {
+    const data = await getConfig('invoices')
+    const { body, filename } = await construirDescargaComprobantes(req.body?.orderIds, data ?? [])
+    res.setHeader('Content-Type', 'application/zip')
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`)
+    res.setHeader('Access-Control-Expose-Headers', 'Content-Disposition')
+    res.setHeader('Cache-Control', 'no-store')
+    res.setHeader('Content-Length', body.byteLength)
+    res.send(body)
+  } catch (error) {
+    const err = error as Error & { status?: number }
+    const status = err.status || 500
+    res.status(status).json({ error: status === 500 ? 'No se pudo preparar la descarga de comprobantes.' : err.message })
   }
 })
 

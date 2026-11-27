@@ -1,0 +1,19 @@
+Versión 1.6.64 · 26 de noviembre de 2026 (Lima)
+
+API desplegada y saludable en el VPS.
+Seguimiento SUNAT automático cada 5 segundos, hasta tres consultas simultáneas.
+Aceptación/rechazo se publica en tiempo real después de guardar el CDR.
+Respaldo API: /opt/polleria/backups/sunat-auto-20261127T001851Z
+
+Frontend compilado para subir al hosting.
+Pedidos ya emitidos se excluyen aunque sus GUID tengan distinto uso de mayúsculas.
+Emitir seleccionados procesa el lote con un clic desde la tabla.
+Datos y detalle se editan dentro de la fila; errores no detienen los demás pedidos.
+
+Polleria_1.6.64_System.zip contiene la carpeta system para actualizar /system/.
+Polleria_1.6.64_Frontends.zip contiene las cuatro aplicaciones.
+Conservar los archivos del hosting ajenos al paquete.
+
+Validación: API compila y 42 pruebas SUNAT aprobadas; ocho pruebas del lote; TypeScript frontend y build de cuatro apps aprobados.
+
+Verificación de navegador con datos ficticios: lote con un clic, errores por fila, continuidad tras error, bloqueo de factura incompleta, actualización Socket.IO y escritorio/móvil sin desborde. No se emitieron documentos reales durante la prueba.

@@ -132,6 +132,8 @@ Usuarios seed: `admin@lopez.pe` / `admin123` (y roles del README del front). Al 
 
 ### Emisión desde el POS
 
+La API consulta automáticamente cada cinco segundos los comprobantes pendientes, con hasta tres consultas simultáneas. Recupera el ticket y el CDR persistidos tras un reinicio y publica `invoice:updated` después de guardar cada resultado. Este seguimiento solo consulta; no vuelve a emitir el documento. La pantalla actualiza el estado y las descargas mediante ese evento, y vuelve a leerlos al reconectarse o recuperar el foco.
+
 El POS emite mediante el SEE del Contribuyente. Las pruebas de **Configurar SUNAT** usan los datos del emisor y las credenciales de Beta, con numeración independiente. Desde una boleta rechazada se puede generar evidencia Beta por el importe del pedido. Para emitir comprobantes reales, el RUC debe estar habilitado, el certificado debe estar registrado en SOL y el usuario secundario debe tener permiso de envío.
 
 Completa los datos del emisor y los accesos SOL, carga el `.p12` o `.pfx` y usa series disponibles para ese RUC. La emisión queda habilitada automáticamente con los datos completos y un certificado válido. Boletas, facturas, lotes y reintentos no requieren key de licencia ni tienen un cupo de activación. Los valores antiguos de activación y cupo no bloquean la emisión. El pedido debe estar pagado, vigente y coincidir con el total del comprobante. Para las boletas, el POS envía un resumen diario y conserva el ticket para consultar la constancia. Mantén persistentes `CERTIFICADO_DIR` y `COMPROBANTES_DIR` en el servidor.

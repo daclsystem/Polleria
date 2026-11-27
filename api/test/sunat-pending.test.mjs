@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
@@ -7,10 +8,11 @@ import forge from 'node-forge'
 import nodemailer from 'nodemailer'
 import { zipSync, unzipSync } from 'fflate'
 import { sql } from '../dist/db.js'
+import { initRealtime } from '../dist/realtime.js'
 import { saveCertificado } from '../dist/lib/certificado.js'
 import { comprobanteFilePath, saveComprobanteFile } from '../dist/lib/comprobantes.js'
 import { destinatarioComprobante } from '../dist/lib/comprobanteCorreo.js'
-import { emitirComprobante, procesarCorreosComprobantes, reintentarSunat } from '../dist/lib/emision.js'
+import { emitirComprobante, procesarCorreosComprobantes, procesarPendientesSunat, reintentarSunat } from '../dist/lib/emision.js'
 import { getFacturaCdr, getFacturaEstado, parseXml, sendBill } from '../dist/lib/sunat.js'
 
 const SOAP = 'http://schemas.xmlsoap.org/soap/envelope/'
@@ -459,6 +461,277 @@ test('la boleta recupera el ticket del disco y consulta el resumen sin reenviarl
   assert.equal(result.status, 'aceptada')
   assert.equal(result.resumen.ticket, '987654321')
   assert.equal(f.calls.length, 1)
+})
+
+function boletaConTicket(overrides = {}) {
+  return invoice('boleta', {
+    resumen: { nombre: `${RUC}-RC-20261123-1`, ticket: '987654321' },
+    ...overrides,
+  })
+}
+
+function assertSummaryConsult(url, options, ticket) {
+  assert.equal(url, BILL)
+  assert.equal(options.headers.SOAPAction, 'urn:getStatus')
+  const xml = parseXml(options.body)
+  assert.equal(xml.getElementsByTagName('ticket').item(0).textContent, ticket)
+  assert.equal(xml.getElementsByTagName('contentFile').length, 0)
+}
+
+test('el seguimiento automático acepta la boleta por ticket y persiste el CDR sin reenviarla', async (t) => {
+  const value = boletaConTicket()
+  const f = await fixture(t, [value])
+  const cdr = cdrZip(nameFor(value), referenceFor(value))
+  f.respond((url, options) => {
+    assertSummaryConsult(url, options, value.resumen.ticket)
+    return summaryResponse(cdr)
+  })
+  await procesarPendientesSunat()
+  const actual = f.storage.get('invoices')[0]
+  assert.equal(actual.status, 'aceptada')
+  assert.equal(actual.numero, value.numero)
+  assert.equal(actual.serie, value.serie)
+  assert.deepEqual(actual.resumen, value.resumen)
+  assert.deepEqual(await readFile(comprobanteFilePath(ORDER_ID, 'cdr')), cdr)
+  await procesarPendientesSunat()
+  assert.equal(f.calls.length, 1)
+})
+
+test('el seguimiento vuelve a consultar automáticamente tras 98 y conserva la numeración hasta aceptar', async (t) => {
+  const value = boletaConTicket()
+  const f = await fixture(t, [value])
+  f.respond((url, options) => {
+    assertSummaryConsult(url, options, value.resumen.ticket)
+    return f.calls.length === 1
+      ? summaryResponse(null, '98')
+      : summaryResponse(cdrZip(nameFor(value), referenceFor(value)))
+  })
+  await procesarPendientesSunat()
+  assert.equal(f.storage.get('invoices')[0].status, 'pendiente')
+  assert.equal(f.storage.get('invoices')[0].numero, value.numero)
+  await procesarPendientesSunat()
+  assert.equal(f.storage.get('invoices')[0].status, 'aceptada')
+  assert.equal(f.storage.get('invoices')[0].numero, value.numero)
+  assert.equal(f.calls.length, 2)
+})
+
+test('el seguimiento automático conserva el rechazo real del CDR del resumen', async (t) => {
+  const value = boletaConTicket()
+  const f = await fixture(t, [value])
+  const cdr = cdrZip(nameFor(value), referenceFor(value), '2324')
+  f.respond((url, options) => {
+    assertSummaryConsult(url, options, value.resumen.ticket)
+    return summaryResponse(cdr, '99')
+  })
+  await procesarPendientesSunat()
+  assert.equal(f.storage.get('invoices')[0].status, 'rechazada')
+  assert.deepEqual(await readFile(comprobanteFilePath(ORDER_ID, 'cdr')), cdr)
+  assert.equal(f.calls.length, 1)
+})
+
+test('el seguimiento recupera el ticket persistido en disco tras reiniciar sin volver a enviar el resumen', async (t) => {
+  const value = invoice('boleta')
+  const f = await fixture(t, [value])
+  await saveComprobanteFile(ORDER_ID, 'ticket', Buffer.from('987654321'))
+  f.respond((url, options) => {
+    assertSummaryConsult(url, options, '987654321')
+    return summaryResponse(cdrZip(nameFor(value), referenceFor(value)))
+  })
+  await procesarPendientesSunat()
+  assert.equal(f.storage.get('invoices')[0].status, 'aceptada')
+  assert.equal(f.storage.get('invoices')[0].resumen.ticket, '987654321')
+  assert.equal(f.calls.length, 1)
+})
+
+test('el seguimiento omite terminales, otros emisores, canales anteriores, cooldown y resúmenes sin ticket', async (t) => {
+  const values = [
+    boletaConTicket({ status: 'aceptada' }),
+    boletaConTicket({ status: 'rechazada' }),
+    boletaConTicket({ rucEmisor: '20999999999' }),
+    boletaConTicket({ canal: undefined }),
+    boletaConTicket({ nextRetryAt: new Date(Date.now() + 900_000).toISOString() }),
+    invoice('boleta'),
+  ].map((value, index) => ({ ...value, orderId: `452b5e9e-441d-45ba-b946-26c4c3ef02d${index}` }))
+  const f = await fixture(t, values)
+  await procesarPendientesSunat()
+  assert.deepEqual(f.storage.get('invoices'), values)
+  assert.equal(f.calls.length, 0)
+})
+
+for (const tipo of ['boleta', 'factura']) {
+  test(`el seguimiento recupera el CDR local de ${tipo} antes del cooldown y sin consultar SUNAT`, async (t) => {
+    const value = invoice(tipo, {
+      sunatCode: '0140', nextRetryAt: new Date(Date.now() + 900_000).toISOString(),
+    })
+    const f = await fixture(t, [value])
+    const cdr = cdrZip(nameFor(value), referenceFor(value))
+    await saveComprobanteFile(ORDER_ID, 'cdr', cdr)
+    await procesarPendientesSunat()
+    const actual = f.storage.get('invoices')[0]
+    assert.equal(actual.status, 'aceptada')
+    assert.equal(actual.numero, value.numero)
+    assert.equal(actual.nextRetryAt, undefined)
+    assert.equal(actual.sunatCode, undefined)
+    assert.equal(f.calls.length, 0)
+  })
+}
+
+test('los tickets rápidos se guardan sin esperar a los lentos y se consultan como máximo tres a la vez', async (t) => {
+  const values = Array.from({ length: 4 }, (_, index) => boletaConTicket({
+    orderId: `452b5e9e-441d-45ba-b946-26c4c3ef02d${index}`, numero: index + 1,
+    resumen: { nombre: `${RUC}-RC-20261123-${index + 1}`, ticket: String(987654321 + index) },
+  }))
+  const f = await fixture(t, values)
+  let liberarLentos
+  const espera = new Promise((resolve) => { liberarLentos = resolve })
+  let confirmarRapidos
+  const rapidosGuardados = new Promise((resolve) => { confirmarRapidos = resolve })
+  t.mock.method(sql.Transaction.prototype, 'commit', async () => {
+    const actuales = f.storage.get('invoices')
+    if (actuales[1].status === 'aceptada' && actuales[3].status === 'aceptada') confirmarRapidos()
+  })
+  let enCurso = 0
+  let maximo = 0
+  f.respond(async (url, options) => {
+    const ticket = parseXml(options.body).getElementsByTagName('ticket').item(0)?.textContent
+    const index = values.findIndex((value) => value.resumen.ticket === ticket)
+    assert.ok(index >= 0)
+    assertSummaryConsult(url, options, ticket)
+    enCurso += 1
+    maximo = Math.max(maximo, enCurso)
+    if (index === 0 || index === 2) await espera
+    enCurso -= 1
+    return summaryResponse(cdrZip(nameFor(values[index]), referenceFor(values[index])))
+  })
+  const pasada = procesarPendientesSunat()
+  let timeout
+  try {
+    await Promise.race([
+      rapidosGuardados,
+      new Promise((_, reject) => { timeout = setTimeout(() => reject(new Error('Los tickets lentos bloquearon a los rápidos')), 2_000) }),
+    ])
+    assert.equal(f.storage.get('invoices')[0].status, 'pendiente')
+    assert.equal(f.storage.get('invoices')[2].status, 'pendiente')
+    assert.equal(maximo, 3)
+  } finally {
+    clearTimeout(timeout)
+    liberarLentos()
+    await pasada
+  }
+  assert.ok(f.storage.get('invoices').every((value) => value.status === 'aceptada'))
+  assert.equal(f.calls.length, values.length)
+  assert.equal(maximo, 3)
+})
+
+test('el seguimiento continúa con las demás boletas si falla una consulta SUNAT', async (t) => {
+  const first = boletaConTicket()
+  const second = boletaConTicket({
+    orderId: '452b5e9e-441d-45ba-b946-26c4c3ef02d8', numero: 2,
+    resumen: { nombre: `${RUC}-RC-20261123-2`, ticket: '987654322' },
+  })
+  const f = await fixture(t, [first, second])
+  f.respond((url, options) => {
+    const ticket = parseXml(options.body).getElementsByTagName('ticket').item(0)?.textContent
+    assertSummaryConsult(url, options, ticket)
+    if (ticket === first.resumen.ticket) throw new Error('Corte ficticio en un ticket')
+    assert.equal(ticket, second.resumen.ticket)
+    return summaryResponse(cdrZip(nameFor(second), referenceFor(second)))
+  })
+  await procesarPendientesSunat()
+  const actual = f.storage.get('invoices')
+  assert.equal(actual.find((value) => value.orderId === first.orderId).status, 'pendiente')
+  assert.equal(actual.find((value) => value.orderId === second.orderId).status, 'aceptada')
+  assert.equal(f.calls.length, 2)
+})
+
+test('dos pasadas automáticas solapadas consultan una sola vez el mismo ticket', async (t) => {
+  const value = boletaConTicket()
+  const f = await fixture(t, [value])
+  let entrar
+  let continuar
+  const dentro = new Promise((resolve) => { entrar = resolve })
+  const espera = new Promise((resolve) => { continuar = resolve })
+  f.respond(async (url, options) => {
+    assertSummaryConsult(url, options, value.resumen.ticket)
+    entrar()
+    await espera
+    return summaryResponse(cdrZip(nameFor(value), referenceFor(value)))
+  })
+  const primera = procesarPendientesSunat()
+  await dentro
+  const segunda = procesarPendientesSunat()
+  continuar()
+  await Promise.all([primera, segunda])
+  assert.equal(f.storage.get('invoices')[0].status, 'aceptada')
+  assert.equal(f.calls.length, 1)
+})
+
+test('el seguimiento automático recupera el CDR de una factura sin volver a enviarla', async (t) => {
+  const value = invoice()
+  const f = await fixture(t, [value])
+  f.respond((url, options) => {
+    assertConsult(url, options, value)
+    return consultResponse(cdrZip(nameFor(value), referenceFor(value)))
+  })
+  await procesarPendientesSunat()
+  assert.equal(f.storage.get('invoices')[0].status, 'aceptada')
+  assert.equal(f.storage.get('invoices')[0].numero, value.numero)
+  assert.equal(f.calls.length, 1)
+})
+
+test('el seguimiento automático no reenvía una factura aunque la consulta no encuentre su CDR', async (t) => {
+  const value = invoice()
+  const f = await fixture(t, [value])
+  f.respond((url, options) => {
+    assertConsult(url, options, value)
+    return consultResponse(null, '0011')
+  })
+  await procesarPendientesSunat()
+  assert.equal(f.storage.get('invoices')[0].status, 'pendiente')
+  assert.equal(f.storage.get('invoices')[0].numero, value.numero)
+  assert.equal(f.calls.length, 1)
+})
+
+test('el seguimiento consulta sin bloqueo SQL y respeta una aceptación manual llegada antes de guardar', async (t) => {
+  const value = boletaConTicket()
+  const f = await fixture(t, [value])
+  const aceptada = { ...value, status: 'aceptada', mensaje: 'Aceptada por consulta manual' }
+  f.respond((url, options) => {
+    assertSummaryConsult(url, options, value.resumen.ticket)
+    assert.equal(sql.Transaction.prototype.begin.mock.callCount(), 0)
+    f.storage.set('invoices', [aceptada])
+    return summaryResponse(cdrZip(nameFor(value), referenceFor(value), '2324'), '99')
+  })
+  await procesarPendientesSunat()
+  assert.deepEqual(f.storage.get('invoices'), [aceptada])
+  assert.equal(f.calls.length, 1)
+})
+
+test('el seguimiento publica la actualización realtime después de confirmar la transacción', async (t) => {
+  const value = boletaConTicket()
+  const f = await fixture(t, [value])
+  let confirmado = false
+  t.mock.method(sql.Transaction.prototype, 'commit', async () => { confirmado = true })
+  const io = initRealtime(createServer(), [])
+  t.after(() => new Promise((resolve) => io.close(() => resolve())))
+  const eventos = []
+  t.mock.method(io, 'to', (salas) => ({
+    emit(evento, payload) {
+      assert.equal(confirmado, true)
+      assert.equal(f.storage.get('invoices')[0].status, 'aceptada')
+      eventos.push({ salas, evento, payload })
+    },
+  }))
+  f.respond((url, options) => {
+    assertSummaryConsult(url, options, value.resumen.ticket)
+    return summaryResponse(cdrZip(nameFor(value), referenceFor(value)))
+  })
+  await procesarPendientesSunat()
+  assert.equal(eventos.length, 1)
+  assert.equal(eventos[0].evento, 'invoice:updated')
+  assert.deepEqual(eventos[0].salas, ['ops', 'caja'])
+  assert.equal(eventos[0].payload.status, 'aceptada')
+  assert.equal(eventos[0].payload.orderId, value.orderId)
 })
 
 test('la boleta sin ticket espera tras 0140 y después reutiliza exactamente el mismo resumen', async (t) => {
